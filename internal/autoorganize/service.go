@@ -196,7 +196,7 @@ func (s *Service) run(ctx context.Context, ul *userLoop) {
 		}
 		_, err := s.sweepLocked(ctx, ul, trigger, false)
 		ul.sweepMu.Unlock()
-		if err != nil && !errors.Is(err, ErrPaused) {
+		if err != nil && !errors.Is(err, ErrPaused) && !errors.Is(err, ErrSync10) {
 			log.Warn(logPrefix, ul.uid, ": ", err)
 		}
 	}
@@ -402,6 +402,7 @@ func (s *Service) sweepLocked(ctx context.Context, ul *userLoop, trigger string,
 	}
 	st.PruneHistory(start)
 	snap, cache, plan := s.planFor(uid, cfg, st, tree)
+	st.PruneHolds(snap, cfg)
 	for _, h := range plan.ClearHolds {
 		st.ClearHold(h.RuleID, h.DocID)
 	}
@@ -777,11 +778,9 @@ func (s *Service) View(uid string) (*View, error) {
 				break
 			}
 		}
-		for _, h := range st.Holds {
-			if h.RuleID == rr.RuleID {
-				rv.Holds++
-			}
-		}
+		// documents back in the source and held now, not every hold on record
+		// (each sweeper move records one while the doc sits in the destination)
+		rv.Holds = rr.Held
 		v.Rules = append(v.Rules, rv)
 	}
 	return v, nil

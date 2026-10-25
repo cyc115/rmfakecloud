@@ -195,14 +195,63 @@ func (st *State) CycleBlock(docID, folder, fingerprint string, now time.Time) *H
 	return nil
 }
 
-// AppendMove adds to the moves ring buffer, newest first
+// AppendMove adds to the moves ring buffer, newest first. A DRY entry replaces
+// the previous DRY entry for the same would-be move, so repeated dry sweeps
+// do not fill the log; when full, the oldest DRY entry goes before any LIVE one.
 func (st *State) AppendMove(m MoveEntry) {
 	if m.ID == "" {
 		m.ID = uuid.NewString()
 	}
-	st.Moves = append([]MoveEntry{m}, st.Moves...)
-	if len(st.Moves) > logLimit {
-		st.Moves = st.Moves[:logLimit]
+	kept := make([]MoveEntry, 0, len(st.Moves)+1)
+	kept = append(kept, m)
+	for _, old := range st.Moves {
+		if m.Mode == EntryDry && old.Mode == EntryDry && old.RuleID == m.RuleID &&
+			old.DocID == m.DocID && old.From == m.From && old.To == m.To {
+			continue
+		}
+		kept = append(kept, old)
+	}
+	for len(kept) > logLimit {
+		drop := len(kept) - 1
+		for i := len(kept) - 1; i > 0; i-- {
+			if kept[i].Mode == EntryDry {
+				drop = i
+				break
+			}
+		}
+		kept = append(kept[:drop], kept[drop+1:]...)
+	}
+	st.Moves = kept
+}
+
+// newestLiveMove the most recent LIVE sweeper move of a document
+func (st *State) newestLiveMove(docID string) *MoveEntry {
+	for i := range st.Moves {
+		if st.Moves[i].DocID == docID && st.Moves[i].Mode == EntryLive {
+			return &st.Moves[i]
+		}
+	}
+	return nil
+}
+
+// PruneHolds forgets holds and created folders of rules that no longer exist,
+// and holds of documents that are gone from the tree
+func (st *State) PruneHolds(snap *Snapshot, cfg *Config) {
+	rules := map[string]bool{}
+	for i := range cfg.Rules {
+		rules[cfg.Rules[i].ID] = true
+	}
+	kept := st.Holds[:0]
+	for _, h := range st.Holds {
+		if _, ok := snap.Docs[h.DocID]; ok && rules[h.RuleID] {
+			kept = append(kept, h)
+		}
+	}
+	st.Holds = kept
+	for id := range st.CreatedFolders {
+		if !rules[id] {
+			delete(st.CreatedFolders, id)
+		}
 	}
 }
 
@@ -210,16 +259,6 @@ func (st *State) AppendMove(m MoveEntry) {
 func (st *State) MoveByID(id string) *MoveEntry {
 	for i := range st.Moves {
 		if st.Moves[i].ID == id {
-			return &st.Moves[i]
-		}
-	}
-	return nil
-}
-
-// newestLiveMove the most recent LIVE sweeper move of a document
-func (st *State) newestLiveMove(docID string) *MoveEntry {
-	for i := range st.Moves {
-		if st.Moves[i].DocID == docID && st.Moves[i].Mode == EntryLive {
 			return &st.Moves[i]
 		}
 	}

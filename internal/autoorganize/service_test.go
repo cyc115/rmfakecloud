@@ -442,6 +442,15 @@ func TestWorkedExampleAtMostOneCycle(t *testing.T) {
 	if res.Run.Moved != 0 || ft.parentOf("D") != "inbox" {
 		t.Fatalf("symmetric guard: %+v", res.Run)
 	}
+	// D is back in rule A's source with the inputs A moved it on, so A's
+	// move-back hold (§6.4) refuses it; that outlasts the 24 h cycle window
+	if s := skipOf(res.Plan, "D"); s == nil || s.Reason != SkipHeld || s.RuleID != "A" {
+		t.Fatalf("symmetric refusal: %+v", s)
+	}
+	clk.advance(30 * time.Hour)
+	if res, _ = svc.RunNow(uid); res.Run.Moved != 0 || ft.parentOf("D") != "inbox" {
+		t.Fatalf("after the cycle window the hold still applies: %+v", res.Run)
+	}
 	st, _ := svc.Store().LoadState(uid)
 	moves := 0
 	for _, m := range st.Moves {
