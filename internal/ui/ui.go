@@ -9,6 +9,7 @@ import (
 
 	"github.com/ddvk/rmfakecloud/internal/app/hub"
 	"github.com/ddvk/rmfakecloud/internal/app/passcodestore"
+	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/messages"
@@ -77,6 +78,7 @@ type ReactAppWrapper struct {
 	backends      map[common.SyncVersion]backend
 	roomManager   *screenshare.RoomManager
 	mqtt          mqttBridge
+	organizer     *autoorganize.Service
 }
 
 // hack for serving index.html on /
@@ -92,7 +94,8 @@ func New(cfg *config.Config,
 	docHandler documentHandler,
 	blobHandler blobHandler,
 	roomManager *screenshare.RoomManager,
-	mqttBroker mqttBridge) *ReactAppWrapper {
+	mqttBroker mqttBridge,
+	organizer *autoorganize.Service) *ReactAppWrapper {
 
 	sub, err := fs.Sub(webui.Assets, jsBuildFolder)
 	if err != nil {
@@ -120,6 +123,7 @@ func New(cfg *config.Config,
 		},
 		roomManager: roomManager,
 		mqtt:        mqttBroker,
+		organizer:   organizer,
 	}
 	return &staticWrapper
 }

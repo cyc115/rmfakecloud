@@ -11,6 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/ddvk/rmfakecloud/internal/app/hub"
+	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/app/passcodestore"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
@@ -46,6 +47,8 @@ type App struct {
 	hwrClient     *hwr.HWRClient
 	mqttBroker    *mqtt.Broker
 	roomManager   *screenshare.RoomManager
+	organizer     *autoorganize.Service
+	stopOrganizer context.CancelFunc
 }
 
 // Start starts the app
@@ -82,6 +85,11 @@ func (app *App) Start() {
 		}
 	}
 
+	// the sweeper runs until Stop; it does not sweep until the user list is readable
+	organizerCtx, stopOrganizer := context.WithCancel(context.Background())
+	app.stopOrganizer = stopOrganizer
+	app.organizer.Start(organizerCtx)
+
 	app.srv = &http.Server{
 		Addr:      ":" + app.cfg.Port,
 		Handler:   app.router,
@@ -106,6 +114,9 @@ func (app *App) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// app.hub.Stop()
+	if app.stopOrganizer != nil {
+		app.stopOrganizer()
+	}
 	if app.mqttBroker != nil {
 		if err := app.mqttBroker.Stop(); err != nil {
 			log.Errorf("Error stopping MQTT broker: %v", err)
@@ -137,6 +148,7 @@ func NewApp(cfg *config.Config) App {
 		cfg.CreateFirstUser = true
 	}
 	ntfHub := hub.NewHub()
+	organizer := autoorganize.NewService(fsStorage, ntfHub, cfg.AutoOrganizeInterval)
 	pcStore := passcodestore.NewInMemory()
 	codeConnector := NewCodeConnector()
 	router := gin.Default()
@@ -167,6 +179,7 @@ func NewApp(cfg *config.Config) App {
 		metaStorer:    fsStorage,
 		blobStorer:    fsStorage,
 		hub:           ntfHub,
+		organizer:     organizer,
 		passcodeStore: pcStore,
 		codeConnector: codeConnector,
 		hwrClient: &hwr.HWRClient{
@@ -180,10 +193,11 @@ func NewApp(cfg *config.Config) App {
 
 	app.registerRoutes(router)
 
-	uiApp := ui.New(cfg, fsStorage, codeConnector, ntfHub, pcStore, fsStorage, fsStorage, roomMgr, app.mqttBroker)
+	uiApp := ui.New(cfg, fsStorage, codeConnector, ntfHub, pcStore, fsStorage, fsStorage, roomMgr, app.mqttBroker, organizer)
 	uiApp.RegisterRoutes(router)
 
 	storageapp := fs.NewApp(cfg, fsStorage)
+	storageapp.OnRootUpdated = organizer.Trigger
 	storageapp.RegisterRoutes(router)
 
 	return app

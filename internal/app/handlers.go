@@ -653,6 +653,7 @@ func (app *App) syncComplete(c *gin.Context) {
 
 	var res messages.SyncCompleted
 	res.ID = app.hub.NotifySync(uid, deviceID)
+	app.organizer.Trigger(uid)
 	c.JSON(http.StatusOK, res)
 }
 
@@ -670,6 +671,7 @@ func (app *App) syncCompleteV2(c *gin.Context) {
 	log.Info("got sync completed, gen: ", req.Generation)
 
 	notificationID := app.hub.NotifySync(uid, deviceID)
+	app.organizer.Trigger(uid)
 
 	res := messages.SyncCompleted{
 		ID: notificationID,
@@ -764,6 +766,7 @@ func (app *App) syncUpdateRootV3(c *gin.Context) {
 
 		app.hub.NotifySync(uid, deviceID)
 	}
+	app.organizer.Trigger(uid)
 
 	c.JSON(http.StatusOK, messages.SyncRootV3Response{
 		Generation: newgeneration,

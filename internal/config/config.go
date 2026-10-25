@@ -81,6 +81,9 @@ const (
 	envMQTTPort          = "MQTT_PORT"
 	envICEServers        = "ICE_SERVERS"
 	envHashSchemaVersion = "HASH_SCHEMA_VERSION"
+
+	// envAutoOrganizeInterval default sweep interval (minutes) for users without an auto-organize config
+	envAutoOrganizeInterval = "AUTO_ORGANIZE_INTERVAL"
 )
 
 // Config config
@@ -106,6 +109,8 @@ type Config struct {
 	MQTTPort          string
 	ICEServers        []interface{}
 	HashSchemaVersion string
+	// AutoOrganizeInterval bootstrap default sweep interval in minutes, 0 = built-in default
+	AutoOrganizeInterval int
 }
 
 // Verify verify
@@ -265,6 +270,14 @@ func FromEnv() *Config {
 		log.Fatalf("%s must be either '3' or '4', got: %s", envHashSchemaVersion, hashSchemaVersion)
 	}
 
+	autoOrganizeInterval := 0
+	if v := os.Getenv(envAutoOrganizeInterval); v != "" {
+		autoOrganizeInterval, err = strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("%s must be a number of minutes, got: %s", envAutoOrganizeInterval, v)
+		}
+	}
+
 	cfg := Config{
 		Port:              port,
 		StorageURL:        uploadURL,
@@ -284,6 +297,8 @@ func FromEnv() *Config {
 		MQTTPort:          mqttPort,
 		ICEServers:        iceServers,
 		HashSchemaVersion: hashSchemaVersion,
+
+		AutoOrganizeInterval: autoOrganizeInterval,
 	}
 	return &cfg
 }
@@ -377,6 +392,7 @@ General:
 	%s Send auth cookie only via https
 	%s	Trust the proxy for X-Forwarded-For/X-Real-IP (set only if behind a proxy)
 	%s	Hash tree schema version: "3" or "4" (default: 3)
+	%s	Auto-organize default sweep interval for users without a config: 5, 10, 15, 30 or 60 minutes (default: 15)
 
 MQTT (for screenshare):
 	%s	MQTT TCP port (default: 8883)
@@ -414,6 +430,7 @@ myScript hwr (needs a developer account):
 		envHTTPSCookie,
 		envTrustProxy,
 		envHashSchemaVersion,
+		envAutoOrganizeInterval,
 
 		envMQTTPort,
 		envICEServers,

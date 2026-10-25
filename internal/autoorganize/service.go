@@ -34,6 +34,8 @@ var (
 	ErrPaused  = errors.New("auto-organize is paused")
 	ErrSync10  = errors.New("auto-organize requires sync15")
 	ErrNoEntry = errors.New("not found")
+	// ErrAlreadyUndone the move was undone before
+	ErrAlreadyUndone = errors.New("already undone")
 )
 
 const logPrefix = "[auto-organize] "
@@ -557,7 +559,7 @@ func (s *Service) Undo(uid, moveID string) (*MoveEntry, error) {
 		return nil, ErrNoEntry
 	}
 	if entry.UndoneAt != 0 {
-		return nil, errors.New("already undone")
+		return nil, ErrAlreadyUndone
 	}
 	tree, err := s.storage.GetCachedTree(uid)
 	if err != nil {
@@ -674,4 +676,116 @@ func (s *Service) Reapply(uid, holdID string) (*MoveEntry, error) {
 	}
 	s.notifier.NotifySync(uid, SourceID)
 	return &st.Moves[0], nil
+}
+
+// RuleView a rule row's status: the plan result plus history
+type RuleView struct {
+	RuleResult
+	LastMoveAt int64 `json:"lastMoveAt,omitempty"`
+	Holds      int   `json:"holds"`
+	LoopsWith  []int `json:"loopsWith,omitempty"`
+}
+
+// View everything the management page shows besides the config and the log
+type View struct {
+	Revision       int               `json:"revision"`
+	Settings       Settings          `json:"settings"`
+	Status         Status            `json:"status"`
+	Folders        []FolderInfo      `json:"folders"`
+	Rules          []RuleView        `json:"rules"`
+	CreatedFolders map[string]string `json:"createdFolders"`
+}
+
+// View the state endpoint: sweeper status, folders for the pickers, and per
+// rule "matches now", problems, holds and loop warnings from a dry evaluation
+func (s *Service) View(uid string) (*View, error) {
+	if err := s.checkSync15(uid); err != nil {
+		return nil, err
+	}
+	cfg, err := s.store.LoadConfig(uid)
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.store.LoadState(uid)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := s.storage.GetCachedTree(uid)
+	if err != nil {
+		return nil, err
+	}
+	snap, _, plan := s.planFor(uid, cfg, st, tree)
+	dests := map[string]string{}
+	for _, rr := range plan.Rules {
+		dests[rr.RuleID] = rr.DestID
+	}
+	loops := LoopWarnings(cfg, func(r *Rule) (string, bool) {
+		id := dests[r.ID]
+		return id, id != "" || (r.Destination.CreateIfMissing == nil && r.Destination.ID == RootID)
+	})
+	v := &View{Revision: cfg.Revision, Settings: cfg.Settings, Status: s.Status(uid, st), Folders: snap.Folders(),
+		Rules: []RuleView{}, CreatedFolders: st.CreatedFolders}
+	for _, rr := range plan.Rules {
+		rv := RuleView{RuleResult: rr, LoopsWith: loops[rr.RuleID]}
+		for _, m := range st.Moves {
+			if m.RuleID == rr.RuleID && m.Mode == EntryLive && m.Kind != "undo" {
+				rv.LastMoveAt = m.At
+				break
+			}
+		}
+		for _, h := range st.Holds {
+			if h.RuleID == rr.RuleID {
+				rv.Holds++
+			}
+		}
+		v.Rules = append(v.Rules, rv)
+	}
+	return v, nil
+}
+
+// LogMove a moves log entry with what the UI may offer on it
+type LogMove struct {
+	MoveEntry
+	HoldID  string `json:"holdId,omitempty"`
+	CanUndo bool   `json:"canUndo"`
+}
+
+// Log the Moves and Runs tabs
+type Log struct {
+	Moves []LogMove  `json:"moves"`
+	Runs  []RunEntry `json:"runs"`
+}
+
+// Log the last 50 moves (LIVE and DRY) and runs. The newest LIVE move of a
+// document that was found held in the last sweep carries the hold id.
+func (s *Service) Log(uid string) (*Log, error) {
+	if err := s.checkSync15(uid); err != nil {
+		return nil, err
+	}
+	st, err := s.store.LoadState(uid)
+	if err != nil {
+		return nil, err
+	}
+	held := map[string]string{}
+	for _, h := range st.HeldNow {
+		held[h.RuleID+"|"+h.DocID] = h.HoldID
+	}
+	newest := map[string]bool{}
+	out := &Log{Moves: []LogMove{}, Runs: st.Runs}
+	if out.Runs == nil {
+		out.Runs = []RunEntry{}
+	}
+	for _, m := range st.Moves {
+		lm := LogMove{MoveEntry: m}
+		if m.Mode == EntryLive {
+			key := m.RuleID + "|" + m.DocID
+			if !newest[key] {
+				newest[key] = true
+				lm.HoldID = held[key]
+				lm.CanUndo = m.UndoneAt == 0 && lm.HoldID == ""
+			}
+		}
+		out.Moves = append(out.Moves, lm)
+	}
+	return out, nil
 }
