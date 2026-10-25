@@ -93,7 +93,7 @@ type Trigger struct {
 	Days int `json:"days,omitempty"`
 	// not_opened_for_days: "and is at least N days old"
 	MinAgeEnabled bool `json:"minAgeEnabled"`
-	MinAgeDays    int  `json:"minAgeDays,omitempty"`
+	MinAgeDays    int  `json:"minAgeDays"`
 	// name_matches: glob, or /regex/
 	Pattern string `json:"pattern,omitempty"`
 	// tag_is
@@ -105,9 +105,16 @@ type Trigger struct {
 // UnmarshalJSON fills defaults for parameters that are absent but where zero is meaningful
 func (t *Trigger) UnmarshalJSON(b []byte) error {
 	type plain Trigger
-	p := plain{SettleHours: 6, MinAgeEnabled: true, Pinned: true}
+	// -1 marks an absent minAgeDays, so an explicit 0 ("at least 0 days old") is kept
+	p := plain{SettleHours: 6, MinAgeEnabled: true, Pinned: true, MinAgeDays: -1}
 	if err := json.Unmarshal(b, &p); err != nil {
 		return err
+	}
+	if p.MinAgeDays == -1 {
+		p.MinAgeDays = 0
+		if p.Type == TriggerNotOpened {
+			p.MinAgeDays = 7
+		}
 	}
 	*t = Trigger(p)
 	return nil
@@ -202,9 +209,6 @@ func (c *Config) Normalize() {
 		case TriggerNotOpened:
 			if t.Days == 0 {
 				t.Days = 30
-			}
-			if t.MinAgeEnabled && t.MinAgeDays == 0 {
-				t.MinAgeDays = 7
 			}
 		case TriggerNotModified:
 			if t.Days == 0 {
@@ -324,6 +328,9 @@ func (r *Rule) Validate() error {
 	case TriggerTagIs:
 		if NormalizeTag(t.Tag) == "" {
 			return errors.New("tag cannot be empty")
+		}
+		if IsNoAutomationTag(t.Tag) {
+			return errors.New("documents tagged “no automation” are always skipped; pick another tag")
 		}
 	case TriggerPinnedIs:
 	default:

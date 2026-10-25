@@ -24,13 +24,30 @@ func TestTriggerDefaultsWhenAbsent(t *testing.T) {
 	if tr.SettleHours != 0 || tr.Pinned {
 		t.Errorf("explicit zero values must be kept: %+v", tr)
 	}
-	cfg := &Config{Rules: []Rule{{Trigger: Trigger{Type: TriggerFinishedReading}}, {Trigger: Trigger{Type: TriggerNotOpened, MinAgeEnabled: true}}}}
+	// not_opened_for_days: an absent minAgeDays is 7, an explicit 0 is kept
+	var absent, zero Trigger
+	if err := json.Unmarshal([]byte(`{"type":"not_opened_for_days"}`), &absent); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(`{"type":"not_opened_for_days","days":30,"minAgeEnabled":true,"minAgeDays":0}`), &zero); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{Rules: []Rule{{Trigger: Trigger{Type: TriggerFinishedReading}}, {Trigger: absent}, {Trigger: zero}}}
 	cfg.Normalize()
 	if cfg.Rules[0].Trigger.MinPages != 3 || cfg.Rules[0].Scope != ScopePdfEpub || cfg.Rules[0].ID == "" {
 		t.Errorf("normalize: %+v", cfg.Rules[0])
 	}
-	if cfg.Rules[1].Trigger.Days != 30 || cfg.Rules[1].Trigger.MinAgeDays != 7 {
+	if cfg.Rules[1].Trigger.Days != 30 || !cfg.Rules[1].Trigger.MinAgeEnabled || cfg.Rules[1].Trigger.MinAgeDays != 7 {
 		t.Errorf("normalize not_opened: %+v", cfg.Rules[1].Trigger)
+	}
+	if cfg.Rules[2].Trigger.MinAgeDays != 0 || !cfg.Rules[2].Trigger.MinAgeEnabled {
+		t.Errorf("explicit minAgeDays 0 must be kept: %+v", cfg.Rules[2].Trigger)
+	}
+	// and it survives a save and reload (no omitempty turning 0 back into 7)
+	b, _ := json.Marshal(cfg.Rules[2].Trigger)
+	var back Trigger
+	if err := json.Unmarshal(b, &back); err != nil || back.MinAgeDays != 0 {
+		t.Errorf("minAgeDays 0 lost in a round trip: %s -> %+v", b, back)
 	}
 	if cfg.Settings.Mode != ModeDry || cfg.Settings.IntervalMinutes != 15 {
 		t.Errorf("settings defaults: %+v", cfg.Settings)
@@ -71,6 +88,10 @@ func TestRuleValidation(t *testing.T) {
 		}, "invalid regular expression"},
 		{"empty pattern", func(r *Rule) { r.Trigger = Trigger{Type: TriggerNameMatches} }, "pattern cannot be empty"},
 		{"empty tag", func(r *Rule) { r.Trigger = Trigger{Type: TriggerTagIs, Tag: "  "} }, "tag cannot be empty"},
+		{"tag_is the opt-out tag", func(r *Rule) {
+			r.Trigger = Trigger{Type: TriggerTagIs, Tag: "No_Automation"}
+			r.Scope = ScopeAll
+		}, "always skipped"},
 		{"size_over_mb is not a trigger", func(r *Rule) { r.Trigger = Trigger{Type: "size_over_mb"} }, "unknown trigger"},
 		{"copy is not an action", func(r *Rule) { r.Action = Action{Type: "copy"} }, "unsupported action"},
 		{"trash as source", func(r *Rule) { r.Source = FolderRef{ID: "trash"} }, "trash"},
