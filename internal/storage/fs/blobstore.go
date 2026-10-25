@@ -171,34 +171,41 @@ func (fs *FileSystemStorage) UpdateBlobDocument(uid, docID, name, parent string)
 			return err
 		}
 
-		err = blobStorage.Write(metadataHash, metadataReader)
-		if err != nil {
-			return err
-		}
-
-		//update the metadata hash
-		for _, hashEntry := range hashDoc.Files {
-			if hashEntry.IsMetadata() {
-				hashEntry.Hash = metadataHash
-				break
-			}
-		}
-		hashDoc.Rehash()
-		hashDocReader, err := hashDoc.IndexReader()
-		if err != nil {
-			return err
-		}
-
-		err = blobStorage.Write(hashDoc.Hash, hashDocReader)
-		if err != nil {
-			return err
-		}
-
-		t.Rehash()
-		return nil
+		return CommitDocMetadata(t, hashDoc, blobStorage, metadataHash, metadataReader)
 	})
 
 	return err
+}
+
+// CommitDocMetadata stores a new metadata blob for hashDoc, points the doc's
+// metadata entry at it, rehashes the doc, writes the doc index and rehashes the tree.
+// It is the shared tail of every metadata-only document update.
+func CommitDocMetadata(t *models.HashTree, hashDoc *models.HashDoc, blobStorage *LocalBlobStorage, metadataHash string, metadataReader io.Reader) error {
+	err := blobStorage.Write(metadataHash, metadataReader)
+	if err != nil {
+		return err
+	}
+
+	//update the metadata hash
+	for _, hashEntry := range hashDoc.Files {
+		if hashEntry.IsMetadata() {
+			hashEntry.Hash = metadataHash
+			break
+		}
+	}
+	hashDoc.Rehash()
+	hashDocReader, err := hashDoc.IndexReader()
+	if err != nil {
+		return err
+	}
+
+	err = blobStorage.Write(hashDoc.Hash, hashDocReader)
+	if err != nil {
+		return err
+	}
+
+	t.Rehash()
+	return nil
 }
 
 // DeleteBlobDocument deletes blob document

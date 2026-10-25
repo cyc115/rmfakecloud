@@ -40,6 +40,11 @@ func (fs *FileSystemStorage) getUserPath(uid string) string {
 	return filepath.Join(fs.Cfg.DataDir, filepath.Base(userDir), common.SanitizeUid(uid))
 }
 
+// UserDataPath the per user data directory (outside the sync folder)
+func (fs *FileSystemStorage) UserDataPath(uid string) string {
+	return fs.getUserPath(uid)
+}
+
 // gets the blobstorage path
 func (fs *FileSystemStorage) getUserBlobPath(uid string) string {
 	return filepath.Join(fs.getUserPath(uid), SyncFolder)

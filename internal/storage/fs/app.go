@@ -43,6 +43,8 @@ var ErrorWrongGeneration = errors.New("wrong generation")
 type App struct {
 	cfg *config.Config
 	fs  *FileSystemStorage
+	// OnRootUpdated is called after a device wrote a new root blob for uid
+	OnRootUpdated func(uid string)
 }
 
 // NewApp StorageApp various storage routes
@@ -227,6 +229,10 @@ func (app *App) uploadBlob(c *gin.Context) {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
+	}
+
+	if blobID == rootBlob && app.OnRootUpdated != nil {
+		app.OnRootUpdated(uid)
 	}
 
 	c.Header(generationHeader, strconv.FormatInt(newgen, 10))
