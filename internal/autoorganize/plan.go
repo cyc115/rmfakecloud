@@ -239,7 +239,8 @@ func BuildPlan(in PlanInput) *Plan {
 				skip(SkipHeld, fmt.Sprintf("%s on %s, inputs unchanged", what, time.UnixMilli(hold.CreatedAt).Format("Jan 2 15:04")), hold.ID)
 				continue
 			}
-			if dest.id != "" {
+			// a folder still to be created has no history; the root ("") does
+			if dest.create == nil {
 				if h := in.State.CycleBlock(d.ID, dest.id, d.Fingerprint, in.Now); h != nil {
 					skip(SkipCycleGuard, fmt.Sprintf("would return to %s; moved out of it by rule %d at %s",
 						rr.DestName, h.RuleNumber, time.UnixMilli(h.At).Format("Jan 2 15:04")), "")

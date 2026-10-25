@@ -577,6 +577,14 @@ func TestCycleGuardRefusesReturn(t *testing.T) {
 	if len(p.Moves) != 1 {
 		t.Fatal("a fingerprint change is new information and resets the guard")
 	}
+
+	// the root ("My files") is a destination like any other
+	st.History = []HistoryEntry{{DocID: "d", RuleID: "a", RuleNumber: 1, From: RootID, To: "archive", At: now.Add(-time.Hour).UnixMilli(), Fingerprint: fp}}
+	toRoot := moveRule("b", "archive", RootID, Trigger{Type: TriggerPinnedIs, Pinned: true})
+	p = m.plan(t, now, st, toRoot)
+	if s := skipOf(p, "d"); len(p.Moves) != 0 || s == nil || s.Reason != SkipCycleGuard {
+		t.Fatalf("cycle guard back to root: moves %v skipped %+v", movedIDs(p), p.Skipped)
+	}
 }
 
 func TestResolveCreateIfMissing(t *testing.T) {
