@@ -48,6 +48,11 @@ const NavigationBar = () => {
                     Screen Share
                   </Nav.Link>
                 </Nav.Item>
+                <Nav.Item>
+                  <Nav.Link as={NavLink} to="/auto-organize">
+                    Auto-organize
+                  </Nav.Link>
+                </Nav.Item>
 				{ isAdmin() &&
 
 					<Nav.Item>

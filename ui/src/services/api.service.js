@@ -202,6 +202,58 @@ class ApiServices {
       headers: this.header(),
     }).then((r) => handleError(r));
   }
+
+  // auto-organize
+  autoOrganize(method, path, body) {
+    return fetch(`${constants.ROOT_URL}/auto-organize${path}`, {
+      method,
+      headers: this.header(),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }).then(async (r) => {
+      if (r.status === 401) {
+        removeUser();
+        window.location.reload(true);
+        return;
+      }
+      let data = null;
+      try {
+        data = await r.json();
+      } catch (e) {
+        data = null;
+      }
+      if (!r.ok) {
+        const err = new Error((data && data.error) || r.statusText);
+        err.status = r.status;
+        err.body = data;
+        throw err;
+      }
+      return data;
+    });
+  }
+  getAutoOrganize() {
+    return this.autoOrganize("GET", "");
+  }
+  saveAutoOrganize(config) {
+    return this.autoOrganize("PUT", "", config);
+  }
+  getAutoOrganizeState() {
+    return this.autoOrganize("GET", "/state");
+  }
+  previewAutoOrganize(request) {
+    return this.autoOrganize("POST", "/preview", request || {});
+  }
+  runAutoOrganizeNow() {
+    return this.autoOrganize("POST", "/run-now");
+  }
+  getAutoOrganizeLog() {
+    return this.autoOrganize("GET", "/log");
+  }
+  undoAutoOrganizeMove(entryId) {
+    return this.autoOrganize("POST", `/undo/${encodeURIComponent(entryId)}`);
+  }
+  reapplyAutoOrganizeHold(holdId) {
+    return this.autoOrganize("POST", `/reapply/${encodeURIComponent(holdId)}`);
+  }
 }
 
 function removeUser(){
