@@ -229,12 +229,17 @@ export default function AutoOrganize() {
   const [dragFrom, setDragFrom] = useState(null);
   const [dragOver, setDragOver] = useState(null);
   const activityRef = useRef(null);
+  // saves are serialized and applied to the latest saved config, so quick
+  // consecutive edits never PUT a stale revision
+  const configRef = useRef(null);
+  const saveChain = useRef(Promise.resolve());
 
   const refresh = useCallback(async () => {
     try {
       const [c, v, l] = await Promise.all([
         apiService.getAutoOrganize(), apiService.getAutoOrganizeState(), apiService.getAutoOrganizeLog(),
       ]);
+      configRef.current = c;
       setConfig(c);
       setView(v);
       setLog(l);
@@ -263,29 +268,39 @@ export default function AutoOrganize() {
   const st = statusText(config.settings, view.status);
   const viewOf = (id) => view.rules.find((r) => r.ruleId === id);
 
-  const save = async (next) => {
-    try {
-      const saved = await apiService.saveAutoOrganize({ ...next, revision: config.revision });
-      setConfig(saved);
-      apiService.getAutoOrganizeState().then(setView).catch(() => {});
-      return saved;
-    } catch (e) {
-      if (e.status === 409) {
-        toast.warn("The rules were changed in another tab. Reloaded the latest version.");
-        await refresh();
+  // update: (latest config) => next config
+  const save = (update) => {
+    const run = async () => {
+      const cur = configRef.current;
+      try {
+        const saved = await apiService.saveAutoOrganize({ ...update(cur), revision: cur.revision });
+        configRef.current = saved;
+        setConfig(saved);
+        apiService.getAutoOrganizeState().then(setView).catch(() => {});
+        return saved;
+      } catch (e) {
+        if (e.status === 409) {
+          toast.warn("The rules were changed in another tab. Reloaded the latest version.");
+          await refresh();
+        }
+        throw e;
       }
-      throw e;
-    }
+    };
+    const p = saveChain.current.then(run, run);
+    saveChain.current = p.catch(() => {});
+    return p;
   };
-  const saveQuiet = (next) => save(next).catch((e) => e.status !== 409 && toast.error(e.message));
+  const saveQuiet = (update) => save(update).catch((e) => e.status !== 409 && toast.error(e.message));
 
-  const setSettings = (patch) => saveQuiet({ ...config, settings: { ...config.settings, ...patch } });
-  const setRules = (rules) => saveQuiet({ ...config, rules });
+  const setSettings = (patch) => saveQuiet((c) => ({ ...c, settings: { ...c.settings, ...patch } }));
+  // updateRules: (latest rules) => next rules
+  const setRules = (updateRules) => saveQuiet((c) => ({ ...c, rules: updateRules(c.rules) }));
 
-  const runPreview = async (ruleId) => {
+  // request: {} for all rules, {ruleId} for one, {rule} for a draft (a disabled rule previews as a draft)
+  const runPreview = async (request) => {
     setBusy(true);
     try {
-      const p = await apiService.previewAutoOrganize(ruleId ? { ruleId } : {});
+      const p = await apiService.previewAutoOrganize(request || {});
       setPlan(p);
       setTab("preview");
       activityRef.current && activityRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -355,11 +370,15 @@ export default function AutoOrganize() {
   const closeDrawer = () => setDrawer((d) => ({ ...d, open: false }));
   const saveRule = async (rule) => {
     const named = withDisplayNames(rule, folders);
-    const next = [...rules];
-    if (drawer.index >= 0) next[drawer.index] = named;
-    else next.push(named);
+    const editing = drawer.index >= 0 && named.id;
     try {
-      await save({ ...config, rules: next });
+      await save((c) => {
+        const next = [...c.rules];
+        const i = editing ? next.findIndex((r) => r.id === named.id) : -1;
+        if (i >= 0) next[i] = named;
+        else next.push(named);
+        return { ...c, rules: next };
+      });
     } catch (e) {
       if (e.status === 409) {
         closeDrawer();
@@ -371,19 +390,22 @@ export default function AutoOrganize() {
     toast.success("Rule saved");
   };
   const deleteRule = (index) => {
+    const id = rules[index] && rules[index].id;
     // eslint-disable-next-line no-alert
-    if (!window.confirm(`Delete rule ${index + 1}?`)) return;
-    setRules(rules.filter((_, i) => i !== index));
+    if (!id || !window.confirm(`Delete rule ${index + 1}?`)) return;
+    setRules((cur) => cur.filter((r) => r.id !== id));
     closeDrawer();
   };
-  const moveRule = (index, delta) => {
-    const to = index + delta;
-    if (to < 0 || to >= rules.length) return;
-    const next = [...rules];
-    const [r] = next.splice(index, 1);
+  // move the rule with id to position of (its index + delta), or onto targetId
+  const reorder = (id, delta, targetId) => setRules((cur) => {
+    const from = cur.findIndex((r) => r.id === id);
+    const to = targetId !== undefined ? cur.findIndex((r) => r.id === targetId) : from + delta;
+    if (from < 0 || to < 0 || to >= cur.length || from === to) return cur;
+    const next = [...cur];
+    const [r] = next.splice(from, 1);
     next.splice(to, 0, r);
-    setRules(next);
-  };
+    return next;
+  });
   const drag = {
     over: dragOver,
     setOver: setDragOver,
@@ -391,11 +413,9 @@ export default function AutoOrganize() {
     drop: (to) => {
       setDragOver(null);
       if (dragFrom === null || dragFrom === to) return;
-      const next = [...rules];
-      const [r] = next.splice(dragFrom, 1);
-      next.splice(to, 0, r);
+      const fromId = rules[dragFrom].id;
       setDragFrom(null);
-      setRules(next);
+      reorder(fromId, 0, rules[to].id);
     },
   };
   const sharesSource = (rule) => rules.filter((r) => r.enabled && r.source.id === rule.source.id).length > 1;
@@ -453,16 +473,18 @@ export default function AutoOrganize() {
           ) : rules.map((r, i) => (
             <RuleRow key={r.id} rule={r} index={i} count={rules.length} view={viewOf(r.id)} folders={folders}
               sharesSource={sharesSource(r)} drag={drag}
-              onToggle={(on) => setRules(rules.map((x, j) => (j === i ? { ...x, enabled: on } : x)))}
+              onToggle={(on) => setRules((cur) => cur.map((x) => (x.id === r.id ? { ...x, enabled: on } : x)))}
               onEdit={() => openDrawer(r, i)}
               onDuplicate={() => {
                 const copy = { ...JSON.parse(JSON.stringify(r)), id: "", name: r.name ? `${r.name} (copy)` : "", enabled: false };
-                const next = [...rules];
-                next.splice(i + 1, 0, copy);
-                setRules(next);
+                setRules((cur) => {
+                  const next = [...cur];
+                  next.splice(next.findIndex((x) => x.id === r.id) + 1, 0, copy);
+                  return next;
+                });
               }}
-              onPreview={() => runPreview(r.id)}
-              onMove={(d) => moveRule(i, d)}
+              onPreview={() => runPreview(r.enabled ? { ruleId: r.id } : { rule: r })}
+              onMove={(d) => reorder(r.id, d)}
               onDelete={() => deleteRule(i)} />
           ))}
           <div className="ao-add-row">
