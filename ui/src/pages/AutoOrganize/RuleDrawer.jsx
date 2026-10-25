@@ -12,12 +12,17 @@ function num(v) {
 }
 
 // Client side checks shown inline; the server validates again on save.
-function validate(rule, otherRules) {
+function validate(rule, otherRules, folders) {
   const errors = [];
   const warnings = [];
   const cm = rule.destination.createIfMissing;
+  // the pickers list only folders outside the Trash
+  const exists = (id) => (folders || []).some((f) => f.id === id);
+  if (!exists(rule.source.id)) errors.push("Source folder missing or in Trash. Pick a folder.");
   if (cm) {
     if (!cm.name.trim()) errors.push("Name the new subfolder.");
+  } else if (!exists(rule.destination.id)) {
+    errors.push("Destination folder missing or in Trash. Pick a folder.");
   } else if (rule.destination.id === rule.source.id) {
     errors.push("Destination is the same as the source. Pick a different folder.");
   }
@@ -67,7 +72,7 @@ export default function RuleDrawer({ open, initial, isNew, folders, otherRules, 
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onCancel]);
 
-  const { errors, warnings } = rule ? validate(rule, otherRules) : { errors: [], warnings: [] };
+  const { errors, warnings } = rule ? validate(rule, otherRules, folders) : { errors: [], warnings: [] };
 
   // live "Matches now", debounced against preview with the draft rule
   useEffect(() => {

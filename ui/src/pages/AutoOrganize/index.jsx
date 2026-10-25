@@ -99,7 +99,7 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, onToggle, on
   );
 }
 
-function PreviewPane({ plan, live, onApply, onReapply, busy }) {
+function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, busy }) {
   if (!plan) {
     return <div className="ao-empty-pane">Press <b>Preview</b> to see what the next sweep would do. Nothing moves.</div>;
   }
@@ -142,13 +142,23 @@ function PreviewPane({ plan, live, onApply, onReapply, busy }) {
         {skipped.length + claimed.length === 0 && <div className="ao-skip"><span className="why">Nothing skipped.</span></div>}
       </details>
       <div className="ao-apply">
-        <button className="ao-btn primary" disabled={!live || plan.moves.length === 0 || busy} onClick={onApply}>
-          Apply {plan.moves.length === 1 ? "this move" : `these ${plan.moves.length} moves`}
-        </button>
-        <span className="ao-hint">
-          {live ? `Live: this will move ${plan.moves.length} document${plan.moves.length === 1 ? "" : "s"}. You will be asked to confirm.`
-            : "Switch to Live to apply. In Dry-run the preview is informational."}
-        </span>
+        {partial ? (
+          <>
+            {/* applying runs a sweep of every rule, so it is offered only on a full preview */}
+            <button className="ao-btn" disabled={busy} onClick={onPreviewAll}>Preview all rules</button>
+            <span className="ao-hint">This preview covers one rule. A sweep applies every rule in order, so preview all rules to apply.</span>
+          </>
+        ) : (
+          <>
+            <button className="ao-btn primary" disabled={!live || plan.moves.length === 0 || busy} onClick={onApply}>
+              Apply {plan.moves.length === 1 ? "this move" : `these ${plan.moves.length} moves`}
+            </button>
+            <span className="ao-hint">
+              {live ? `Live: this will move ${plan.moves.length} document${plan.moves.length === 1 ? "" : "s"}. You will be asked to confirm.`
+                : "Switch to Live to apply. In Dry-run the preview is informational."}
+            </span>
+          </>
+        )}
       </div>
     </>
   );
@@ -224,6 +234,8 @@ export default function AutoOrganize() {
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("preview");
   const [plan, setPlan] = useState(null);
+  // partial: the plan covers one rule or an unsaved draft, not the whole sweep
+  const [planPartial, setPlanPartial] = useState(false);
   const [busy, setBusy] = useState(false);
   const [drawer, setDrawer] = useState({ open: false, rule: null, index: -1 });
   const [dragFrom, setDragFrom] = useState(null);
@@ -302,6 +314,7 @@ export default function AutoOrganize() {
     try {
       const p = await apiService.previewAutoOrganize(request || {});
       setPlan(p);
+      setPlanPartial(!!(request && (request.ruleId || request.rule)));
       setTab("preview");
       activityRef.current && activityRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
@@ -319,6 +332,7 @@ export default function AutoOrganize() {
         if (p.moves.length === 0) {
           toast.info("Nothing to move right now.");
           setPlan(p);
+          setPlanPartial(false);
           setTab("preview");
           return;
         }
@@ -330,6 +344,7 @@ export default function AutoOrganize() {
       if (r.mode === "LIVE") toast.success(`Sweep done: ${r.moved} moved, ${r.errors} errors`);
       else toast.info(`Dry sweep: ${r.planned} would move`);
       setPlan(res.plan);
+      setPlanPartial(false);
       setTab(r.mode === "LIVE" ? "moves" : "preview");
       await refresh();
     } catch (e) {
@@ -505,7 +520,8 @@ export default function AutoOrganize() {
             </span>
           </div>
           <div className="ao-pane">
-            {tab === "preview" && <PreviewPane plan={plan} live={live} busy={busy} onApply={runNow} onReapply={reapply} />}
+            {tab === "preview" && <PreviewPane plan={plan} partial={planPartial} live={live} busy={busy} onApply={runNow}
+              onPreviewAll={() => runPreview()} onReapply={reapply} />}
             {tab === "moves" && <MovesPane moves={log.moves} busy={busy} onUndo={undo} onReapply={reapply} />}
             {tab === "runs" && <RunsPane runs={log.runs} />}
           </div>
@@ -517,6 +533,7 @@ export default function AutoOrganize() {
         onDelete={() => deleteRule(drawer.index)}
         onShowPreview={(p) => {
           setPlan(p);
+          setPlanPartial(true);
           setTab("preview");
           closeDrawer();
           setTimeout(() => activityRef.current && activityRef.current.scrollIntoView({ behavior: "smooth" }), 50);
