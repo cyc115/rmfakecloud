@@ -216,6 +216,16 @@ func (st *State) MoveByID(id string) *MoveEntry {
 	return nil
 }
 
+// newestLiveMove the most recent LIVE sweeper move of a document
+func (st *State) newestLiveMove(docID string) *MoveEntry {
+	for i := range st.Moves {
+		if st.Moves[i].DocID == docID && st.Moves[i].Mode == EntryLive {
+			return &st.Moves[i]
+		}
+	}
+	return nil
+}
+
 // AppendRun adds to the runs ring buffer, newest first
 func (st *State) AppendRun(r RunEntry) {
 	st.Runs = append([]RunEntry{r}, st.Runs...)

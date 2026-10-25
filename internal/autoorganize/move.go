@@ -80,6 +80,8 @@ func moveDoc(tree *models.HashTree, bs *fs.LocalBlobStorage, docID, from, to str
 		// every fallible read is done; mutate the document
 		doc.Parent = to
 		doc.Version = version
+		// the index lists entry sizes; keep the metadata entry's in step with the new blob
+		meta.Size = int64(len(patched))
 		return fs.CommitDocMetadata(t, doc, bs, hash, bytes.NewReader(patched))
 	})
 }

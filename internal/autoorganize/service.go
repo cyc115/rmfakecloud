@@ -303,6 +303,9 @@ func (s *Service) recheckFor(uid string, r *Rule, dest string, st *State, cache 
 		if !ok {
 			return ErrVanished
 		}
+		if err := destinationUsable(cur, dest); err != nil {
+			return err
+		}
 		ci := cache.Get(snap)
 		chk := checkDoc(r, dest, snap, &ci, st.FirstSeen[d.EntryName], cur.Locate, s.Now())
 		if chk.skip != "" {
@@ -312,6 +315,41 @@ func (s *Service) recheckFor(uid string, r *Rule, dest string, st *State, cache 
 			return &NotQualifiedError{Reason: "trigger no longer holds (" + chk.ev.detail + ")"}
 		}
 		*inputs = chk.ev.inputs
+		return nil
+	}
+}
+
+// destinationUsable the folder a move goes to still exists and is not in the
+// Trash, checked against the re-mirrored tree inside the move closure
+func destinationUsable(cur *Snapshot, dest string) error {
+	if !cur.FolderExists(dest) {
+		return &NotQualifiedError{Reason: "the destination folder is gone"}
+	}
+	if cur.Locate(dest) == LocInTrash {
+		return &NotQualifiedError{Reason: "the destination folder is in the Trash"}
+	}
+	return nil
+}
+
+// recheckUndo the closure re-check for an undo: the original folder is still
+// usable and the document has not been tagged "no automation" since
+func recheckUndo(back string, st *State, cache *ContentCache) func(t *models.HashTree, d *models.HashDoc) error {
+	return func(t *models.HashTree, d *models.HashDoc) error {
+		cur := NewSnapshot(t)
+		snap, ok := cur.Docs[d.EntryName]
+		if !ok {
+			return ErrVanished
+		}
+		if err := destinationUsable(cur, back); err != nil {
+			return err
+		}
+		ci := cache.Get(snap)
+		if !ci.Readable() {
+			return &NotQualifiedError{Reason: ci.Error + "; cannot check the no-automation tag"}
+		}
+		if ci.HasNoAutomationTag() {
+			return &NotQualifiedError{Reason: "tagged “no automation”; move it on the tablet"}
+		}
 		return nil
 	}
 }
@@ -561,11 +599,18 @@ func (s *Service) Undo(uid, moveID string) (*MoveEntry, error) {
 	if entry.UndoneAt != 0 {
 		return nil, ErrAlreadyUndone
 	}
+	if newest := st.newestLiveMove(entry.DocID); newest != nil && newest.ID != entry.ID {
+		return nil, &NotQualifiedError{Reason: "the sweeper moved this document again later; undo that move instead"}
+	}
 	tree, err := s.storage.GetCachedTree(uid)
 	if err != nil {
 		return nil, err
 	}
-	if err := moveDoc(tree, s.storage.BlobStorage(uid), entry.DocID, entry.To, entry.From, nil); err != nil {
+	if d, err := tree.FindDoc(entry.DocID); err == nil && d.Parent != entry.To {
+		return nil, &NotQualifiedError{Reason: "the document is no longer in " + entry.ToName}
+	}
+	cache := NewContentCache(st.ContentCache, s.storage.BlobStorage(uid).GetReader)
+	if err := moveDoc(tree, s.storage.BlobStorage(uid), entry.DocID, entry.To, entry.From, recheckUndo(entry.From, st, cache)); err != nil {
 		return nil, err
 	}
 	now := s.Now()
@@ -578,7 +623,6 @@ func (s *Service) Undo(uid, moveID string) (*MoveEntry, error) {
 			if err == nil {
 				snap := NewSnapshot(after)
 				if d, ok := snap.Docs[entry.DocID]; ok {
-					cache := NewContentCache(st.ContentCache, s.storage.BlobStorage(uid).GetReader)
 					ci := cache.Get(d)
 					ev := evalTrigger(rule, d, &ci, st.FirstSeen[d.ID], now)
 					st.SetHold(Hold{RuleID: rule.ID, DocID: d.ID, Inputs: ev.inputs, Source: entry.From,
@@ -757,7 +801,8 @@ type Log struct {
 }
 
 // Log the last 50 moves (LIVE and DRY) and runs. The newest LIVE move of a
-// document that was found held in the last sweep carries the hold id.
+// (rule, document) that was found held in the last sweep carries the hold id;
+// only the newest LIVE move of a document can be undone.
 func (s *Service) Log(uid string) (*Log, error) {
 	if err := s.checkSync15(uid); err != nil {
 		return nil, err
@@ -771,6 +816,7 @@ func (s *Service) Log(uid string) (*Log, error) {
 		held[h.RuleID+"|"+h.DocID] = h.HoldID
 	}
 	newest := map[string]bool{}
+	newestDoc := map[string]bool{}
 	out := &Log{Moves: []LogMove{}, Runs: st.Runs}
 	if out.Runs == nil {
 		out.Runs = []RunEntry{}
@@ -782,6 +828,9 @@ func (s *Service) Log(uid string) (*Log, error) {
 			if !newest[key] {
 				newest[key] = true
 				lm.HoldID = held[key]
+			}
+			if !newestDoc[m.DocID] {
+				newestDoc[m.DocID] = true
 				lm.CanUndo = m.UndoneAt == 0 && lm.HoldID == ""
 			}
 		}
