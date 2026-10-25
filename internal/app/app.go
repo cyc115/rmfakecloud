@@ -11,8 +11,8 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/ddvk/rmfakecloud/internal/app/hub"
-	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/app/passcodestore"
+	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/hwr"
@@ -116,6 +116,17 @@ func (app *App) Stop() {
 	// app.hub.Stop()
 	if app.stopOrganizer != nil {
 		app.stopOrganizer()
+		// let an in-flight sweep record its state, within the shutdown budget
+		done := make(chan struct{})
+		go func() {
+			app.organizer.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			log.Warn("auto-organize: sweeper did not stop in time")
+		}
 	}
 	if app.mqttBroker != nil {
 		if err := app.mqttBroker.Stop(); err != nil {

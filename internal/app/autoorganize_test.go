@@ -168,11 +168,12 @@ func TestAppLifecycleStartsAndStopsSweeper(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	a.Stop()
+	// Stop waits for the sweeper, so it is already gone when Stop returns
 	done := make(chan struct{})
 	go func() { a.organizer.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("sweeper still running after Stop")
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("sweeper still running after Stop returned")
 	}
 }
