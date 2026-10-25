@@ -83,6 +83,8 @@ type userLoop struct {
 	reset   chan struct{}
 	running atomic.Bool
 	nextAt  atomic.Int64
+	// started the loop goroutine runs; guarded by Service.mu
+	started bool
 
 	debounceMu sync.Mutex
 	timer      *time.Timer
@@ -132,9 +134,29 @@ func (s *Service) Wait() {
 	s.wg.Wait()
 }
 
+// startLoop starts uid's loop once; it reports whether the loop runs
+func (s *Service) startLoop(ctx context.Context, uid string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ul, ok := s.users[uid]
+	if !ok {
+		ul = &userLoop{uid: uid, kick: make(chan string, 1), reset: make(chan struct{}, 1)}
+		s.users[uid] = ul
+	}
+	if ul.started {
+		return true
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return false
+	}
+	ul.started = true
+	s.wg.Add(1)
+	go s.run(ctx, ul)
+	return true
+}
+
 func (s *Service) supervise(ctx context.Context) {
 	defer s.wg.Done()
-	started := map[string]bool{}
 	for {
 		users, err := s.storage.GetUsers()
 		if err != nil {
@@ -142,13 +164,9 @@ func (s *Service) supervise(ctx context.Context) {
 			log.Warn(logPrefix, "cannot read users: ", err)
 		}
 		for _, u := range users {
-			if !u.Sync15 || started[u.ID] {
-				continue
+			if u.Sync15 {
+				s.startLoop(ctx, u.ID)
 			}
-			started[u.ID] = true
-			ul := s.loop(u.ID)
-			s.wg.Add(1)
-			go s.run(ctx, ul)
 		}
 		select {
 		case <-ctx.Done():
@@ -207,10 +225,16 @@ func (s *Service) run(ctx context.Context, ul *userLoop) {
 func (s *Service) Trigger(uid string) {
 	s.mu.Lock()
 	ul, ok := s.users[uid]
+	running := ok && ul.started
+	ctx := s.ctx
 	s.mu.Unlock()
-	if !ok {
-		// no loop: not a sync15 user, or not started (yet)
-		return
+	if !running {
+		// a user the supervisor has not picked up yet (e.g. created after
+		// start): start the loop now rather than drop this root write
+		if ctx == nil || s.checkSync15(uid) != nil || !s.startLoop(ctx, uid) {
+			return
+		}
+		ul = s.loop(uid)
 	}
 	ul.debounceMu.Lock()
 	defer ul.debounceMu.Unlock()

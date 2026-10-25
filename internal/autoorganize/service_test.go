@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/model"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 )
 
@@ -774,5 +775,62 @@ func TestCorruptContentAndMissingContent(t *testing.T) {
 		if s.Reason != SkipContentUnreadable {
 			t.Errorf("%s: %s", s.DocID, s.Reason)
 		}
+	}
+}
+
+// A user the supervisor has not picked up yet (created after Start) gets a
+// sweep from their first root write, without waiting for the user rescan.
+// A sync10 user's root write starts nothing.
+func TestTriggerStartsLoopForNewUser(t *testing.T) {
+	ft, storage := newHarness(t, "early", true)
+	svc, _, _ := newService(t, storage)
+	svc.Debounce = 20 * time.Millisecond
+	svc.UserRescan = time.Hour // the supervisor will not rescan during the test
+	svc.IntervalUnit = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); svc.Wait() }()
+	svc.Start(ctx)
+	_ = ft
+
+	// registered after the supervisor's only scan
+	late, err := model.NewUser("late", "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	late.ID, late.Sync15 = "late", true
+	if err := storage.RegisterUser(late); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := model.NewUser("old", "pw")
+	old.ID, old.Sync15 = "old", false
+	if err := storage.RegisterUser(old); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	svc.Trigger("late")
+	svc.Trigger("old")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		st, _ := svc.Store().LoadState("late")
+		if len(st.Runs) == 1 {
+			if st.Runs[0].Trigger != TriggerTabletSync {
+				t.Fatalf("trigger %q", st.Runs[0].Trigger)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first root write of a new user did not sweep")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if st, _ := svc.Store().LoadState("old"); len(st.Runs) != 0 {
+		t.Fatal("a sync10 user's root write swept")
+	}
+	svc.mu.Lock()
+	ul := svc.users["old"]
+	svc.mu.Unlock()
+	if ul != nil && ul.started {
+		t.Fatal("a loop was started for a sync10 user")
 	}
 }
