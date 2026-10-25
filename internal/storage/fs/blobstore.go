@@ -371,7 +371,7 @@ func (fs *FileSystemStorage) CreateBlobDocument(uid, filename, parent string, st
 	}
 
 	hashDoc := models.NewHashDocWithMeta(docid, metadata)
-	hashDoc.PayloadType = docName
+	hashDoc.PayloadType = strings.TrimPrefix(ext, ".")
 
 	err = hashDoc.AddFile(payloadEntry)
 	if err != nil {
