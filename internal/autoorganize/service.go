@@ -109,15 +109,20 @@ func (s *Service) Store() *Store {
 	return s.store
 }
 
-func (s *Service) loop(uid string) *userLoop {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// loopLocked the user's loop record, created on first use; the caller holds s.mu
+func (s *Service) loopLocked(uid string) *userLoop {
 	ul, ok := s.users[uid]
 	if !ok {
 		ul = &userLoop{uid: uid, kick: make(chan string, 1), reset: make(chan struct{}, 1)}
 		s.users[uid] = ul
 	}
 	return ul
+}
+
+func (s *Service) loop(uid string) *userLoop {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loopLocked(uid)
 }
 
 // Start runs the supervisor until ctx is cancelled. It returns immediately.
@@ -138,11 +143,7 @@ func (s *Service) Wait() {
 func (s *Service) startLoop(ctx context.Context, uid string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ul, ok := s.users[uid]
-	if !ok {
-		ul = &userLoop{uid: uid, kick: make(chan string, 1), reset: make(chan struct{}, 1)}
-		s.users[uid] = ul
-	}
+	ul := s.loopLocked(uid)
 	if ul.started {
 		return true
 	}
@@ -300,12 +301,60 @@ func (s *Service) RunNow(uid string) (*SweepResult, error) {
 	return s.sweepLocked(ctx, ul, TriggerRunNow, true)
 }
 
+// session what every read of a user's auto-organize world starts from
+type session struct {
+	uid  string
+	cfg  *Config
+	st   *State
+	tree *models.HashTree
+}
+
+// open checks sync15 and loads the user's config, state and cached tree
+func (s *Service) open(uid string) (*session, error) {
+	if err := s.checkSync15(uid); err != nil {
+		return nil, err
+	}
+	cfg, err := s.store.LoadConfig(uid)
+	if err != nil {
+		return nil, err
+	}
+	st, err := s.store.LoadState(uid)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := s.storage.GetCachedTree(uid)
+	if err != nil {
+		return nil, err
+	}
+	return &session{uid: uid, cfg: cfg, st: st, tree: tree}, nil
+}
+
+// contentCache the user's .content reader backed by the state's persisted cache
+func (s *Service) contentCache(uid string, st *State) *ContentCache {
+	return NewContentCache(st.ContentCache, s.storage.BlobStorage(uid).GetReader)
+}
+
 func (s *Service) planFor(uid string, cfg *Config, st *State, tree *models.HashTree) (*Snapshot, *ContentCache, *Plan) {
 	snap := NewSnapshot(tree)
 	st.UpdateFirstSeen(snap, s.Now())
-	cache := NewContentCache(st.ContentCache, s.storage.BlobStorage(uid).GetReader)
+	cache := s.contentCache(uid, st)
 	plan := BuildPlan(PlanInput{Snap: snap, Config: cfg, State: st, Content: cache.Get, Now: s.Now()})
 	return snap, cache, plan
+}
+
+// recordLiveMove writes what every LIVE move leaves behind: the moves log
+// entry, the cycle-guard history and a "moved" hold keyed on the trigger
+// inputs that held at move time. entry.From/To must be the folders moved
+// between. Returns the stored log entry (with its id).
+func recordLiveMove(st *State, entry MoveEntry, fingerprint string, inputs map[string]string, now time.Time) *MoveEntry {
+	entry.Mode = EntryLive
+	entry.At = now.UnixMilli()
+	st.AppendMove(entry)
+	st.History = append(st.History, HistoryEntry{DocID: entry.DocID, RuleID: entry.RuleID, RuleNumber: entry.RuleNumber,
+		From: entry.From, To: entry.To, At: now.UnixMilli(), Fingerprint: fingerprint})
+	st.SetHold(Hold{RuleID: entry.RuleID, DocID: entry.DocID, Inputs: inputs, Source: entry.From, MovedTo: entry.To,
+		CreatedAt: now.UnixMilli(), Reason: "moved"})
+	return &st.Moves[0]
 }
 
 func findRule(cfg *Config, id string) (*Rule, int) {
@@ -433,9 +482,7 @@ func (s *Service) sweepLocked(ctx context.Context, ul *userLoop, trigger string,
 	run.Scanned = plan.Scanned
 	run.Skipped = plan.SkippedCount()
 
-	treeChanged := false
-	created := map[string]string{}
-	failedRules := map[string]bool{}
+	sw := &sweep{uid: uid, cfg: cfg, st: st, cache: cache, run: &run, created: map[string]string{}, failedRules: map[string]bool{}}
 	for _, mv := range plan.Moves {
 		if ctx.Err() != nil {
 			run.ErrorDetails = append(run.ErrorDetails, "sweep interrupted by shutdown")
@@ -452,57 +499,9 @@ func (s *Service) sweepLocked(ctx context.Context, ul *userLoop, trigger string,
 			run.Planned++
 			continue
 		}
-		if failedRules[mv.RuleID] {
-			continue
-		}
-		rule, _ := findRule(cfg, mv.RuleID)
-		to := mv.To
-		if to == "" && mv.CreateFolder != nil {
-			if id, ok := created[mv.RuleID]; ok {
-				to = id
-			} else {
-				id, err := s.createFolder(uid, rule, mv.CreateFolder)
-				if err != nil {
-					failedRules[mv.RuleID] = true
-					run.Errors++
-					run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("rule %d: cannot create folder “%s”: %v", mv.RuleNumber, mv.CreateFolder.Name, err))
-					continue
-				}
-				log.Info(logPrefix, uid, ": created folder ", mv.ToName, " ", id)
-				created[mv.RuleID] = id
-				st.CreatedFolders[mv.RuleID] = id
-				treeChanged = true
-				to = id
-			}
-			entry.To = to
-		}
-		var inputs map[string]string
-		fresh, err := s.storage.GetCachedTree(uid)
-		if err == nil {
-			err = moveDoc(fresh, s.storage.BlobStorage(uid), mv.DocID, mv.From, to, s.recheckFor(uid, rule, to, st, cache, &inputs))
-		}
-		if err != nil {
-			if IsNotQualified(err) {
-				run.Skipped++
-				run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("%s: skipped at move time, %v", mv.DocName, err))
-				continue
-			}
-			run.Errors++
-			run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("%s: could not update after retries: %v", mv.DocName, err))
-			continue
-		}
-		treeChanged = true
-		run.Moved++
-		entry.Mode = EntryLive
-		now := s.Now()
-		entry.At = now.UnixMilli()
-		st.AppendMove(entry)
-		st.History = append(st.History, HistoryEntry{DocID: mv.DocID, RuleID: mv.RuleID, RuleNumber: mv.RuleNumber,
-			From: mv.From, To: to, At: now.UnixMilli(), Fingerprint: mv.Fingerprint})
-		st.SetHold(Hold{RuleID: mv.RuleID, DocID: mv.DocID, Inputs: inputs, Source: mv.From, MovedTo: to,
-			CreatedAt: now.UnixMilli(), Reason: "moved"})
-		log.Info(logPrefix, uid, ": moved ", mv.DocName, " ", mv.FromName, " -> ", entry.ToName, " (rule ", mv.RuleNumber, ")")
+		s.applyMove(sw, mv, entry)
 	}
+	treeChanged := sw.treeChanged
 
 	st.HeldNow = nil
 	for _, sk := range plan.Skipped {
@@ -525,6 +524,71 @@ func (s *Service) sweepLocked(ctx context.Context, ul *userLoop, trigger string,
 	return &SweepResult{Run: run, Plan: plan}, nil
 }
 
+// sweep the bookkeeping of one LIVE sweep while its planned moves are applied
+type sweep struct {
+	uid   string
+	cfg   *Config
+	st    *State
+	cache *ContentCache
+	run   *RunEntry
+	// created folders made in this sweep, by rule id (one per rule)
+	created map[string]string
+	// failedRules whose folder could not be created; their moves are skipped
+	failedRules map[string]bool
+	treeChanged bool
+}
+
+// applyMove performs one planned move of a LIVE sweep: creates the rule's
+// destination folder on its first use, moves the document under the re-check,
+// and records the outcome on the run. The one place the "move" action is
+// executed by the sweeper (Reapply is the explicit variant).
+func (s *Service) applyMove(sw *sweep, mv PlannedMove, entry MoveEntry) {
+	run := sw.run
+	if sw.failedRules[mv.RuleID] {
+		return
+	}
+	rule, _ := findRule(sw.cfg, mv.RuleID)
+	to := mv.To
+	if to == "" && mv.CreateFolder != nil {
+		if id, ok := sw.created[mv.RuleID]; ok {
+			to = id
+		} else {
+			id, err := s.createFolder(sw.uid, rule, mv.CreateFolder)
+			if err != nil {
+				sw.failedRules[mv.RuleID] = true
+				run.Errors++
+				run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("rule %d: cannot create folder “%s”: %v", mv.RuleNumber, mv.CreateFolder.Name, err))
+				return
+			}
+			log.Info(logPrefix, sw.uid, ": created folder ", mv.ToName, " ", id)
+			sw.created[mv.RuleID] = id
+			sw.st.CreatedFolders[mv.RuleID] = id
+			sw.treeChanged = true
+			to = id
+		}
+		entry.To = to
+	}
+	var inputs map[string]string
+	fresh, err := s.storage.GetCachedTree(sw.uid)
+	if err == nil {
+		err = moveDoc(fresh, s.storage.BlobStorage(sw.uid), mv.DocID, mv.From, to, s.recheckFor(sw.uid, rule, to, sw.st, sw.cache, &inputs))
+	}
+	if err != nil {
+		if IsNotQualified(err) {
+			run.Skipped++
+			run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("%s: skipped at move time, %v", mv.DocName, err))
+			return
+		}
+		run.Errors++
+		run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("%s: could not update after retries: %v", mv.DocName, err))
+		return
+	}
+	sw.treeChanged = true
+	run.Moved++
+	recordLiveMove(sw.st, entry, mv.Fingerprint, inputs, s.Now())
+	log.Info(logPrefix, sw.uid, ": moved ", mv.DocName, " ", mv.FromName, " -> ", entry.ToName, " (rule ", mv.RuleNumber, ")")
+}
+
 func (s *Service) finishRun(uid string, st *State, run *RunEntry, start time.Time, plan *Plan) {
 	run.DurationMs = s.Now().Sub(start).Milliseconds()
 	st.LastSweep = run
@@ -538,13 +602,11 @@ func (s *Service) finishRun(uid string, st *State, run *RunEntry, start time.Tim
 // replaces the rule with the same id (or is appended) and is evaluated in its
 // list position, enabled.
 func (s *Service) Preview(uid string, draft *Rule) (*Plan, *Config, error) {
-	if err := s.checkSync15(uid); err != nil {
-		return nil, nil, err
-	}
-	cfg, err := s.store.LoadConfig(uid)
+	ss, err := s.open(uid)
 	if err != nil {
 		return nil, nil, err
 	}
+	cfg := ss.cfg
 	if draft != nil {
 		d := *draft
 		d.Enabled = true
@@ -564,17 +626,10 @@ func (s *Service) Preview(uid string, draft *Rule) (*Plan, *Config, error) {
 			rules = append(rules, d)
 		}
 		cfg.Rules = rules
+		// the caller learns the id Normalize gave a new draft
 		draft.ID = d.ID
 	}
-	st, err := s.store.LoadState(uid)
-	if err != nil {
-		return nil, nil, err
-	}
-	tree, err := s.storage.GetCachedTree(uid)
-	if err != nil {
-		return nil, nil, err
-	}
-	_, _, plan := s.planFor(uid, cfg, st, tree)
+	_, _, plan := s.planFor(uid, cfg, ss.st, ss.tree)
 	return plan, cfg, nil
 }
 
@@ -634,7 +689,7 @@ func (s *Service) Undo(uid, moveID string) (*MoveEntry, error) {
 	if d, err := tree.FindDoc(entry.DocID); err == nil && d.Parent != entry.To {
 		return nil, &NotQualifiedError{Reason: "the document is no longer in " + entry.ToName}
 	}
-	cache := NewContentCache(st.ContentCache, s.storage.BlobStorage(uid).GetReader)
+	cache := s.contentCache(uid, st)
 	if err := moveDoc(tree, s.storage.BlobStorage(uid), entry.DocID, entry.To, entry.From, recheckUndo(entry.From, st, cache)); err != nil {
 		return nil, err
 	}
@@ -675,27 +730,20 @@ func (s *Service) Reapply(uid, holdID string) (*MoveEntry, error) {
 	}
 	defer ul.sweepMu.Unlock()
 
-	st, err := s.store.LoadState(uid)
+	ss, err := s.open(uid)
 	if err != nil {
 		return nil, err
 	}
+	st, tree := ss.st, ss.tree
 	hold := st.HoldByID(holdID)
 	if hold == nil {
 		return nil, ErrNoEntry
 	}
-	cfg, err := s.store.LoadConfig(uid)
-	if err != nil {
-		return nil, err
-	}
-	rule, num := findRule(cfg, hold.RuleID)
+	rule, num := findRule(ss.cfg, hold.RuleID)
 	if rule == nil {
 		st.ClearHold(hold.RuleID, hold.DocID)
 		s.store.SaveState(uid, st)
 		return nil, errors.New("the rule of this hold no longer exists")
-	}
-	tree, err := s.storage.GetCachedTree(uid)
-	if err != nil {
-		return nil, err
 	}
 	snap := NewSnapshot(tree)
 	d, ok := snap.Docs[hold.DocID]
@@ -716,23 +764,18 @@ func (s *Service) Reapply(uid, holdID string) (*MoveEntry, error) {
 			return nil, err
 		}
 	}
-	cache := NewContentCache(st.ContentCache, s.storage.BlobStorage(uid).GetReader)
+	cache := s.contentCache(uid, st)
 	var inputs map[string]string
 	err = moveDoc(tree, s.storage.BlobStorage(uid), d.ID, rule.Source.ID, to, s.recheckFor(uid, rule, to, st, cache, &inputs))
 	if err != nil {
 		return nil, err
 	}
-	now := s.Now()
 	after := NewSnapshot(tree)
-	entry := MoveEntry{At: now.UnixMilli(), Mode: EntryLive, DocID: d.ID, DocName: d.Name, RuleID: rule.ID,
+	entry := MoveEntry{DocID: d.ID, DocName: d.Name, RuleID: rule.ID,
 		RuleName: ruleLabel(rule, snap.PathName(rule.Source.ID), after.PathName(to)), RuleNumber: num,
 		From: rule.Source.ID, FromName: snap.PathName(rule.Source.ID), To: to, ToName: after.PathName(to),
 		Detail: "re-applied after hold", Kind: "reapply"}
-	st.AppendMove(entry)
-	st.History = append(st.History, HistoryEntry{DocID: d.ID, RuleID: rule.ID, RuleNumber: num, From: rule.Source.ID,
-		To: to, At: now.UnixMilli(), Fingerprint: d.Fingerprint})
-	st.SetHold(Hold{RuleID: rule.ID, DocID: d.ID, Inputs: inputs, Source: rule.Source.ID, MovedTo: to,
-		CreatedAt: now.UnixMilli(), Reason: "moved"})
+	stored := recordLiveMove(st, entry, d.Fingerprint, inputs, s.Now())
 	kept := st.HeldNow[:0]
 	for _, h := range st.HeldNow {
 		if h.HoldID != holdID {
@@ -744,7 +787,7 @@ func (s *Service) Reapply(uid, holdID string) (*MoveEntry, error) {
 		return nil, err
 	}
 	s.notifier.NotifySync(uid, SourceID)
-	return &st.Moves[0], nil
+	return stored, nil
 }
 
 // RuleView a rule row's status: the plan result plus history
@@ -768,22 +811,12 @@ type View struct {
 // View the state endpoint: sweeper status, folders for the pickers, and per
 // rule "matches now", problems, holds and loop warnings from a dry evaluation
 func (s *Service) View(uid string) (*View, error) {
-	if err := s.checkSync15(uid); err != nil {
-		return nil, err
-	}
-	cfg, err := s.store.LoadConfig(uid)
+	ss, err := s.open(uid)
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.store.LoadState(uid)
-	if err != nil {
-		return nil, err
-	}
-	tree, err := s.storage.GetCachedTree(uid)
-	if err != nil {
-		return nil, err
-	}
-	snap, _, plan := s.planFor(uid, cfg, st, tree)
+	cfg, st := ss.cfg, ss.st
+	snap, _, plan := s.planFor(uid, cfg, st, ss.tree)
 	dests := map[string]string{}
 	for _, rr := range plan.Rules {
 		dests[rr.RuleID] = rr.DestID

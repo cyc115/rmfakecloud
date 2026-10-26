@@ -112,8 +112,8 @@ func (t *Trigger) UnmarshalJSON(b []byte) error {
 	}
 	if p.MinAgeDays == -1 {
 		p.MinAgeDays = 0
-		if p.Type == TriggerNotOpened {
-			p.MinAgeDays = 7
+		if def, ok := triggerDefs[p.Type]; ok {
+			p.MinAgeDays = def.AbsentMinAgeDays
 		}
 	}
 	*t = Trigger(p)
@@ -162,7 +162,8 @@ func (r *Rule) SkipsPinned() bool {
 
 // PageBased triggers that need a pageCount and are locked to PDF & EPUB
 func (t *Trigger) PageBased() bool {
-	return t.Type == TriggerFinishedReading || t.Type == TriggerReadProgress
+	def, ok := triggerDefs[t.Type]
+	return ok && def.PageBased
 }
 
 func validInterval(m int) bool {
@@ -196,28 +197,8 @@ func (c *Config) Normalize() {
 		if r.Action.Type == "" {
 			r.Action.Type = ActionMove
 		}
-		t := &r.Trigger
-		switch t.Type {
-		case TriggerFinishedReading:
-			if t.MinPages == 0 {
-				t.MinPages = 3
-			}
-		case TriggerReadProgress:
-			if t.Percent == 0 {
-				t.Percent = 80
-			}
-		case TriggerNotOpened:
-			if t.Days == 0 {
-				t.Days = 30
-			}
-		case TriggerNotModified:
-			if t.Days == 0 {
-				t.Days = 90
-			}
-		case TriggerAgeSinceCreated:
-			if t.Days == 0 {
-				t.Days = 14
-			}
+		if def, ok := triggerDefs[r.Trigger.Type]; ok && def.Defaults != nil {
+			def.Defaults(&r.Trigger)
 		}
 		if cm := r.Destination.CreateIfMissing; cm != nil {
 			cm.Name = strings.TrimSpace(cm.Name)
@@ -292,49 +273,15 @@ func (r *Rule) Validate() error {
 	}
 
 	t := &r.Trigger
-	if t.PageBased() && r.Scope != ScopePdfEpub {
+	def, ok := triggerDefs[t.Type]
+	if !ok {
+		return fmt.Errorf("unknown trigger %q", t.Type)
+	}
+	if def.PageBased && r.Scope != ScopePdfEpub {
 		return errors.New("this trigger only applies to PDF & EPUB")
 	}
-	switch t.Type {
-	case TriggerFinishedReading:
-		if t.MinPages < 1 {
-			return errors.New("minimum pages must be at least 1")
-		}
-		if t.SettleHours < 0 {
-			return errors.New("settle hours cannot be negative")
-		}
-	case TriggerReadProgress:
-		if t.Percent < 1 || t.Percent > 100 {
-			return errors.New("percent must be between 1 and 100")
-		}
-		if t.SettleHours < 0 {
-			return errors.New("settle hours cannot be negative")
-		}
-	case TriggerNotOpened:
-		if t.Days < 1 {
-			return errors.New("days must be at least 1")
-		}
-		if t.MinAgeEnabled && t.MinAgeDays < 0 {
-			return errors.New("minimum age cannot be negative")
-		}
-	case TriggerNotModified, TriggerAgeSinceCreated:
-		if t.Days < 1 {
-			return errors.New("days must be at least 1")
-		}
-	case TriggerNameMatches:
-		if _, err := CompilePattern(t.Pattern); err != nil {
-			return err
-		}
-	case TriggerTagIs:
-		if NormalizeTag(t.Tag) == "" {
-			return errors.New("tag cannot be empty")
-		}
-		if IsNoAutomationTag(t.Tag) {
-			return errors.New("documents tagged “no automation” are always skipped; pick another tag")
-		}
-	case TriggerPinnedIs:
-	default:
-		return fmt.Errorf("unknown trigger %q", t.Type)
+	if def.Validate != nil {
+		return def.Validate(t)
 	}
 	return nil
 }

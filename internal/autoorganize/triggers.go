@@ -83,91 +83,104 @@ func daysSince(t, now time.Time) float64 {
 	return now.Sub(t).Hours() / 24
 }
 
-// evalTrigger evaluates r's trigger. It does not apply the common guards.
+// evalTrigger evaluates r's trigger through the registry. It does not apply
+// the common guards (checkDoc does).
 func evalTrigger(r *Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
-	t := &r.Trigger
-	switch t.Type {
-	case TriggerFinishedReading, TriggerReadProgress:
-		return evalReading(t, d, ci, now)
+	def, ok := triggerDefs[r.Trigger.Type]
+	if !ok {
+		return evaluation{skip: SkipInvalidRule, skipDetail: "unknown trigger " + r.Trigger.Type}
+	}
+	return def.Eval(&r.Trigger, d, ci, fs, now)
+}
 
-	case TriggerNotOpened:
-		anchor, src := ageAnchor(d, fs, now)
-		ev := evaluation{inputs: map[string]string{"lastOpened": d.LastOpened, "ageAnchor": strconv.FormatInt(anchor.UnixMilli(), 10)}}
-		age := daysSince(anchor, now)
-		opened, ok := parseMillis(d.LastOpened)
-		if ok {
-			ev.detail = fmt.Sprintf("last opened %s ago", humanDuration(now.Sub(opened)))
-			ev.match = daysSince(opened, now) >= float64(t.Days)
-		} else {
-			ev.detail = "never opened"
-			ev.match = true
+// evalNotOpened not_opened_for_days: never opened, or last opened at least
+// Days ago; with the minimum-age guard the document must also be old enough
+func evalNotOpened(t *Trigger, d *DocSnap, _ *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	anchor, src := ageAnchor(d, fs, now)
+	ev := evaluation{inputs: map[string]string{"lastOpened": d.LastOpened, "ageAnchor": strconv.FormatInt(anchor.UnixMilli(), 10)}}
+	age := daysSince(anchor, now)
+	opened, ok := parseMillis(d.LastOpened)
+	if ok {
+		ev.detail = fmt.Sprintf("last opened %s ago", humanDuration(now.Sub(opened)))
+		ev.match = daysSince(opened, now) >= float64(t.Days)
+	} else {
+		ev.detail = "never opened"
+		ev.match = true
+	}
+	if t.MinAgeEnabled {
+		ev.detail += fmt.Sprintf(" · %s old (%s)", humanDuration(now.Sub(anchor)), src)
+		if age < float64(t.MinAgeDays) {
+			ev.match = false
 		}
-		if t.MinAgeEnabled {
-			ev.detail += fmt.Sprintf(" · %s old (%s)", humanDuration(now.Sub(anchor)), src)
-			if age < float64(t.MinAgeDays) {
-				ev.match = false
-			}
-		}
-		return ev
+	}
+	return ev
+}
 
-	case TriggerNotModified:
-		ev := evaluation{inputs: map[string]string{"lastModified": d.LastModified}}
-		mod, ok := parseMillis(d.LastModified)
-		if !ok {
-			ev.skip = SkipTimeUnknown
-			ev.skipDetail = "lastModified missing or invalid"
-			return ev
-		}
-		ev.detail = fmt.Sprintf("last modified %s ago", humanDuration(now.Sub(mod)))
-		ev.match = daysSince(mod, now) >= float64(t.Days)
-		return ev
-
-	case TriggerNameMatches:
-		ev := evaluation{inputs: map[string]string{"name": d.Name}}
-		re, err := CompilePattern(t.Pattern)
-		if err != nil {
-			ev.skip = SkipInvalidRule
-			ev.skipDetail = err.Error()
-			return ev
-		}
-		ev.match = re.MatchString(d.Name)
-		ev.detail = fmt.Sprintf("name matches “%s”", t.Pattern)
-		return ev
-
-	case TriggerTagIs:
-		norm := make([]string, 0, len(ci.Tags))
-		for _, tag := range ci.Tags {
-			norm = append(norm, NormalizeTag(tag))
-		}
-		sort.Strings(norm)
-		ev := evaluation{inputs: map[string]string{"tags": strings.Join(norm, ",")}}
-		ev.match = ci.HasTag(t.Tag)
-		ev.detail = fmt.Sprintf("tagged “%s”", NormalizeTag(t.Tag))
-		return ev
-
-	case TriggerAgeSinceCreated:
-		anchor, src := ageAnchor(d, fs, now)
-		ev := evaluation{inputs: map[string]string{"ageAnchor": strconv.FormatInt(anchor.UnixMilli(), 10), "ageSource": src}}
-		ev.detail = fmt.Sprintf("arrived %s ago (%s)", humanDuration(now.Sub(anchor)), src)
-		ev.match = daysSince(anchor, now) >= float64(t.Days)
-		return ev
-
-	case TriggerPinnedIs:
-		ev := evaluation{inputs: map[string]string{"pinned": strconv.FormatBool(d.Pinned)}}
-		ev.match = d.Pinned == t.Pinned
-		if d.Pinned {
-			ev.detail = "pinned"
-		} else {
-			ev.detail = "not pinned"
-		}
+// evalNotModified not_modified_for_days; a missing lastModified is a skip, never a guess
+func evalNotModified(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
+	ev := evaluation{inputs: map[string]string{"lastModified": d.LastModified}}
+	mod, ok := parseMillis(d.LastModified)
+	if !ok {
+		ev.skip = SkipTimeUnknown
+		ev.skipDetail = "lastModified missing or invalid"
 		return ev
 	}
-	return evaluation{skip: SkipInvalidRule, skipDetail: "unknown trigger " + t.Type}
+	ev.detail = fmt.Sprintf("last modified %s ago", humanDuration(now.Sub(mod)))
+	ev.match = daysSince(mod, now) >= float64(t.Days)
+	return ev
+}
+
+// evalNameMatches name_matches: glob or /regex/, case-insensitive (CompilePattern)
+func evalNameMatches(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+	ev := evaluation{inputs: map[string]string{"name": d.Name}}
+	re, err := CompilePattern(t.Pattern)
+	if err != nil {
+		ev.skip = SkipInvalidRule
+		ev.skipDetail = err.Error()
+		return ev
+	}
+	ev.match = re.MatchString(d.Name)
+	ev.detail = fmt.Sprintf("name matches “%s”", t.Pattern)
+	return ev
+}
+
+// evalTagIs tag_is: a document-level tag equal to Tag after normalisation
+func evalTagIs(t *Trigger, _ *DocSnap, ci *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+	norm := make([]string, 0, len(ci.Tags))
+	for _, tag := range ci.Tags {
+		norm = append(norm, NormalizeTag(tag))
+	}
+	sort.Strings(norm)
+	ev := evaluation{inputs: map[string]string{"tags": strings.Join(norm, ",")}}
+	ev.match = ci.HasTag(t.Tag)
+	ev.detail = fmt.Sprintf("tagged “%s”", NormalizeTag(t.Tag))
+	return ev
+}
+
+// evalAgeSinceCreated age_since_created, from the age anchor
+func evalAgeSinceCreated(t *Trigger, d *DocSnap, _ *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	anchor, src := ageAnchor(d, fs, now)
+	ev := evaluation{inputs: map[string]string{"ageAnchor": strconv.FormatInt(anchor.UnixMilli(), 10), "ageSource": src}}
+	ev.detail = fmt.Sprintf("arrived %s ago (%s)", humanDuration(now.Sub(anchor)), src)
+	ev.match = daysSince(anchor, now) >= float64(t.Days)
+	return ev
+}
+
+// evalPinnedIs pinned_is
+func evalPinnedIs(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+	ev := evaluation{inputs: map[string]string{"pinned": strconv.FormatBool(d.Pinned)}}
+	ev.match = d.Pinned == t.Pinned
+	if d.Pinned {
+		ev.detail = "pinned"
+	} else {
+		ev.detail = "not pinned"
+	}
+	return ev
 }
 
 // evalReading finished_reading and read_progress. Metadata lastOpenedPage is
 // authoritative (0-indexed); the .content value is logged for drift.
-func evalReading(t *Trigger, d *DocSnap, ci *ContentInfo, now time.Time) evaluation {
+func evalReading(t *Trigger, d *DocSnap, ci *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
 	ev := evaluation{inputs: map[string]string{
 		"pageCount":      strconv.Itoa(ci.PageCount),
 		"lastOpenedPage": strconv.Itoa(d.LastOpenedPage),
