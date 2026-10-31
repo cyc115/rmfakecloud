@@ -6,12 +6,13 @@ import { Container, Row, Col } from "react-bootstrap";
 import File from "./File";
 import Folder from "./Folder";
 import Navbar from 'react-bootstrap/Navbar';
-import { BsSearch } from "react-icons/bs";
+import { BsSearch, BsFolder2Open } from "react-icons/bs";
 import Form from 'react-bootstrap/Form';
 import Button from 'react-bootstrap/Button';
 import InputGroup from 'react-bootstrap/InputGroup';
 import { toast } from "react-toastify";
 import { useAuthState } from "../../common/useAuthContext";
+import useIsMobile from "../../hooks/useIsMobile";
 
 import styles from "./Documents.module.scss";
 
@@ -24,12 +25,19 @@ export default function DocumentList() {
   const [initialSelectionSet, setInitialSelectionSet] = useState(false);
   const [treeHeight, setTreeHeight] = useState(700);
 
+  const isMobile = useIsMobile();
+  // On phones the tree and the folder pane stack; the tree starts hidden so the
+  // folder pane (breadcrumbs + file list) is what you see first.
+  const [showTree, setShowTree] = useState(!isMobile);
+  const treeVisible = !isMobile || showTree;
+
   const { itemId } = useParams();
   const history = useHistory();
   const { state: { user } } = useAuthState();
 
   const treeRef = useRef(null);
   const treeContainerRef = useRef(null);
+  const pageRef = useRef(null);
   const lastSelectedId = useRef(null);
 
   useEffect(() => {
@@ -71,6 +79,30 @@ export default function DocumentList() {
       }
     }
   };
+
+  // Tree selection: on phones, opening a file hides the tree so the viewer
+  // is not pushed below the fold.
+  const onTreeSelect = (node) => {
+    onSelect(node);
+    if (isMobile && node && node.isLeaf) {
+      setShowTree(false);
+    }
+  };
+
+  // On phones the whole page scrolls; bring a new selection into view.
+  useEffect(() => {
+    if (isMobile && pageRef.current) {
+      pageRef.current.scrollIntoView({ block: "start" });
+    }
+  }, [selected?.id, isMobile]);
+
+  // While hidden the tree has zero height, so react-arborist's scroll-to-selection
+  // leaves the list offset. Re-align once it is visible again.
+  useEffect(() => {
+    if (treeVisible && treeHeight > 0 && treeRef.current) {
+      treeRef.current.scrollTo(selected?.id || "root");
+    }
+  }, [treeVisible, treeHeight]);
 
   const onUpdate = () => {
     setCounter(prev => prev+1);
@@ -195,21 +227,24 @@ export default function DocumentList() {
 
     const { item: foundItem, parent: parentItem } = result;
 
-    // Create a pseudo-node object that matches what onSelect expects
+    // Create a pseudo-node object that matches what onSelect expects.
     // React-arborist wraps the data, so the node has both top-level properties
-    // and a 'data' property containing the actual item
-    const pseudoNode = {
-      id: foundItem.id,
-      data: foundItem,
-      isLeaf: !foundItem.isFolder,
-      children: (foundItem.children || []).map(child => ({
-        id: child.id,
-        data: child,
-        isLeaf: !child.isFolder,
-      })),
-      parent: parentItem ? buildParentChain(parentItem) : null,
-      isRoot: foundItem.id === 'root' || foundItem.id === 'trash',
+    // and a 'data' property containing the actual item. Children are built the
+    // same way (with their own children and a parent link), so opening a
+    // subfolder from the pane shows its contents and a full breadcrumb trail.
+    const toPseudoNode = (item, parent) => {
+      const node = {
+        id: item.id,
+        data: item,
+        isLeaf: !item.isFolder,
+        parent,
+        isRoot: item.id === 'root' || item.id === 'trash',
+        toggle: () => {},
+      };
+      node.children = (item.children || []).map(child => toPseudoNode(child, node));
+      return node;
     };
+    const pseudoNode = toPseudoNode(foundItem, parentItem ? buildParentChain(parentItem) : null);
 
     // Set the selection directly
     setSelected(pseudoNode);
@@ -226,16 +261,32 @@ export default function DocumentList() {
     }
   }, [entries, itemId, initialSelectionSet]);
 
+  const toggleSearch = () => {
+    setShowSearch(!showSearch);
+    setTerm("");
+    if (!showSearch) setShowTree(true);
+  };
+
   return (
-    <Container fluid style={{height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", padding: "25px 0 20px 0"}}>
-        <Row style={{flex: "1 1 auto", minHeight: 0}}>
-          <Col md={4} style={{display: "flex", flexDirection: "column", height: "100%"}}>
-            <Navbar style={{flexShrink: 0}}>
+    <Container fluid ref={pageRef} className={styles.page}>
+        <Row className={styles.row}>
+          <Col md={4} className={styles.col}>
+            <Navbar className={styles.toolbar}>
               <div className={`${styles.stretch} ${styles.userid}`}>{user.UserID}</div>
-              <Button variant="outline" onClick={() => { setShowSearch(!showSearch); setTerm("") }}><BsSearch/></Button>
+              <Button
+                variant="outline"
+                className="d-md-none"
+                active={showTree}
+                aria-pressed={showTree}
+                aria-label={showTree ? "Hide folder tree" : "Show folder tree"}
+                onClick={() => setShowTree(!showTree)}
+              >
+                <BsFolder2Open />
+              </Button>
+              <Button variant="outline" aria-label="Search" onClick={toggleSearch}><BsSearch/></Button>
             </Navbar>
 
-            {showSearch && <div style={{flexShrink: 0}}>
+            {showSearch && <div className={styles.toolbar}>
               <InputGroup className="mb-3">
                 <InputGroup.Text>
                   <BsSearch />
@@ -245,12 +296,12 @@ export default function DocumentList() {
               </InputGroup>
             </div>}
 
-            <div ref={treeContainerRef} className={styles.treeContainer} style={{flex: "1 1 auto", minHeight: 0, overflow: "auto"}}>
-              <DocumentTree selection={selected} onSelect={onSelect} treeRef={treeRef} term={term} entries={entries} height={treeHeight} />
+            <div ref={treeContainerRef} className={`${styles.treeContainer} ${treeVisible ? "" : "d-none"}`}>
+              <DocumentTree selection={selected} onSelect={onTreeSelect} treeRef={treeRef} term={term} entries={entries} height={treeHeight} />
             </div>
           </Col>
-          <Col md={8} style={{display: "flex", flexDirection: "column", height: "100%"}}>
-            <div style={{flex: "1 1 auto", minHeight: 0, overflow: "auto"}}>
+          <Col md={8} className={styles.col}>
+            <div className={styles.pane}>
               {selected && selected.isLeaf && <File file={selected} onSelect={onSelect} />}
               {selected && !selected.isLeaf && <Folder selection={selected} onSelect={onSelect} onUpdate={onUpdate} counter={counter} />}
             </div>

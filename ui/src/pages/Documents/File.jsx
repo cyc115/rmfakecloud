@@ -4,6 +4,7 @@ import Navbar from 'react-bootstrap/Navbar';
 import { FaChevronRight, FaChevronLeft, } from "react-icons/fa6";
 import { AiOutlineDownload } from "react-icons/ai";
 import constants from "../../common/constants";
+import useIsMobile from "../../hooks/useIsMobile";
 
 import apiservice from "../../services/api.service"
 import NameTag from "../../components/NameTag"
@@ -26,8 +27,11 @@ export default function FileViewer({ file, onSelect }) {
 
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
-  // const [width, setWidth] = useState(100);
+  const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(100);
+  // Desktop fits the page to the pane's height; on phones the page scrolls,
+  // so fit to the width instead.
+  const isMobile = useIsMobile();
   const onLoadSuccess = (pdf) => {
     setPage(1);
     setPages(pdf.numPages);
@@ -42,17 +46,16 @@ export default function FileViewer({ file, onSelect }) {
       return Math.min(p + 1, pages);
     });
   };
-	const parent = useRef(null);
-	useEffect(() => {
-		const resizeObserver = new ResizeObserver((event) => {
-			// Depending on the layout, you may need to swap inlineSize with blockSize
-			// https://developer.mozilla.org/en-US/docs/Web/API/ResizeObserverEntry/contentBoxSize
-			// setWidth(event[0].contentBoxSize[0].inlineSize);
-			setHeight(event[0].contentBoxSize[0].blockSize);
-		});
+  const parent = useRef(null);
+  useEffect(() => {
+    const resizeObserver = new ResizeObserver((event) => {
+      setWidth(event[0].contentBoxSize[0].inlineSize);
+      setHeight(event[0].contentBoxSize[0].blockSize);
+    });
 
-		resizeObserver.observe(parent.current);
-	});
+    resizeObserver.observe(parent.current);
+    return () => resizeObserver.disconnect();
+  }, []);
 
   // TODO: add loading and error handling
   const triggerDownload = (blob, filename) => {
@@ -86,7 +89,7 @@ export default function FileViewer({ file, onSelect }) {
   return (
     <>
       <Navbar style={{ marginLeft: '-12px' }}>
-        { file && (<div><NameTag node={file} onSelect={onSelect} /></div>) }
+        { file && (<div className="breadcrumbs"><NameTag node={file} onSelect={onSelect} /></div>) }
       </Navbar>
 
       <Navbar>
@@ -117,14 +120,13 @@ export default function FileViewer({ file, onSelect }) {
 
 
       {file && (
-        <div ref={parent} style={{height: "95%"}}>
+        <div ref={parent} style={{height: isMobile ? "auto" : "95%"}}>
 		  <Document file={downloadUrl} onLoadSuccess={onLoadSuccess} options={options}>
-            <Page pageNumber={page} 
-							// width={ width } 
-							height={ height} 
-							renderAnnotationLayer={false} 
-							renderTextLayer={false}
-						/>
+            <Page pageNumber={page}
+              {...(isMobile ? { width: width || undefined } : { height })}
+              renderAnnotationLayer={false}
+              renderTextLayer={false}
+            />
           </Document>
         </div>
       )}

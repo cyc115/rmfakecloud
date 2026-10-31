@@ -110,17 +110,34 @@ code {
     background-color: $background1;
 }
 
-@media (max-width: 768px) {
-  .documents-tree {
-    max-height: 25vh !important;
-  }
-}
-
 .container-fluid {
   box-sizing: border-box;
   margin: 0 50px;
   max-width: none;
   width: calc(100vw - 100px) !important;
+}
+
+// Phones: 50px side margins would eat a quarter of a 390px screen.
+@media (max-width: 767.98px) {
+  .container-fluid {
+    margin: 0;
+    width: 100% !important;
+  }
+}
+
+// Breadcrumb trail above a folder or file: wrap instead of running off-screen.
+.breadcrumbs {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+
+  .btn {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
 }
 
 .documents-tree {
@@ -206,6 +223,29 @@ code {
       margin-right: 0.8em;
     }
   }
+
+  // Name column takes the leftover width; long names wrap rather than push
+  // the size column off-screen.
+  .filelist-col-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 767.98px) {
+    .filelist-col-lastModified {
+      display: none !important;
+    }
+
+    .filelist-col-select,
+    .filelist-col-icon {
+      width: 28px !important;
+      flex: none;
+    }
+
+    .filelist-header {
+      padding: 0.5em;
+    }
+  }
 }
 
 .filegrid {
@@ -262,6 +302,12 @@ code {
 
   .filegrid-checkbox-spacer {
     margin-left: 2.4em;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .filegrid {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
 }
 

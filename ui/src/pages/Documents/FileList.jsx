@@ -178,7 +178,7 @@ export default function FileListViewer({ listStyle, files, onSelect, counter, se
                 {headerGroup.headers.map(header => (
                   <div
                     key={header.id}
-                    className={`filelist-header-cell ${header.column.getCanSort() ? 'sortable' : ''}`}
+                    className={`filelist-header-cell filelist-col-${header.column.id} ${header.column.getCanSort() ? 'sortable' : ''}`}
                     style={{
                       width: header.getSize() !== 150 ? `${header.getSize()}px` : 'auto',
                       flex: header.getSize() === 150 ? 1 : undefined,
@@ -214,6 +214,7 @@ export default function FileListViewer({ listStyle, files, onSelect, counter, se
                     {row.getVisibleCells().map(cell => (
                       <div
                         key={cell.id}
+                        className={`filelist-col-${cell.column.id}`}
                         style={{
                           width: cell.column.getSize() !== 150 ? `${cell.column.getSize()}px` : 'auto',
                           flex: cell.column.getSize() === 150 ? 1 : undefined,

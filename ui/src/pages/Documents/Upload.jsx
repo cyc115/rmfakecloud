@@ -5,6 +5,7 @@ import { toast } from "react-toastify";
 import apiservice from "../../services/api.service";
 
 import styles from "./Documents.module.scss";
+import useIsMobile from "../../hooks/useIsMobile";
 
 async function uploadFilesInBatches(files, uploadFolder, batchSize = 100) {
   const totalFiles = files.length;
@@ -33,6 +34,7 @@ async function uploadFilesInBatches(files, uploadFolder, batchSize = 100) {
 
 export default function StyledDropzone({filesUploaded, uploadFolder}) {
   const [uploading, setUploading] = useState(false);
+  const isMobile = useIsMobile();
 
   var onDrop = async (acceptedFiles) => {
     try {
@@ -71,8 +73,9 @@ export default function StyledDropzone({filesUploaded, uploadFolder}) {
             ${isDragReject ? styles.uploadReject : ""}`;
   }, [isDragActive, isDragReject, isDragAccept]);
 
-  const hint =
-    "Drag 'n' drop some files here, or click to select files to upload";
+  const hint = isMobile
+    ? "Tap to select files to upload"
+    : "Drag 'n' drop some files here, or click to select files to upload";
   if (!uploading) {
     return (
       <div {...getRootProps({ className })}>

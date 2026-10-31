@@ -76,7 +76,7 @@ const Integrations = () => {
     <Container>
       <h3>Integrations</h3>
       <Card>
-        <Table striped bordered hover className="mb-0">
+        <Table striped bordered hover responsive className="mb-0">
           <thead>
             <tr>
               <th>#</th>

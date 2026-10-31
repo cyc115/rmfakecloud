@@ -100,7 +100,7 @@ export default function UserList() {
   return (
     <>
       <h3>Users</h3>
-      <Table striped bordered hover>
+      <Table striped bordered hover responsive>
         <thead>
           <tr>
             <th>#</th>

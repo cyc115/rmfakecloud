@@ -1,7 +1,41 @@
 @import "../../theme.scss";
 
-.treeContainer {
+// Desktop: a fixed-height, two-column layout where the tree and the pane each
+// scroll on their own. Phones (below md): one column, the page itself scrolls.
+// :global(.container-fluid) out-ranks Bootstrap's own container padding.
+.page:global(.container-fluid) {
     height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 25px 0 20px 0;
+}
+
+.row {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.col {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.toolbar {
+    flex-shrink: 0;
+}
+
+.pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+.treeContainer {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
 
     // Ensure the inner div also takes full height
     > div {
@@ -85,4 +119,39 @@
     border: none;
     width: 100%;
     background-color: transparent;
+}
+@media (max-width: 767.98px) {
+    .page:global(.container-fluid) {
+        height: auto;
+        overflow: visible;
+        padding: 8px 12px 20px 12px;
+    }
+
+    .row {
+        flex: none;
+    }
+
+    .col {
+        height: auto;
+    }
+
+    .pane {
+        overflow: visible;
+    }
+
+    // react-arborist needs a concrete height to virtualize against.
+    .treeContainer {
+        flex: none;
+        height: 45vh;
+        margin-bottom: 12px;
+        border-bottom: 1px solid $foreground1;
+    }
+
+    .upload {
+        padding: 12px;
+
+        p {
+            margin: 0;
+        }
+    }
 }
