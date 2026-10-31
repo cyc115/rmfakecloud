@@ -1,5 +1,6 @@
 ARG VERSION=0.0.0
-FROM --platform=$BUILDPLATFORM node:lts AS uibuilder
+# Pinned: node:lts moved to 26, which no longer ships corepack (needed below).
+FROM --platform=$BUILDPLATFORM node:22 AS uibuilder
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable pnpm && corepack install -g pnpm@latest-9
