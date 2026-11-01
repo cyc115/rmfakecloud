@@ -665,11 +665,11 @@ func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, 
 	ev := d.event(kind, v, pageID, at)
 	ev.Watched = true
 	ev.RuleID = r.ID
-	ev.Prompt = r.Action.Prompt
+	ev.Prompt = strings.TrimSpace(r.Action.Prompt)
 	if ev.Prompt == "" {
 		ev.Prompt = autoorganize.DefaultPipelinePrompt
 	}
-	ev.Model = r.Action.Model
+	ev.Model = strings.TrimSpace(r.Action.Model)
 	if ev.Model == "" {
 		ev.Model = autoorganize.DefaultPipelineModel
 	}

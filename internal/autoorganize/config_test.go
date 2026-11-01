@@ -386,6 +386,20 @@ func TestNormalizeFillsPipelineDefaults(t *testing.T) {
 	if cfg.Rules[0].Action.Model != "m/x" || cfg.Rules[0].Action.Prompt != "p" {
 		t.Fatalf("explicit values overwritten: %+v", cfg.Rules[0].Action)
 	}
+	// whitespace-only is empty; padding is trimmed
+	cfg = &Config{Rules: []Rule{
+		{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline, Model: "  \t", Prompt: " \n "},
+			Watch: []WatchRef{{ID: "a", Kind: "folder"}}},
+		{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline, Model: " m/x\n", Prompt: "\n p "},
+			Watch: []WatchRef{{ID: "a", Kind: "folder"}}},
+	}}
+	cfg.Normalize()
+	if a := cfg.Rules[0].Action; a.Model != DefaultPipelineModel || a.Prompt != DefaultPipelinePrompt {
+		t.Fatalf("whitespace-only not defaulted: %+v", a)
+	}
+	if a := cfg.Rules[1].Action; a.Model != "m/x" || a.Prompt != "p" {
+		t.Fatalf("not trimmed: %+v", a)
+	}
 	// move rules get no model or prompt
 	mv := &Config{Rules: []Rule{seedRule()}}
 	mv.Normalize()

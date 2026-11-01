@@ -243,6 +243,9 @@ func (c *Config) Normalize() {
 			}
 		}
 		if r.IsPipeline() {
+			// a whitespace-only prompt or model would reach the LLM as is
+			r.Action.Model = strings.TrimSpace(r.Action.Model)
+			r.Action.Prompt = strings.TrimSpace(r.Action.Prompt)
 			if r.Action.Model == "" {
 				r.Action.Model = DefaultPipelineModel
 			}
