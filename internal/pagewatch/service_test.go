@@ -2,9 +2,12 @@ package pagewatch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,12 +19,14 @@ import (
 	logtest "github.com/sirupsen/logrus/hooks/test"
 )
 
-// fakeSender records every call; accept picks the ids to accept (nil = all)
+// fakeSender records every call; accept picks the ids to accept (nil = all);
+// failCall fails the call with that 1-based number (0 = none)
 type fakeSender struct {
-	mu     sync.Mutex
-	calls  [][]Event
-	err    error
-	accept func(Event) bool
+	mu       sync.Mutex
+	calls    [][]Event
+	err      error
+	accept   func(Event) bool
+	failCall int
 }
 
 func (f *fakeSender) Send(_ context.Context, _ string, events []Event) (map[string]bool, error) {
@@ -30,6 +35,9 @@ func (f *fakeSender) Send(_ context.Context, _ string, events []Event) (map[stri
 	f.calls = append(f.calls, append([]Event(nil), events...))
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.failCall == len(f.calls) {
+		return nil, errors.New("chunk failed")
 	}
 	acc := map[string]bool{}
 	for _, e := range events {
@@ -434,5 +442,117 @@ func TestShutdownCancelledSendLogsWarnNotError(t *testing.T) {
 	}
 	if len(hook.AllEntries()) != 1 {
 		t.Fatalf("entries %v", hook.AllEntries())
+	}
+}
+
+func synthEvents(n int) []Event {
+	out := make([]Event, n)
+	for i := range out {
+		out[i] = Event{TraceID: fmt.Sprintf("t%03d", i), Kind: KindEdit, DocID: "d", PageID: fmt.Sprintf("p%d", i)}
+	}
+	return out
+}
+
+func TestDeliverSendsInChunksOf200(t *testing.T) {
+	e := newSvcEnv(t)
+	evs := synthEvents(450)
+	acc, err := e.svc.deliver(context.Background(), uid, evs)
+	if err != nil || len(acc) != 450 {
+		t.Fatalf("accepted %d err %v", len(acc), err)
+	}
+	if e.sender.count() != 3 {
+		t.Fatalf("%d POSTs, want 3", e.sender.count())
+	}
+	for i, want := range []int{200, 200, 50} {
+		if got := len(e.sender.calls[i]); got != want {
+			t.Fatalf("chunk %d has %d events, want %d", i+1, got, want)
+		}
+	}
+}
+
+func TestDeliverFailedChunkLosesOnlyItsIDs(t *testing.T) {
+	e := newSvcEnv(t)
+	e.sender.failCall = 2
+	evs := synthEvents(450)
+	acc, err := e.svc.deliver(context.Background(), uid, evs)
+	if err == nil || !strings.Contains(err.Error(), "1 of 3 chunks") {
+		t.Fatalf("err = %v", err)
+	}
+	for i, ev := range evs {
+		if want := i < 200 || i >= 400; acc[ev.TraceID] != want {
+			t.Fatalf("event %d accepted=%v, want %v", i, acc[ev.TraceID], want)
+		}
+	}
+}
+
+func TestDeliverChunksByBytes(t *testing.T) {
+	e := newSvcEnv(t)
+	big := strings.Repeat("x", 1<<20) // ~1 MiB of prompt per event
+	evs := synthEvents(5)
+	for i := range evs {
+		evs[i].Prompt = big
+	}
+	if _, err := e.svc.deliver(context.Background(), uid, evs); err != nil {
+		t.Fatal(err)
+	}
+	if e.sender.count() != 5 {
+		t.Fatalf("%d POSTs, want 5 (one ~1 MiB event each under 2 MiB)", e.sender.count())
+	}
+	for _, c := range e.sender.calls {
+		b, _ := json.Marshal(c)
+		if len(b) > DefaultChunkBytes+1024 {
+			t.Fatalf("chunk of %d bytes", len(b))
+		}
+	}
+}
+
+func TestDeliverNoEventsIsOneHeartbeat(t *testing.T) {
+	e := newSvcEnv(t)
+	if _, err := e.svc.deliver(context.Background(), uid, nil); err != nil {
+		t.Fatal(err)
+	}
+	if e.sender.count() != 1 || len(e.sender.last()) != 0 {
+		t.Fatalf("calls %v", e.sender.calls)
+	}
+}
+
+func TestRunAdvancesChunksThatWereAccepted(t *testing.T) {
+	e := newSvcEnv(t)
+	e.svc.ChunkEvents = 2
+	e.ft.Notebook("nb", "Notes", "")
+	for i := 1; i <= 6; i++ {
+		e.page("nb", fmt.Sprintf("p%d", i), "strokes_a.rm")
+	}
+	e.run()
+	for i := 1; i <= 6; i++ {
+		e.page("nb", fmt.Sprintf("p%d", i), "strokes_ab.rm")
+	}
+	e.sender.calls = nil
+	e.sender.failCall = 2
+	r := e.run()
+	if e.sender.count() != 3 || r.Accepted != 4 || r.Error == "" {
+		t.Fatalf("run %+v calls %d", r, e.sender.count())
+	}
+	lost := map[string]bool{}
+	for _, ev := range e.sender.calls[1] {
+		lost[ev.PageID] = true
+	}
+	st, err := e.svc.Store().LoadState(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapNew := e.sender.calls[0][0].AfterHash
+	for i := 1; i <= 6; i++ {
+		page := fmt.Sprintf("p%d", i)
+		if moved := st.Feed["nb/"+page] == snapNew; moved == lost[page] {
+			t.Fatalf("%s baseline moved=%v, lost=%v", page, moved, lost[page])
+		}
+	}
+	// next run re-sends only the lost chunk
+	e.sender.calls = nil
+	e.sender.failCall = 0
+	e.run()
+	if got := len(e.sender.calls[0]); got != 2 || !lost[e.sender.calls[0][0].PageID] {
+		t.Fatalf("resent %+v", e.sender.calls)
 	}
 }

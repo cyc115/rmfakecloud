@@ -2,7 +2,9 @@ package pagewatch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +35,14 @@ const LagRuns = 2
 // maxSendErrors per failed send, this many events are logged one by one
 const maxSendErrors = 10
 
+// One POST carries at most this many events and about this many bytes of
+// JSON, well under rm-pages' 8 MiB body limit and its 10 s timeout; a big
+// first batch goes out in several POSTs.
+const (
+	DefaultChunkEvents = 200
+	DefaultChunkBytes  = 2 << 20
+)
+
 // Errors returned to callers
 var (
 	ErrBusy   = errors.New("run in progress")
@@ -58,6 +68,9 @@ type Service struct {
 	UserRescan time.Duration
 	// IntervalUnit the unit of Settings.IntervalMinutes (a minute; shorter in tests)
 	IntervalUnit time.Duration
+	// ChunkEvents, ChunkBytes the most events / JSON bytes per POST
+	ChunkEvents int
+	ChunkBytes  int
 
 	mu    sync.Mutex
 	users map[string]*userLoop
@@ -91,6 +104,8 @@ func NewService(st autoorganize.Storage, cfgs *autoorganize.Store, sender Sender
 		Now:          time.Now,
 		UserRescan:   time.Minute,
 		IntervalUnit: time.Minute,
+		ChunkEvents:  DefaultChunkEvents,
+		ChunkBytes:   DefaultChunkBytes,
 		users:        map[string]*userLoop{},
 	}
 }
@@ -307,18 +322,15 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 	if !dry {
 		send = append(send, plan.Pipeline...)
 	}
-	accepted, sendErr := s.sender.Send(ctx, uid, send)
+	accepted, sendErr := s.deliver(ctx, uid, send)
 	if sendErr != nil {
-		accepted = nil
 		run.Error = "send failed: " + sendErr.Error()
-		s.logSendFailure(ctx, uid, send, sendErr)
-	} else {
-		for _, ev := range send {
-			if accepted[ev.TraceID] {
-				run.Accepted++
-				sendLog(ev).Info(logPrefix, "delivered ", ev.Kind)
-			} else {
-				sendLog(ev).Warn(logPrefix, "rm-pages did not accept ", ev.Kind)
+	}
+	for _, ev := range send {
+		if accepted[ev.TraceID] {
+			run.Accepted++
+			if ev.Watched {
+				run.PipelineAccepted++
 			}
 		}
 	}
@@ -346,6 +358,66 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 	}
 	s.finish(ul, run)
 	return run, nil
+}
+
+// chunks splits events into POST-sized groups, in order. No events is one
+// empty group: the heartbeat. An event bigger than maxBytes goes alone.
+func chunks(events []Event, maxEvents, maxBytes int) [][]Event {
+	if len(events) == 0 {
+		return [][]Event{{}}
+	}
+	var out [][]Event
+	var cur []Event
+	size := 0
+	for _, ev := range events {
+		n := 1
+		if b, err := json.Marshal(ev); err == nil {
+			n = len(b) + 1
+		}
+		if len(cur) > 0 && (len(cur) >= maxEvents || size+n > maxBytes) {
+			out = append(out, cur)
+			cur, size = nil, 0
+		}
+		cur = append(cur, ev)
+		size += n
+	}
+	return append(out, cur)
+}
+
+// deliver sends the events in chunks and returns the union of the ids
+// rm-pages accepted. A failed chunk loses only its own ids (they go again
+// next run under the same trace ids); the error names the failed chunks.
+func (s *Service) deliver(ctx context.Context, uid string, send []Event) (map[string]bool, error) {
+	parts := chunks(send, max(s.ChunkEvents, 1), max(s.ChunkBytes, 1))
+	accepted := map[string]bool{}
+	var firstErr error
+	failed := 0
+	for _, part := range parts {
+		acc, err := s.sender.Send(ctx, uid, part)
+		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			s.logSendFailure(ctx, uid, part, err)
+			continue
+		}
+		for _, ev := range part {
+			if acc[ev.TraceID] {
+				accepted[ev.TraceID] = true
+				sendLog(ev).Info(logPrefix, "delivered ", ev.Kind)
+			} else {
+				sendLog(ev).Warn(logPrefix, "rm-pages did not accept ", ev.Kind)
+			}
+		}
+	}
+	if firstErr == nil {
+		return accepted, nil
+	}
+	if len(parts) == 1 {
+		return accepted, firstErr
+	}
+	return accepted, fmt.Errorf("%d of %d chunks failed: %w", failed, len(parts), firstErr)
 }
 
 // acceptedOnly the accepted ids among those actually sent

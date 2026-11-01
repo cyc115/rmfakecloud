@@ -18,17 +18,19 @@ const (
 )
 
 // RunEntry one finished run. Feed/Pipeline count the events planned (Pipeline
-// includes the ones dry mode holds back), Accepted the ones rm-pages took.
+// includes the ones dry mode holds back), Accepted the ones rm-pages took
+// (feed and pipeline), PipelineAccepted the pipeline ones among them.
 type RunEntry struct {
 	// At unix milliseconds
-	At       int64  `json:"at"`
-	Trigger  string `json:"trigger"`
-	Feed     int    `json:"feed"`
-	Pipeline int    `json:"pipeline"`
-	Accepted int    `json:"accepted"`
-	Skipped  int    `json:"skipped"`
-	Mode     string `json:"mode"`
-	Error    string `json:"error,omitempty"`
+	At               int64  `json:"at"`
+	Trigger          string `json:"trigger"`
+	Feed             int    `json:"feed"`
+	Pipeline         int    `json:"pipeline"`
+	Accepted         int    `json:"accepted"`
+	PipelineAccepted int    `json:"pipelineAccepted"`
+	Skipped          int    `json:"skipped"`
+	Mode             string `json:"mode"`
+	Error            string `json:"error,omitempty"`
 }
 
 // Store reads and writes the page watch's two per-user files. The service is
