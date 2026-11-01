@@ -207,7 +207,7 @@ func TestPageCountWithoutPagesListIsUnreadable(t *testing.T) {
 	if !ci.Readable() || ci.PagesError == "" || ci.PageCount != 5 {
 		t.Fatalf("ci = %+v", ci)
 	}
-	for _, body := range []string{`{"pageCount":0}`, `{"fileType":"pdf"}`, `{"pageCount":2,"pages":["a","b"]}`, `{"pageCount":1,"cPages":{"pages":[]}}`} {
+	for _, body := range []string{`{"pageCount":0}`, `{"fileType":"pdf"}`, `{"pageCount":2,"pages":["a","b"]}`, `{"pageCount":0,"cPages":{"pages":[]}}`} {
 		if ci := ParseContent([]byte(body)); !ci.Readable() || ci.PagesError != "" {
 			t.Fatalf("%s flagged: %+v", body, ci)
 		}
@@ -226,6 +226,7 @@ func TestCPagesNullPagesIsUnreadable(t *testing.T) {
 		`{"pageCount":3,"cPages":{"pages":null}}`,
 		`{"pageCount":3,"cPages":{}}`,
 		`{"pageCount":3,"cPages":{"pages":[1,"x",{"idx":{}}]}}`,
+		`{"pageCount":3,"cPages":{"pages":[]}}`, // R26: an empty list with pages counted is not zero pages
 	} {
 		ci := ParseContent([]byte(body))
 		if !ci.Readable() || ci.PagesError == "" || ci.PageCount != 3 {

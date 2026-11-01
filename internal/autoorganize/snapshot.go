@@ -318,7 +318,7 @@ type ContentInfo struct {
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 6
+const contentParseVersion = 7
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -386,8 +386,8 @@ func ParseContent(b []byte) ContentInfo {
 			}
 		}
 	}
-	order, allInvalid, err := pageOrder(raw)
-	if err == nil && len(order) == 0 && info.PageCount > 0 && (!hasPagesList(raw) || allInvalid) {
+	order, unusable, err := pageOrder(raw)
+	if err == nil && len(order) == 0 && info.PageCount > 0 && (!hasPagesList(raw) || unusable) {
 		// a page count with no list would read as "every page deleted"; the
 		// move rules still use the blob, so only the page list is flagged
 		info.PagesError = "pageCount > 0 but no usable cPages or pages list"
@@ -404,9 +404,10 @@ func ParseContent(b []byte) ContentInfo {
 // (formatVersion 2), else from the plain "pages" id array of formatVersion 1
 // (array order). A "pages" value of another shape is an error, not zero pages.
 //
-// allInvalid is true when cPages.pages has items but none is an object with a
-// string id: the list is unusable, not empty.
-func pageOrder(raw map[string]any) (out []string, allInvalid bool, err error) {
+// unusable is true when cPages.pages holds no object with a string id (empty,
+// or only junk): with pageCount > 0 that is a broken list, not zero pages
+// (R26). A list whose pages are all deleted is a real zero.
+func pageOrder(raw map[string]any) (out []string, unusable bool, err error) {
 	if c := raw["cPages"]; c != nil {
 		if _, ok := c.(map[string]any); !ok {
 			return nil, false, errors.New("cPages is not an object")
@@ -450,7 +451,7 @@ func pageOrder(raw map[string]any) (out []string, allInvalid bool, err error) {
 		seen[p.id] = true
 		out = append(out, p.id)
 	}
-	return out, len(items) > 0 && valid == 0, nil
+	return out, valid == 0, nil
 }
 
 // hasPagesList .content carries cPages.pages or a pages array
