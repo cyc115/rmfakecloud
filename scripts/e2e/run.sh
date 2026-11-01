@@ -5,6 +5,8 @@
 # Env passthrough to the container: RM_PAGES_URL, PAGEWATCH_MIN_AGE.
 # E2E_STUB_RMPAGES=1 starts stub_rmpages.py on the services VM (:3098) and points
 # the container's RM_PAGES_URL at it, so page watch is on (pipeline run-now tests).
+# With the real rm-pages (RM_PAGES_URL, no stub) the rows of user e2e are deleted before
+# and after the run (test_pipeline_e2e.py; see README).
 set -euo pipefail
 
 HOST=${E2E_HOST:-mike@10.0.0.11}
@@ -17,8 +19,27 @@ PORT=3099
 GO_IMG=docker.io/library/golang:bookworm
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 
+# Against the real rm-pages (RM_PAGES_URL set, no stub) user e2e leaves rows in its DB:
+# delete them, strictly user e2e and its trace ids, before and after the run.
+RMPAGES_CLEANUP_SQL="BEGIN;
+CREATE TEMP TABLE e2e_traces ON COMMIT DROP AS SELECT trace_id FROM rm_pages.events WHERE user_id = 'e2e';
+SELECT (SELECT count(*) FROM e2e_traces) AS e2e_events,
+       (SELECT count(*) FROM rm_pages.llm_requests WHERE trace_id IN (SELECT trace_id FROM e2e_traces)) AS llm_calls,
+       (SELECT COALESCE(sum(cost), 0) FROM rm_pages.llm_requests WHERE trace_id IN (SELECT trace_id FROM e2e_traces)) AS llm_cost_usd;
+DELETE FROM rm_pages.trail WHERE trace_id IN (SELECT trace_id FROM e2e_traces);
+DELETE FROM rm_pages.llm_requests WHERE trace_id IN (SELECT trace_id FROM e2e_traces);
+DELETE FROM rm_pages.results WHERE trace_id IN (SELECT trace_id FROM e2e_traces);
+DELETE FROM rm_pages.jobs WHERE trace_id IN (SELECT trace_id FROM e2e_traces);
+DELETE FROM rm_pages.events WHERE user_id = 'e2e';
+DELETE FROM rm_pages.contact WHERE user_id = 'e2e';
+COMMIT;"
+
 cleanup() {
   ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; [ -f $STUB_PID ] && kill \$(cat $STUB_PID) 2>/dev/null; rm -rf $DATA $REMOTE $STUB_PID" || true
+  if [ -n "${RM_PAGES_URL:-}" ] && [ -z "${E2E_STUB_RMPAGES:-}" ]; then
+    echo ">> delete rm-pages rows of user e2e"
+    ssh "$HOST" "podman exec -i personal-db psql -U personal -d personal -X -q -v ON_ERROR_STOP=1" <<<"$RMPAGES_CLEANUP_SQL" || true
+  fi
 }
 [ -n "${E2E_KEEP:-}" ] || trap cleanup EXIT
 trap "exit 130" INT
@@ -73,4 +94,4 @@ done
 
 echo ">> pytest"
 cd "$ROOT"
-E2E_BASE_URL=$BASE RM_PAGES_URL=${RM_PAGES_URL:-} uv run --with pytest --with playwright python -m pytest scripts/e2e "$@"
+E2E_BASE_URL=$BASE RM_PAGES_URL=${RM_PAGES_URL:-} E2E_HOST=$HOST E2E_REMOTE=$REMOTE E2E_DATA=$DATA uv run --with pytest --with playwright python -m pytest scripts/e2e "$@"

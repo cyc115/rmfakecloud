@@ -5,7 +5,8 @@ and the e2e harness. No real handwriting: strokes are generated geometry.
     uv run --with rmscene==0.8.0 python scripts/e2e/make_fixtures.py OUTDIR
 
 Writes strokes_a.rm (3 strokes), strokes_ab.rm (the same 3 strokes with the
-same CRDT item ids, plus 2 new ones) and text_todo.rm (typed text).
+same CRDT item ids, plus 2 new ones), text_todo.rm (typed to-do list) and
+text_note.rm (typed text, no tasks: a legible page for transcribe_only).
 """
 import math
 import sys
@@ -22,6 +23,7 @@ from rmscene import (
 
 AUTHOR = UUID("00000000-0000-4000-8000-000000000001")
 TEXT = "TODO\n- [ ] Buy oat milk\n- [ ] Call the vet -inbox"
+NOTE = "Notes\nThe parcel arrived on Monday."
 LAYER = CrdtId(0, 11)
 
 
@@ -90,6 +92,7 @@ def main() -> None:
     write(out / "strokes_a.rm", strokes_blocks(3))
     write(out / "strokes_ab.rm", strokes_blocks(5))
     write(out / "text_todo.rm", rmscene.simple_text_document(TEXT, AUTHOR))
+    write(out / "text_note.rm", rmscene.simple_text_document(NOTE, AUTHOR))
 
 
 if __name__ == "__main__":
