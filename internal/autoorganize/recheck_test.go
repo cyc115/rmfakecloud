@@ -14,18 +14,18 @@ func TestMoveRecheckRefusesUnusableDestination(t *testing.T) {
 		change func(ft *fakeTablet)
 		want   string
 	}{
-		{"destination trashed", func(ft *fakeTablet) { ft.docs["read"].meta["parent"] = "trash" }, "in the Trash"},
-		{"destination parent trashed", func(ft *fakeTablet) { ft.docs["box"].meta["parent"] = "trash" }, "in the Trash"},
-		{"destination deleted", func(ft *fakeTablet) { delete(ft.docs, "read") }, "destination folder is gone"},
+		{"destination trashed", func(ft *fakeTablet) { ft.Docs["read"].Meta["parent"] = "trash" }, "in the Trash"},
+		{"destination parent trashed", func(ft *fakeTablet) { ft.Docs["box"].Meta["parent"] = "trash" }, "in the Trash"},
+		{"destination deleted", func(ft *fakeTablet) { delete(ft.Docs, "read") }, "destination folder is gone"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ft, storage := newHarness(t, uid, true)
 			now := time.Now()
-			ft.folder("rr", "Research Reports", "")
-			ft.folder("box", "Box", "")
-			ft.folder("read", "Read", "box")
-			ft.pdf("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
-			ft.sync()
+			ft.Folder("rr", "Research Reports", "")
+			ft.Folder("box", "Box", "")
+			ft.Folder("read", "Read", "box")
+			ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
+			ft.Sync()
 			svc, _, _ := newService(t, storage)
 			rule := moveRule("r1", "rr", "read", Trigger{Type: TriggerFinishedReading, MinPages: 3, SettleHours: 6})
 			st := NewState()
@@ -35,9 +35,9 @@ func TestMoveRecheckRefusesUnusableDestination(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ft.pull()
+			ft.Pull()
 			c.change(ft)
-			ft.sync()
+			ft.Sync()
 
 			cache := NewContentCache(st.ContentCache, storage.BlobStorage(uid).GetReader)
 			var inputs map[string]string
@@ -45,7 +45,7 @@ func TestMoveRecheckRefusesUnusableDestination(t *testing.T) {
 			if !IsNotQualified(err) || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want %q", err, c.want)
 			}
-			if p := ft.parentOf("d"); p != "rr" {
+			if p := ft.ParentOf("d"); p != "rr" {
 				t.Fatalf("doc moved into an unusable folder: parent %s", p)
 			}
 		})
@@ -59,19 +59,19 @@ func TestUndoRefusals(t *testing.T) {
 	setup := func(t *testing.T) (*fakeTablet, *Service, string) {
 		ft, storage := newHarness(t, uid, true)
 		now := time.Now()
-		ft.folder("box", "Box", "")
-		ft.folder("rr", "Research Reports", "box")
-		ft.folder("read", "Read", "rr")
-		ft.folder("other", "Other", "")
-		ft.pdf("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
-		ft.sync()
+		ft.Folder("box", "Box", "")
+		ft.Folder("rr", "Research Reports", "box")
+		ft.Folder("read", "Read", "rr")
+		ft.Folder("other", "Other", "")
+		ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
+		ft.Sync()
 		svc, _, _ := newService(t, storage)
 		saveConfig(t, svc, uid, ModeLive, readRule())
 		if res, err := svc.RunNow(uid); err != nil || res.Run.Moved != 1 {
 			t.Fatalf("first move: %+v %v", res, err)
 		}
 		st, _ := svc.Store().LoadState(uid)
-		ft.pull()
+		ft.Pull()
 		return ft, svc, st.Moves[0].ID
 	}
 	for _, c := range []struct {
@@ -80,25 +80,25 @@ func TestUndoRefusals(t *testing.T) {
 		want   string
 	}{
 		{"tagged no automation since", func(ft *fakeTablet) {
-			ft.docs["d"].content["tags"] = []any{map[string]any{"name": "No-Automation", "timestamp": 1}}
+			ft.Docs["d"].Content["tags"] = []any{map[string]any{"name": "No-Automation", "timestamp": 1}}
 		}, "no automation"},
-		{"original folder trashed", func(ft *fakeTablet) { ft.docs["box"].meta["parent"] = "trash" }, "in the Trash"},
+		{"original folder trashed", func(ft *fakeTablet) { ft.Docs["box"].Meta["parent"] = "trash" }, "in the Trash"},
 		{"original folder deleted", func(ft *fakeTablet) {
-			delete(ft.docs, "rr")
-			ft.docs["read"].meta["parent"] = ""
+			delete(ft.Docs, "rr")
+			ft.Docs["read"].Meta["parent"] = ""
 		}, "gone"},
-		{"moved elsewhere since", func(ft *fakeTablet) { ft.docs["d"].meta["parent"] = "other" }, "no longer in"},
+		{"moved elsewhere since", func(ft *fakeTablet) { ft.Docs["d"].Meta["parent"] = "other" }, "no longer in"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ft, svc, moveID := setup(t)
 			c.change(ft)
-			ft.sync()
-			before := ft.parentOf("d")
+			ft.Sync()
+			before := ft.ParentOf("d")
 			_, err := svc.Undo(uid, moveID)
 			if !IsNotQualified(err) || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want %q", err, c.want)
 			}
-			if p := ft.parentOf("d"); p != before {
+			if p := ft.ParentOf("d"); p != before {
 				t.Fatalf("refused undo moved the doc: %s -> %s", before, p)
 			}
 			st, _ := svc.Store().LoadState(uid)
@@ -138,8 +138,8 @@ func TestUndoRefusals(t *testing.T) {
 				t.Fatal("the newest move must be undoable")
 			}
 		}
-		if _, err := svc.Undo(uid, reapplyID); err != nil || ft.parentOf("d") != "rr" {
-			t.Fatalf("undo of the newest move: %v parent %s", err, ft.parentOf("d"))
+		if _, err := svc.Undo(uid, reapplyID); err != nil || ft.ParentOf("d") != "rr" {
+			t.Fatalf("undo of the newest move: %v parent %s", err, ft.ParentOf("d"))
 		}
 	})
 }
@@ -148,15 +148,15 @@ func TestUndoRefusals(t *testing.T) {
 func TestMoveRecordsMetadataSize(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.folder("read", "Read", "rr")
-	ft.pdf("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.Sync()
 	tree, _ := storage.GetCachedTree(uid)
 	if err := moveDoc(tree, storage.BlobStorage(uid), "d", "rr", "read", nil); err != nil {
 		t.Fatal(err)
 	}
-	d := ft.serverDoc("d")
+	d := ft.ServerDoc("d")
 	for _, f := range d.Files {
 		if !f.IsMetadata() {
 			continue

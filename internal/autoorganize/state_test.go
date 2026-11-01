@@ -59,20 +59,20 @@ func TestMovesLogKeepsLiveEntriesOverDry(t *testing.T) {
 // A dry sweeper running every interval logs each pending move once.
 func TestDrySweepsDoNotFloodTheLog(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
-	ft.folder("inbox", "Inbox", "")
-	ft.folder("news", "News", "")
-	ft.pdf("w", "WSJ Weekend", "inbox", 3, 0, time.Time{})
-	ft.sync()
+	ft.Folder("inbox", "Inbox", "")
+	ft.Folder("news", "News", "")
+	ft.PDF("w", "WSJ Weekend", "inbox", 3, 0, time.Time{})
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	saveConfig(t, svc, uid, ModeLive, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}))
-	ft.pdf("w2", "WSJ Monday", "inbox", 3, 0, time.Time{})
-	ft.sync()
+	ft.PDF("w2", "WSJ Monday", "inbox", 3, 0, time.Time{})
+	ft.Sync()
 	if res, _ := svc.RunNow(uid); res.Run.Moved != 2 {
 		t.Fatal("live move")
 	}
-	ft.pull()
-	ft.pdf("w3", "WSJ Tuesday", "inbox", 3, 0, time.Time{})
-	ft.sync()
+	ft.Pull()
+	ft.PDF("w3", "WSJ Tuesday", "inbox", 3, 0, time.Time{})
+	ft.Sync()
 	saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}))
 	for i := 0; i < 80; i++ {
 		if _, err := svc.RunNow(uid); err != nil {
@@ -109,11 +109,11 @@ func TestDrySweepsDoNotFloodTheLog(t *testing.T) {
 func TestViewHeldCountsDocsHeldNow(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.folder("read", "Read", "rr")
-	ft.pdf("a", "A", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.pdf("b", "B", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.PDF("a", "A", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.PDF("b", "B", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	saveConfig(t, svc, uid, ModeLive, readRule())
 	if res, _ := svc.RunNow(uid); res.Run.Moved != 2 {
@@ -127,9 +127,9 @@ func TestViewHeldCountsDocsHeldNow(t *testing.T) {
 		t.Fatalf("held chip after a plain move: %d, want 0", view.Rules[0].Holds)
 	}
 	// the tablet's copy wins for one doc: it is back in the source, held
-	ft.pull()
-	ft.docs["a"].meta["parent"] = "rr"
-	ft.sync()
+	ft.Pull()
+	ft.Docs["a"].Meta["parent"] = "rr"
+	ft.Sync()
 	view, _ = svc.View(uid)
 	if view.Rules[0].Holds != 1 || view.Rules[0].Matches != 0 {
 		t.Fatalf("held chip %d matches %d, want 1 and 0", view.Rules[0].Holds, view.Rules[0].Matches)
@@ -141,10 +141,10 @@ func TestViewHeldCountsDocsHeldNow(t *testing.T) {
 func TestSweepPrunesStaleHolds(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.pdf("a", "A", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.pdf("b", "B", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.PDF("a", "A", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.PDF("b", "B", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	saveConfig(t, svc, uid, ModeLive, seedRule())
 	if res, _ := svc.RunNow(uid); res.Run.Moved != 2 {
@@ -155,9 +155,9 @@ func TestSweepPrunesStaleHolds(t *testing.T) {
 		t.Fatalf("state after move: %+v", st)
 	}
 	// doc b is deleted on the tablet
-	ft.pull()
-	delete(ft.docs, "b")
-	ft.sync()
+	ft.Pull()
+	delete(ft.Docs, "b")
+	ft.Sync()
 	svc.RunNow(uid)
 	st, _ = svc.Store().LoadState(uid)
 	if len(st.Holds) != 1 || st.Holds[0].DocID != "a" {

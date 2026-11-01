@@ -18,11 +18,11 @@ const uid = "mike"
 func TestMoveChangesOnlyParentAndVersion(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.folder("read", "Read", "rr")
-	ft.pdf("d", "Q3 <Market> & Outlook", "rr", 14, 13, now.Add(-9*time.Hour))
-	ft.sync()
-	before := ft.serverMetaRaw("d")
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.PDF("d", "Q3 <Market> & Outlook", "rr", 14, 13, now.Add(-9*time.Hour))
+	ft.Sync()
+	before := ft.ServerMetaRaw("d")
 
 	tree, err := storage.GetCachedTree(uid)
 	if err != nil {
@@ -31,7 +31,7 @@ func TestMoveChangesOnlyParentAndVersion(t *testing.T) {
 	if err := moveDoc(tree, storage.BlobStorage(uid), "d", "rr", "read", nil); err != nil {
 		t.Fatal(err)
 	}
-	after := ft.serverMetaRaw("d")
+	after := ft.ServerMetaRaw("d")
 	if after["parent"] != "read" {
 		t.Fatalf("parent = %v", after["parent"])
 	}
@@ -63,10 +63,10 @@ func TestMoveChangesOnlyParentAndVersion(t *testing.T) {
 func TestMoveRecheckRunsAgainAfterGenerationConflict(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.folder("read", "Read", "rr")
-	ft.pdf("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.Sync()
 
 	svc, _, _ := newService(t, storage)
 	rule := readRule()
@@ -78,9 +78,9 @@ func TestMoveRecheckRunsAgainAfterGenerationConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ft.pull()
-	ft.docs["d"].meta["lastOpened"] = ms(now.Add(-time.Minute))
-	ft.sync()
+	ft.Pull()
+	ft.Docs["d"].Meta["lastOpened"] = ms(now.Add(-time.Minute))
+	ft.Sync()
 
 	calls := 0
 	cache := NewContentCache(st.ContentCache, storage.BlobStorage(uid).GetReader)
@@ -97,7 +97,7 @@ func TestMoveRecheckRunsAgainAfterGenerationConflict(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("closure ran %d times; the retry after Mirror must re-check", calls)
 	}
-	if p := ft.parentOf("d"); p != "rr" {
+	if p := ft.ParentOf("d"); p != "rr" {
 		t.Fatalf("doc moved despite refusal: parent %s", p)
 	}
 }
@@ -105,23 +105,23 @@ func TestMoveRecheckRunsAgainAfterGenerationConflict(t *testing.T) {
 func TestMoveRecheckRefusals(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.folder("read", "Read", "rr")
-	ft.folder("other", "Other", "")
-	ft.pdf("tagged", "Tagged later", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.pdf("moved", "Moved by tablet", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.pdf("gone", "Deleted by tablet", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.Folder("other", "Other", "")
+	ft.PDF("tagged", "Tagged later", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.PDF("moved", "Moved by tablet", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.PDF("gone", "Deleted by tablet", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	rule := readRule()
 	st := NewState()
 	cache := NewContentCache(st.ContentCache, storage.BlobStorage(uid).GetReader)
 
-	ft.pull()
-	ft.docs["tagged"].content["tags"] = []any{map[string]any{"name": "No Automation", "timestamp": 1}}
-	ft.docs["moved"].meta["parent"] = "other"
-	delete(ft.docs, "gone")
-	ft.sync()
+	ft.Pull()
+	ft.Docs["tagged"].Content["tags"] = []any{map[string]any{"name": "No Automation", "timestamp": 1}}
+	ft.Docs["moved"].Meta["parent"] = "other"
+	delete(ft.Docs, "gone")
+	ft.Sync()
 
 	var inputs map[string]string
 	for id, check := range map[string]func(error) bool{
@@ -135,7 +135,7 @@ func TestMoveRecheckRefusals(t *testing.T) {
 			t.Errorf("%s: err = %v", id, err)
 		}
 	}
-	if ft.parentOf("tagged") != "rr" || ft.parentOf("moved") != "other" {
+	if ft.ParentOf("tagged") != "rr" || ft.ParentOf("moved") != "other" {
 		t.Error("a refused move changed the tree")
 	}
 }
@@ -145,17 +145,17 @@ func TestMoveRecheckRefusals(t *testing.T) {
 func TestSeedRuleEndToEnd(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.pdf("q3", "Q3 Market Outlook", "rr", 14, 13, now.Add(-9*time.Hour))
-	ft.pdf("half", "Half read", "rr", 14, 6, now.Add(-9*time.Hour))
-	ft.pdf("peek", "Last page peek", "rr", 8, 7, now.Add(-1*time.Hour))
-	ft.pdf("upload", "Web upload", "rr", 0, 0, time.Time{})
-	pinned := ft.pdf("fed", "Fed Minutes", "rr", 5, 4, now.Add(-9*time.Hour))
-	pinned.meta["pinned"] = true
-	tagged := ft.pdf("staff", "Staff Guide", "rr", 5, 4, now.Add(-9*time.Hour))
-	tagged.content["tags"] = []any{"No Automation"}
-	ft.notebook("nb", "Sketchbook", "rr")
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.PDF("q3", "Q3 Market Outlook", "rr", 14, 13, now.Add(-9*time.Hour))
+	ft.PDF("half", "Half read", "rr", 14, 6, now.Add(-9*time.Hour))
+	ft.PDF("peek", "Last page peek", "rr", 8, 7, now.Add(-1*time.Hour))
+	ft.PDF("upload", "Web upload", "rr", 0, 0, time.Time{})
+	pinned := ft.PDF("fed", "Fed Minutes", "rr", 5, 4, now.Add(-9*time.Hour))
+	pinned.Meta["pinned"] = true
+	tagged := ft.PDF("staff", "Staff Guide", "rr", 5, 4, now.Add(-9*time.Hour))
+	tagged.Content["tags"] = []any{"No Automation"}
+	ft.Notebook("nb", "Sketchbook", "rr")
+	ft.Sync()
 
 	svc, notifier, _ := newService(t, storage)
 	saveConfig(t, svc, uid, ModeDry, seedRule())
@@ -186,7 +186,7 @@ func TestSeedRuleEndToEnd(t *testing.T) {
 	if res.Run.Mode != EntryDry || res.Run.Planned != 1 || res.Run.Moved != 0 {
 		t.Fatalf("dry run: %+v", res.Run)
 	}
-	if ft.parentOf("q3") != "rr" || notifier.count() != 0 {
+	if ft.ParentOf("q3") != "rr" || notifier.count() != 0 {
 		t.Fatal("dry run changed the tree or notified")
 	}
 	st, _ := svc.Store().LoadState(uid)
@@ -215,18 +215,18 @@ func TestSeedRuleEndToEnd(t *testing.T) {
 	if notifier.count() != 1 || notifier.calls[0] != uid+"|"+SourceID {
 		t.Fatalf("notify: %v", notifier.calls)
 	}
-	readFolder := ft.serverDoc(readID)
+	readFolder := ft.ServerDoc(readID)
 	if readFolder == nil || readFolder.DocumentName != "Read" || readFolder.Parent != "rr" {
 		t.Fatalf("Read folder: %+v", readFolder)
 	}
-	if p := ft.parentOf("q3"); p != readID {
+	if p := ft.ParentOf("q3"); p != readID {
 		t.Fatalf("q3 parent %s, want %s (rebuilt from blobs)", p, readID)
 	}
-	if d := ft.serverDoc("q3"); d.DocumentName != "Q3 Market Outlook" {
+	if d := ft.ServerDoc("q3"); d.DocumentName != "Q3 Market Outlook" {
 		t.Fatalf("name changed: %q", d.DocumentName)
 	}
 	for _, id := range []string{"half", "peek", "upload", "fed", "staff", "nb"} {
-		if ft.parentOf(id) != "rr" {
+		if ft.ParentOf(id) != "rr" {
 			t.Errorf("%s moved", id)
 		}
 	}
@@ -238,9 +238,9 @@ func TestSeedRuleEndToEnd(t *testing.T) {
 	}
 
 	// the tablet syncs (pulls the move, uploads its own state): the move sticks
-	ft.pull()
-	ft.sync()
-	if p := ft.parentOf("q3"); p != readID {
+	ft.Pull()
+	ft.Sync()
+	if p := ft.ParentOf("q3"); p != readID {
 		t.Fatalf("after tablet sync q3 parent %s", p)
 	}
 	// later sweeps change nothing and do not create a second folder
@@ -284,61 +284,61 @@ func TestEveryTriggerMovesThroughTheService(t *testing.T) {
 	day := 24 * time.Hour
 	cases := []tc{
 		{"finished_reading", Trigger{Type: TriggerFinishedReading, MinPages: 3, SettleHours: 6}, ScopePdfEpub, func(ft *fakeTablet) {
-			ft.pdf("yes", "Done", "src", 3, 2, now.Add(-7*time.Hour))
-			ft.pdf("no", "Short", "src", 2, 1, now.Add(-7*time.Hour))
-			ft.pdf("zero", "Zero", "src", 0, 0, now.Add(-7*time.Hour))
+			ft.PDF("yes", "Done", "src", 3, 2, now.Add(-7*time.Hour))
+			ft.PDF("no", "Short", "src", 2, 1, now.Add(-7*time.Hour))
+			ft.PDF("zero", "Zero", "src", 0, 0, now.Add(-7*time.Hour))
 		}, []string{"yes"}, map[string]string{"no": "", "zero": SkipPageCountUnknown}},
 		{"read_progress", Trigger{Type: TriggerReadProgress, Percent: 50, SettleHours: 0}, ScopePdfEpub, func(ft *fakeTablet) {
-			ft.pdf("yes", "Half", "src", 10, 4, now.Add(-time.Minute))
-			ft.pdf("no", "Third", "src", 10, 2, now.Add(-time.Minute))
+			ft.PDF("yes", "Half", "src", 10, 4, now.Add(-time.Minute))
+			ft.PDF("no", "Third", "src", 10, 2, now.Add(-time.Minute))
 		}, []string{"yes"}, map[string]string{"no": ""}},
 		{"not_opened_for_days", Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7}, ScopeAll, func(ft *fakeTablet) {
-			ft.pdf("yes", "Old", "src", 3, 0, now.Add(-40*day))
-			ft.pdf("no", "Recent", "src", 3, 0, now.Add(-2*day))
-			nb := ft.notebook("nbyes", "Unopened notebook", "src")
-			nb.meta["createdTime"] = ms(now.Add(-60 * day))
+			ft.PDF("yes", "Old", "src", 3, 0, now.Add(-40*day))
+			ft.PDF("no", "Recent", "src", 3, 0, now.Add(-2*day))
+			nb := ft.Notebook("nbyes", "Unopened notebook", "src")
+			nb.Meta["createdTime"] = ms(now.Add(-60 * day))
 		}, []string{"yes", "nbyes"}, map[string]string{"no": ""}},
 		{"not_modified_for_days", Trigger{Type: TriggerNotModified, Days: 90}, ScopeAll, func(ft *fakeTablet) {
-			d := ft.pdf("yes", "Stale", "src", 3, 0, time.Time{})
-			d.meta["lastModified"] = ms(now.Add(-100 * day))
-			d = ft.pdf("no", "Fresh", "src", 3, 0, time.Time{})
-			d.meta["lastModified"] = ms(now.Add(-1 * day))
+			d := ft.PDF("yes", "Stale", "src", 3, 0, time.Time{})
+			d.Meta["lastModified"] = ms(now.Add(-100 * day))
+			d = ft.PDF("no", "Fresh", "src", 3, 0, time.Time{})
+			d.Meta["lastModified"] = ms(now.Add(-1 * day))
 		}, []string{"yes"}, map[string]string{"no": ""}},
 		{"name_matches", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}, ScopeAll, func(ft *fakeTablet) {
-			ft.pdf("yes", "WSJ Weekend", "src", 0, 0, time.Time{})
-			ft.pdf("no", "FT Weekend", "src", 0, 0, time.Time{})
+			ft.PDF("yes", "WSJ Weekend", "src", 0, 0, time.Time{})
+			ft.PDF("no", "FT Weekend", "src", 0, 0, time.Time{})
 		}, []string{"yes"}, map[string]string{"no": ""}},
 		{"tag_is", Trigger{Type: TriggerTagIs, Tag: "done"}, ScopeAll, func(ft *fakeTablet) {
-			d := ft.pdf("yes", "Tagged", "src", 3, 0, time.Time{})
-			d.content["tags"] = []any{map[string]any{"name": "Done", "timestamp": 1}}
-			d = ft.pdf("no", "Other tag", "src", 3, 0, time.Time{})
-			d.content["tags"] = []any{"later"}
+			d := ft.PDF("yes", "Tagged", "src", 3, 0, time.Time{})
+			d.Content["tags"] = []any{map[string]any{"name": "Done", "timestamp": 1}}
+			d = ft.PDF("no", "Other tag", "src", 3, 0, time.Time{})
+			d.Content["tags"] = []any{"later"}
 		}, []string{"yes"}, map[string]string{"no": ""}},
 		{"age_since_created", Trigger{Type: TriggerAgeSinceCreated, Days: 14}, ScopeAll, func(ft *fakeTablet) {
-			d := ft.pdf("yes", "Arrived long ago", "src", 3, 0, time.Time{})
-			d.meta["createdTime"] = ms(now.Add(-20 * day))
-			d = ft.pdf("no", "Arrived yesterday", "src", 3, 0, time.Time{})
-			d.meta["createdTime"] = ms(now.Add(-1 * day))
+			d := ft.PDF("yes", "Arrived long ago", "src", 3, 0, time.Time{})
+			d.Meta["createdTime"] = ms(now.Add(-20 * day))
+			d = ft.PDF("no", "Arrived yesterday", "src", 3, 0, time.Time{})
+			d.Meta["createdTime"] = ms(now.Add(-1 * day))
 		}, []string{"yes"}, map[string]string{"no": ""}},
 		{"pinned_is", Trigger{Type: TriggerPinnedIs, Pinned: true}, ScopeAll, func(ft *fakeTablet) {
-			d := ft.pdf("yes", "Pinned", "src", 3, 0, time.Time{})
-			d.meta["pinned"] = true
-			ft.pdf("no", "Not pinned", "src", 3, 0, time.Time{})
+			d := ft.PDF("yes", "Pinned", "src", 3, 0, time.Time{})
+			d.Meta["pinned"] = true
+			ft.PDF("no", "Not pinned", "src", 3, 0, time.Time{})
 		}, []string{"yes"}, map[string]string{"no": ""}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ft, storage := newHarness(t, uid, true)
-			ft.folder("src", "Source", "")
-			ft.folder("dst", "Destination", "")
+			ft.Folder("src", "Source", "")
+			ft.Folder("dst", "Destination", "")
 			c.setup(ft)
 			// every trigger also honours the opt-out tag
-			opt := ft.pdf("optout", "WSJ Opted out", "src", 3, 2, now.Add(-50*day))
-			opt.meta["pinned"] = true
-			opt.meta["createdTime"] = ms(now.Add(-200 * day))
-			opt.meta["lastModified"] = ms(now.Add(-200 * day))
-			opt.content["tags"] = []any{"done", map[string]any{"name": "no_automation"}}
-			ft.sync()
+			opt := ft.PDF("optout", "WSJ Opted out", "src", 3, 2, now.Add(-50*day))
+			opt.Meta["pinned"] = true
+			opt.Meta["createdTime"] = ms(now.Add(-200 * day))
+			opt.Meta["lastModified"] = ms(now.Add(-200 * day))
+			opt.Content["tags"] = []any{"done", map[string]any{"name": "no_automation"}}
+			ft.Sync()
 
 			svc, _, _ := newService(t, storage)
 			saveConfig(t, svc, uid, ModeLive, Rule{ID: "r", Enabled: true, Source: FolderRef{ID: "src"}, Scope: c.scope,
@@ -348,12 +348,12 @@ func TestEveryTriggerMovesThroughTheService(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, id := range c.move {
-				if p := ft.parentOf(id); p != "dst" {
+				if p := ft.ParentOf(id); p != "dst" {
 					t.Errorf("%s not moved (parent %s); skipped %+v", id, p, res.Plan.Skipped)
 				}
 			}
 			for id, reason := range c.stay {
-				if p := ft.parentOf(id); p != "src" {
+				if p := ft.ParentOf(id); p != "src" {
 					t.Errorf("%s moved", id)
 				}
 				got := ""
@@ -366,7 +366,7 @@ func TestEveryTriggerMovesThroughTheService(t *testing.T) {
 					t.Errorf("%s skip reason %q, want %q", id, got, reason)
 				}
 			}
-			if ft.parentOf("optout") != "src" {
+			if ft.ParentOf("optout") != "src" {
 				t.Error("no-automation document moved")
 			}
 			if res.Run.Moved != len(c.move) {
@@ -382,10 +382,10 @@ func TestWorkedExampleAtMostOneCycle(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	svc, _, clk := newService(t, storage)
 	now := clk.Now()
-	ft.folder("inbox", "Inbox", "")
-	ft.folder("archive", "Archive", "")
-	ft.pdf("D", "Quarterly Letter", "inbox", 4, 0, now.Add(-40*24*time.Hour))
-	ft.sync()
+	ft.Folder("inbox", "Inbox", "")
+	ft.Folder("archive", "Archive", "")
+	ft.PDF("D", "Quarterly Letter", "inbox", 4, 0, now.Add(-40*24*time.Hour))
+	ft.Sync()
 	ruleA := Rule{ID: "A", Enabled: true, Source: FolderRef{ID: "inbox"}, Scope: ScopeAll,
 		Trigger:     Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7},
 		Destination: Destination{FolderRef: FolderRef{ID: "archive"}}, Action: Action{Type: ActionMove}}
@@ -399,19 +399,19 @@ func TestWorkedExampleAtMostOneCycle(t *testing.T) {
 
 	// sweep 1: A moves D to Archive; B does not see it (snapshot)
 	res, _ := svc.RunNow(uid)
-	if res.Run.Moved != 1 || ft.parentOf("D") != "archive" {
-		t.Fatalf("sweep 1: %+v parent %s", res.Run, ft.parentOf("D"))
+	if res.Run.Moved != 1 || ft.ParentOf("D") != "archive" {
+		t.Fatalf("sweep 1: %+v parent %s", res.Run, ft.ParentOf("D"))
 	}
 
 	// Mike pins D on the tablet; it syncs
 	clk.advance(time.Hour)
-	ft.pull()
-	ft.docs["D"].meta["pinned"] = true
-	ft.sync()
+	ft.Pull()
+	ft.Docs["D"].Meta["pinned"] = true
+	ft.Sync()
 
 	// sweep 2: B wants D back in Inbox; refused by the cycle guard
 	res, _ = svc.RunNow(uid)
-	if res.Run.Moved != 0 || ft.parentOf("D") != "archive" {
+	if res.Run.Moved != 0 || ft.ParentOf("D") != "archive" {
 		t.Fatalf("sweep 2 must not move: %+v", res.Run)
 	}
 	var guard *Skip
@@ -431,16 +431,16 @@ func TestWorkedExampleAtMostOneCycle(t *testing.T) {
 
 	// after 24 h, B may move it back
 	clk.advance(14 * time.Hour)
-	if res, _ = svc.RunNow(uid); res.Run.Moved != 1 || ft.parentOf("D") != "inbox" {
+	if res, _ = svc.RunNow(uid); res.Run.Moved != 1 || ft.ParentOf("D") != "inbox" {
 		t.Fatalf("after 24 h: %+v", res.Run)
 	}
 	// Mike unpins it: A wants it in Archive again, refused for the symmetric reason
 	clk.advance(time.Hour)
-	ft.pull()
-	ft.docs["D"].meta["pinned"] = false
-	ft.sync()
+	ft.Pull()
+	ft.Docs["D"].Meta["pinned"] = false
+	ft.Sync()
 	res, _ = svc.RunNow(uid)
-	if res.Run.Moved != 0 || ft.parentOf("D") != "inbox" {
+	if res.Run.Moved != 0 || ft.ParentOf("D") != "inbox" {
 		t.Fatalf("symmetric guard: %+v", res.Run)
 	}
 	// D is back in rule A's source with the inputs A moved it on, so A's
@@ -449,7 +449,7 @@ func TestWorkedExampleAtMostOneCycle(t *testing.T) {
 		t.Fatalf("symmetric refusal: %+v", s)
 	}
 	clk.advance(30 * time.Hour)
-	if res, _ = svc.RunNow(uid); res.Run.Moved != 0 || ft.parentOf("D") != "inbox" {
+	if res, _ = svc.RunNow(uid); res.Run.Moved != 0 || ft.ParentOf("D") != "inbox" {
 		t.Fatalf("after the cycle window the hold still applies: %+v", res.Run)
 	}
 	st, _ := svc.Store().LoadState(uid)
@@ -468,10 +468,10 @@ func TestHoldAfterTabletMovesBackThenReapply(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	svc, _, clk := newService(t, storage)
 	now := clk.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.folder("read", "Read", "rr")
-	ft.pdf("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.Sync()
 	saveConfig(t, svc, uid, ModeLive, readRule())
 
 	if res, _ := svc.RunNow(uid); res.Run.Moved != 1 {
@@ -479,13 +479,13 @@ func TestHoldAfterTabletMovesBackThenReapply(t *testing.T) {
 	}
 	// the tablet's copy wins: the doc returns to the source, inputs unchanged,
 	// and its version moves on (a version keyed hold would never match)
-	ft.pull()
-	ft.docs["d"].meta["parent"] = "rr"
-	ft.docs["d"].meta["version"] = 9
-	ft.sync()
+	ft.Pull()
+	ft.Docs["d"].Meta["parent"] = "rr"
+	ft.Docs["d"].Meta["version"] = 9
+	ft.Sync()
 
 	res, _ := svc.RunNow(uid)
-	if res.Run.Moved != 0 || ft.parentOf("d") != "rr" {
+	if res.Run.Moved != 0 || ft.ParentOf("d") != "rr" {
 		t.Fatalf("held doc moved: %+v", res.Run)
 	}
 	var held *Skip
@@ -507,8 +507,8 @@ func TestHoldAfterTabletMovesBackThenReapply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.Kind != "reapply" || ft.parentOf("d") != "read" {
-		t.Fatalf("reapply: %+v parent %s", entry, ft.parentOf("d"))
+	if entry.Kind != "reapply" || ft.ParentOf("d") != "read" {
+		t.Fatalf("reapply: %+v parent %s", entry, ft.ParentOf("d"))
 	}
 	st, _ = svc.Store().LoadState(uid)
 	if st.HoldByID(held.HoldID) != nil || len(st.HeldNow) != 0 {
@@ -517,11 +517,11 @@ func TestHoldAfterTabletMovesBackThenReapply(t *testing.T) {
 
 	// moved back again, but re-opened: inputs change, the hold clears itself
 	clk.advance(7 * time.Hour)
-	ft.pull()
-	ft.docs["d"].meta["parent"] = "rr"
-	ft.docs["d"].meta["lastOpened"] = ms(clk.Now().Add(-6*time.Hour - time.Minute))
-	ft.sync()
-	if res, _ := svc.RunNow(uid); res.Run.Moved != 1 || ft.parentOf("d") != "read" {
+	ft.Pull()
+	ft.Docs["d"].Meta["parent"] = "rr"
+	ft.Docs["d"].Meta["lastOpened"] = ms(clk.Now().Add(-6*time.Hour - time.Minute))
+	ft.Sync()
+	if res, _ := svc.RunNow(uid); res.Run.Moved != 1 || ft.ParentOf("d") != "read" {
 		t.Fatalf("changed inputs must move again: %+v %+v", res.Run, res.Plan.Skipped)
 	}
 }
@@ -530,10 +530,10 @@ func TestUndoMovesBackAndSetsHold(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
 	svc, notifier, _ := newService(t, storage)
 	now := time.Now()
-	ft.folder("rr", "Research Reports", "")
-	ft.folder("read", "Read", "rr")
-	ft.pdf("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
+	ft.Sync()
 	saveConfig(t, svc, uid, ModeLive, readRule())
 	svc.RunNow(uid)
 	st, _ := svc.Store().LoadState(uid)
@@ -542,7 +542,7 @@ func TestUndoMovesBackAndSetsHold(t *testing.T) {
 	if _, err := svc.Undo(uid, moveID); err != nil {
 		t.Fatal(err)
 	}
-	if ft.parentOf("d") != "rr" {
+	if ft.ParentOf("d") != "rr" {
 		t.Fatal("undo did not move the doc back")
 	}
 	st, _ = svc.Store().LoadState(uid)
@@ -556,7 +556,7 @@ func TestUndoMovesBackAndSetsHold(t *testing.T) {
 		t.Fatal("double undo must fail")
 	}
 	res, _ := svc.RunNow(uid)
-	if res.Run.Moved != 0 || ft.parentOf("d") != "rr" {
+	if res.Run.Moved != 0 || ft.ParentOf("d") != "rr" {
 		t.Fatal("the rule re-moved an undone document")
 	}
 	if notifier.count() != 2 {
@@ -566,8 +566,8 @@ func TestUndoMovesBackAndSetsHold(t *testing.T) {
 
 func TestPausedAndSync10(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
-	ft.folder("rr", "Research Reports", "")
-	ft.sync()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	cfg := saveConfig(t, svc, uid, ModeLive, readRule())
 	cfg.Settings.Enabled = false
@@ -605,9 +605,9 @@ func TestPausedAndSync10(t *testing.T) {
 
 func TestDebouncedTriggerSingleFlightAndLifecycle(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
-	ft.folder("inbox", "Inbox", "")
-	ft.folder("news", "News", "")
-	ft.sync()
+	ft.Folder("inbox", "Inbox", "")
+	ft.Folder("news", "News", "")
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	svc.Debounce = 30 * time.Millisecond
 	svc.IntervalUnit = time.Hour // the fallback ticker stays out of the way
@@ -688,9 +688,9 @@ func TestDebouncedTriggerSingleFlightAndLifecycle(t *testing.T) {
 
 func TestFallbackTicker(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
-	ft.folder("inbox", "Inbox", "")
-	ft.folder("news", "News", "")
-	ft.sync()
+	ft.Folder("inbox", "Inbox", "")
+	ft.Folder("news", "News", "")
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	svc.IntervalUnit = 4 * time.Millisecond // 5 "minutes" = 20 ms
 	cfg := saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "*"}))
@@ -716,12 +716,12 @@ func TestFallbackTicker(t *testing.T) {
 
 func TestPreviewDraftRuleInPosition(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
-	ft.folder("inbox", "Inbox", "")
-	ft.folder("news", "News", "")
-	ft.folder("archive", "Archive", "")
-	ft.pdf("wsj", "WSJ Weekend", "inbox", 3, 0, time.Time{})
-	ft.pdf("ft", "FT Weekend", "inbox", 3, 0, time.Time{})
-	ft.sync()
+	ft.Folder("inbox", "Inbox", "")
+	ft.Folder("news", "News", "")
+	ft.Folder("archive", "Archive", "")
+	ft.PDF("wsj", "WSJ Weekend", "inbox", 3, 0, time.Time{})
+	ft.PDF("ft", "FT Weekend", "inbox", 3, 0, time.Time{})
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	first := moveRule("first", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"})
 	saveConfig(t, svc, uid, ModeDry, first)
@@ -754,21 +754,21 @@ func TestPreviewDraftRuleInPosition(t *testing.T) {
 
 func TestCorruptContentAndMissingContent(t *testing.T) {
 	ft, storage := newHarness(t, uid, true)
-	ft.folder("inbox", "Inbox", "")
-	ft.folder("news", "News", "")
-	d := ft.pdf("corrupt", "WSJ corrupt", "inbox", 3, 0, time.Time{})
-	d.rawContent = []byte(`{"fileType":`)
-	d = ft.pdf("nocontent", "WSJ no content", "inbox", 3, 0, time.Time{})
-	d.noContent = true
-	ft.pdf("ok", "WSJ ok", "inbox", 3, 0, time.Time{})
-	ft.sync()
+	ft.Folder("inbox", "Inbox", "")
+	ft.Folder("news", "News", "")
+	d := ft.PDF("corrupt", "WSJ corrupt", "inbox", 3, 0, time.Time{})
+	d.RawContent = []byte(`{"fileType":`)
+	d = ft.PDF("nocontent", "WSJ no content", "inbox", 3, 0, time.Time{})
+	d.NoContent = true
+	ft.PDF("ok", "WSJ ok", "inbox", 3, 0, time.Time{})
+	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	saveConfig(t, svc, uid, ModeLive, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}))
 	res, err := svc.RunNow(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Run.Moved != 1 || ft.parentOf("ok") != "news" || ft.parentOf("corrupt") != "inbox" || ft.parentOf("nocontent") != "inbox" {
+	if res.Run.Moved != 1 || ft.ParentOf("ok") != "news" || ft.ParentOf("corrupt") != "inbox" || ft.ParentOf("nocontent") != "inbox" {
 		t.Fatalf("run %+v skipped %+v", res.Run, res.Plan.Skipped)
 	}
 	for _, s := range res.Plan.Skipped {
