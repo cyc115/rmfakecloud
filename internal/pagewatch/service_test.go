@@ -1,6 +1,7 @@
 package pagewatch
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
+	"github.com/ddvk/rmfakecloud/internal/storage/models"
 	"github.com/ddvk/rmfakecloud/internal/testkit/tablet"
 	log "github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
@@ -622,10 +624,17 @@ func TestSkipErrorCarriesRuleAndPage(t *testing.T) {
 	hook := logtest.NewGlobal()
 	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
 	e := newSvcEnv(t)
-	e.svc.MinAge = time.Hour // every blob stays recent
 	e.rule("r1")
 	e.ft.Notebook("nb", "Notes", "")
 	e.page("nb", "p1", "strokes_a.rm")
+	// the page blob's mtime cannot be read: never treated as old
+	hash, _, err := models.Hash(bytes.NewReader(fixture(t, "strokes_a.rm")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(e.st.UserDataPath(uid), "sync", hash)); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 3; i++ {
 		e.run()
 	}
@@ -633,8 +642,33 @@ func TestSkipErrorCarriesRuleAndPage(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("skip errors %v", got)
 	}
-	if d := got[0].Data; d["page_id"] != "p1" || d["rule_id"] != "r1" || d["reason"] != SkipRecent {
+	if d := got[0].Data; d["page_id"] != "p1" || d["rule_id"] != "r1" || d["reason"] != SkipMtime {
 		t.Fatalf("fields %v", d)
+	}
+}
+
+func TestRecentSkipNeverAlerts(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	e.svc.MinAge = time.Hour // continuous writing: every blob stays recent
+	e.rule("r1")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	for i := 0; i < 5; i++ {
+		e.run()
+	}
+	if n := len(skipErrors(hook)); n != 0 {
+		t.Fatalf("%d skip errors for recent pages", n)
+	}
+	var infos int
+	for _, en := range hook.AllEntries() {
+		if en.Level == log.InfoLevel && en.Data["reason"] == SkipRecent && en.Data["page_id"] == "p1" {
+			infos++
+		}
+	}
+	if infos != 5 {
+		t.Fatalf("%d recent infos, want 5", infos)
 	}
 }
 

@@ -52,24 +52,30 @@ func NewStore(userPath func(uid string) string) *Store {
 func (s *Store) statePath(uid string) string { return filepath.Join(s.userPath(uid), StateFileName) }
 func (s *Store) runsPath(uid string) string  { return filepath.Join(s.userPath(uid), RunsFileName) }
 
-// LoadState the baselines; an absent file is an empty state. A state file
-// that does not parse falls back to the .bak (the previous good state), with
-// an Error; the events since then are re-sent under the same trace ids and
+// LoadState the baselines; an absent file (and no .bak) is an empty state.
+// A state file that does not parse, or is missing while a .bak exists, falls
+// back to the .bak (the previous good state), with an Error; the events since then are re-sent under the same trace ids and
 // rm-pages recognises them. Only when both are unreadable is it an error.
 func (s *Store) LoadState(uid string) (*State, error) {
 	path := s.statePath(uid)
 	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return NewState(), nil
-	}
-	if err != nil {
+	var perr error
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		if _, berr := os.Stat(path + BackupSuffix); berr != nil {
+			return NewState(), nil // a real first run
+		}
+		// a .bak without the state file: never start over silently
+		perr = fmt.Errorf("%s is missing", StateFileName)
+	case err != nil:
 		return nil, err
+	default:
+		st, err := parseState(b)
+		if err == nil {
+			return st, nil
+		}
+		perr = fmt.Errorf("cannot parse %s: %w", StateFileName, err)
 	}
-	st, perr := parseState(b)
-	if perr == nil {
-		return st, nil
-	}
-	perr = fmt.Errorf("cannot parse %s: %w", StateFileName, perr)
 	bb, err := os.ReadFile(path + BackupSuffix)
 	if err != nil {
 		return nil, fmt.Errorf("%w (no usable %s%s: %v)", perr, StateFileName, BackupSuffix, err)

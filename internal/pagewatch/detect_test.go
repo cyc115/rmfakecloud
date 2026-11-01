@@ -1074,20 +1074,29 @@ func pipelineEv(t *testing.T, evs []Event, page string) Event {
 
 func TestPageAddedMidJoinIsEdit(t *testing.T) {
 	e := newEnv(t)
-	e.rule("r1", folderWatch(autoorganize.RootID))
-	e.ft.Notebook("nb", "Notes", "")
+	e.ft.Folder("w", "Watched", "")
+	e.ft.Folder("o", "Other", "")
+	e.ft.Notebook("nb", "Notes", "o")
 	e.page("nb", "p1", "strokes_a.rm")
 	e.page("nb", "p2", "text_todo.rm")
-	e.recent[e.pageHash("nb", "p1")] = true
+	e.rule("r1", folderWatch("w"))
+	e.sweep()
+	last := ruleState(e.state, "r1").LastActive
+
+	// moved in; p1 is rewritten after the rule's last sweep and is still recent
+	e.ft.Move("nb", "w")
+	e.page("nb", "p1", "strokes_ab.rm")
+	h1 := e.pageHash("nb", "p1")
+	e.recent[h1] = true
 	p := e.sweep() // the join starts; p1 holds it open
 	wantEvents(t, "join", p.Pipeline, "transcribe_only nb/p2 r1")
 	start := ruleState(e.state, "r1").JoinStartedAt["nb"]
-	if start.IsZero() || ruleState(e.state, "r1").Members["nb"] {
-		t.Fatalf("rule state = %+v", ruleState(e.state, "r1"))
+	if !start.Equal(last) || ruleState(e.state, "r1").Members["nb"] {
+		t.Fatalf("join start %v, want the rule's last sweep %v; state %+v", start, last, ruleState(e.state, "r1"))
 	}
 
 	// p3 is written after the join started: new writing, tasks extracted
-	e.page("nb", "p3", "strokes_ab.rm")
+	e.page("nb", "p3", "text_note.rm")
 	e.at[e.pageHash("nb", "p3")] = start.Add(time.Minute)
 	e.now = e.now.Add(time.Hour) // p3 is old enough to send
 	p = e.sweep()
@@ -1099,15 +1108,53 @@ func TestPageAddedMidJoinIsEdit(t *testing.T) {
 		t.Fatalf("join start moved: %v, want %v", got, start)
 	}
 
-	// p1 existed when the join started: transcribe_only, and the join completes
+	// p1 settles: written after the rule's last sweep, so an edit; the join completes
 	e.recent = map[string]bool{}
-	e.at[e.pageHash("nb", "p1")] = start.Add(-time.Minute)
+	e.at[h1] = last.Add(30 * time.Second)
 	p = e.sweep()
-	wantEvents(t, "rest of join", p.Pipeline, "transcribe_only nb/p1 r1")
+	wantEvents(t, "rest of join", p.Pipeline, "edit nb/p1 r1")
+	if ev := pipelineEv(t, p.Pipeline, "p1"); ev.BeforeHash != "" {
+		t.Fatalf("before = %q", ev.BeforeHash)
+	}
 	rs := ruleState(e.state, "r1")
 	if !rs.Members["nb"] || len(rs.JoinStartedAt) != 0 {
 		t.Fatalf("rule state after join = %+v", rs)
 	}
+}
+
+func TestPageWrittenBetweenMoveAndJoinSweepIsEdit(t *testing.T) {
+	setup := func(t *testing.T) (*env, time.Time) {
+		e := newEnv(t)
+		e.ft.Folder("w", "Watched", "")
+		e.ft.Folder("o", "Other", "")
+		e.ft.Notebook("nb", "Notes", "o")
+		e.page("nb", "p1", "strokes_a.rm")
+		e.rule("r1", folderWatch("w"))
+		e.sweep()
+		last := e.now
+		e.ft.Move("nb", "w")
+		e.page("nb", "p2", "text_todo.rm")
+		return e, last
+	}
+	t.Run("old enough at the join sweep", func(t *testing.T) {
+		e, last := setup(t)
+		e.at[e.pageHash("nb", "p2")] = last.Add(2 * time.Minute) // written after the move
+		e.now = last.Add(14 * time.Minute)
+		p := e.sweep()
+		wantEvents(t, "join sweep", p.Pipeline, "edit nb/p2 r1", "transcribe_only nb/p1 r1")
+	})
+	t.Run("recent at the join sweep", func(t *testing.T) {
+		e, last := setup(t)
+		e.at[e.pageHash("nb", "p2")] = last.Add(13 * time.Minute)
+		e.now = last.Add(13 * time.Minute) // the sweep at +14m sees p2 1m old: skipped
+		wantEvents(t, "join sweep", e.sweep().Pipeline, "transcribe_only nb/p1 r1")
+		e.now = e.now.Add(15 * time.Minute)
+		p := e.sweep()
+		wantEvents(t, "next sweep", p.Pipeline, "edit nb/p2 r1")
+		if !ruleState(e.state, "r1").Members["nb"] {
+			t.Fatal("join did not complete")
+		}
+	})
 }
 
 func TestJoinWithUnreadableMtimeStillExtractsNewPages(t *testing.T) {
@@ -1230,5 +1277,26 @@ func TestZeroMinAgeHasNoSkipWindow(t *testing.T) {
 	in.MinAge = 0
 	if p := Detect(in); len(p.Feed) != 1 || len(p.Skipped) != 0 {
 		t.Fatalf("feed %d skipped %+v", len(p.Feed), p.Skipped)
+	}
+}
+
+func TestTrashedWatchEntryIsMissing(t *testing.T) {
+	e := newEnv(t)
+	e.ft.Folder("w", "Watched", "")
+	e.ft.Folder("sub", "Sub", "w")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.rule("r1", folderWatch("sub"), docWatch("nb"))
+	if p := e.detect(); len(p.MissingWatches) != 0 {
+		t.Fatalf("missing %+v", p.MissingWatches)
+	}
+	e.ft.Move("w", "trash") // sub's chain now ends in the trash
+	e.ft.Move("nb", "trash")
+	want := []MissingWatch{
+		{RuleID: "r1", WatchID: "sub", Kind: autoorganize.WatchFolder, InTrash: true},
+		{RuleID: "r1", WatchID: "nb", Kind: autoorganize.WatchDocument, InTrash: true},
+	}
+	if p := e.detect(); !reflect.DeepEqual(p.MissingWatches, want) {
+		t.Fatalf("missing %+v", p.MissingWatches)
 	}
 }

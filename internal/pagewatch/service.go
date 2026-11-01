@@ -526,6 +526,8 @@ func (s *Service) trackLag(ul *userLoop, plan Plan, accepted map[string]bool, dr
 // trackSkips logs every skip at Info and counts, per (doc, page), the runs in
 // a row it was skipped; past LagRuns it logs one Error per streak, so a page
 // that is never readable (or a doc with no .content) cannot stay silent.
+// Recent skips never count: continuous writing is benign, and the page is
+// sent once it settles.
 func (s *Service) trackSkips(ul *userLoop, plan Plan) {
 	seen := map[string]bool{}
 	for _, n := range plan.Skipped {
@@ -539,6 +541,10 @@ func (s *Service) trackSkips(ul *userLoop, plan Plan) {
 			f["rule_id"] = rid
 		}
 		log.WithFields(f).Info(logPrefix, "skipped ", n.Reason)
+		if n.Reason == SkipRecent {
+			seen[key] = false // ends a streak of another reason too
+			continue
+		}
 		ul.skips[key]++
 		if ul.skips[key] > LagRuns && !ul.skipAlerted[key] {
 			ul.skipAlerted[key] = true
@@ -566,9 +572,14 @@ func (s *Service) trackMissing(ul *userLoop, plan Plan) {
 			continue
 		}
 		ul.missingAlerted[key] = true
+		what := " no longer exists"
+		if m.InTrash {
+			what = " is in the trash"
+		}
 		log.WithFields(log.Fields{
 			"stage": "detect", "user": ul.uid, "rule_id": m.RuleID, "watch_id": m.WatchID, "watch_kind": m.Kind,
-		}).Error(logPrefix, "watched ", m.Kind, " ", m.WatchID, " no longer exists")
+			"in_trash": m.InTrash,
+		}).Error(logPrefix, "watched ", m.Kind, " ", m.WatchID, what)
 	}
 	for key := range ul.missingAlerted {
 		if !seen[key] {

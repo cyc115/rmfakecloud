@@ -85,3 +85,32 @@ func TestCorruptStateAndBackupIsAnError(t *testing.T) {
 		t.Fatal("no error with a corrupt backup")
 	}
 }
+
+func TestMissingStateWithBackupUsesBackup(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	s, path := newTestStore(t)
+	s.SaveState(uid, stateWith("h1"))
+	s.SaveState(uid, stateWith("h2"))
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.LoadState(uid)
+	if err != nil || st.Feed["d/p"] != "h1" {
+		t.Fatalf("state %+v err %v", st, err)
+	}
+	var errs int
+	for _, en := range hook.AllEntries() {
+		if en.Level == log.ErrorLevel {
+			errs++
+		}
+	}
+	if errs != 1 {
+		t.Fatalf("%d errors, want 1", errs)
+	}
+	// neither file: a real first run, no error
+	os.Remove(path + BackupSuffix)
+	if st, err := s.LoadState(uid); err != nil || len(st.Feed) != 0 {
+		t.Fatalf("state %+v err %v", st, err)
+	}
+}

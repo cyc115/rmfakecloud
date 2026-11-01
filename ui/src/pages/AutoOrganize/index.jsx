@@ -64,10 +64,11 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, missing = []
   const src = pipe ? "" : sourceLabel(rule, folders, view && view.sourceName);
   const dst = pipe ? "" : destinationLabel(rule, folders, view && view.destName);
   if (pipe) {
-    const gone = new Set(missing.map((m) => m.watchId));
+    const gone = new Map(missing.map((m) => [m.watchId, m]));
     for (const w of rule.watch || []) {
-      chips.push(gone.has(w.id)
-        ? <span key={`${w.kind}${w.id}`} className="ao-chip warn" title="The page watch cannot find this item in the tree; nothing is sent for it.">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id}: watched item no longer exists</span>
+      const m = gone.get(w.id);
+      chips.push(m
+        ? <span key={`${w.kind}${w.id}`} className="ao-chip warn" title="The page watch cannot find this item outside the Trash; nothing is sent for it.">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id}: {m.inTrash ? "watched item is in the Trash" : "watched item no longer exists"}</span>
         : <span key={`${w.kind}${w.id}`} className="ao-chip">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id || "My files"}</span>);
     }
   }

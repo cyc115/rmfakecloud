@@ -17,8 +17,8 @@
 // # State recovery
 //
 // Each save first copies the current state file to page-watch.state.json.bak
-// (only when it parses). A state file that does not parse is replaced by the
-// .bak on load, with an Error; the changes since that save are re-sent under
+// (only when it parses). A state file that does not parse, or is missing
+// while a .bak exists, is replaced by the .bak on load, with an Error; the changes since that save are re-sent under
 // the same trace ids, which rm-pages recognises, so nothing is lost or
 // doubled. When both are unreadable every run fails with an Error and nothing
 // is sent. To recover by hand: stop rmfakecloud, copy a good .bak over the
@@ -41,8 +41,10 @@
 //
 //   - joining: a doc that is not yet a member gets one "transcribe_only" per
 //     page with a hash not yet delivered whose blob mtime is no later than
-//     the join's start (RuleState.JoinStartedAt, the first sweep that saw
-//     the doc joining). A page written after that is new writing: an "edit"
+//     the join's start (RuleState.JoinStartedAt: the rule's LastActive when
+//     the join is first seen, the last sweep at which the doc was outside
+//     the rule; that sweep's Now at the rule's first activation). A page
+//     written after that is new writing: an "edit"
 //     with an empty BeforeHash, so its tasks are extracted even while an old
 //     page (recent, unreadable mtime) holds the join open. It becomes a
 //     member when every event is accepted and none was skipped; the join
@@ -80,11 +82,12 @@
 // The service logs each skip at Info (doc_id, page_id, reason, rule_id when
 // a rule saw it) and one Error (trace_id "skip", stage detect) when the same
 // doc/page is skipped more than LagRuns runs in a row; the streak resets when
-// the skip stops.
+// the skip stops. Recent skips never alert: continuous writing is benign.
 //
 // # Guards
 //
-//   - A watch entry whose folder or doc id is gone from the tree is listed in
+//   - A watch entry whose folder or doc id is gone from the tree, or whose
+//     parent chain ends in the trash (InTrash), is listed in
 //     Plan.MissingWatches; the service logs one Error per (rule, id) streak
 //     and the Pipeline panel flags the rule.
 //   - A snapshot with no documents while the state knows more than

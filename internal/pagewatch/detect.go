@@ -49,12 +49,15 @@ type Plan struct {
 	Advance func(accepted map[string]bool) *State `json:"-"`
 }
 
-// MissingWatch a rule's watch entry that names an id gone from the tree
+// MissingWatch a rule's watch entry that names an id gone from the tree or
+// in the trash
 type MissingWatch struct {
 	RuleID  string `json:"ruleId"`
 	WatchID string `json:"watchId"`
 	Kind    string `json:"kind"`
 	Name    string `json:"name,omitempty"`
+	// InTrash the id is in the tree but in the trash
+	InTrash bool `json:"inTrash,omitempty"`
 }
 
 // EmptyTreeGuard a snapshot with no documents while the state knows more
@@ -541,6 +544,9 @@ func (d *detector) rule(r *autoorganize.Rule) {
 		}
 		if _, ok := d.in.Snap.Docs[w.ID]; !ok {
 			d.missing = append(d.missing, MissingWatch{RuleID: r.ID, WatchID: w.ID, Kind: w.Kind, Name: w.Name})
+		} else if d.in.Snap.Locate(w.ID) == autoorganize.LocInTrash {
+			// a trashed folder or doc: nothing under it is watched
+			d.missing = append(d.missing, MissingWatch{RuleID: r.ID, WatchID: w.ID, Kind: w.Kind, Name: w.Name, InTrash: true})
 		}
 	}
 	held := pagesOf(base.Baselines)
@@ -654,10 +660,17 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 	joinStart, started := base.JoinStartedAt[docID]
 	switch {
 	case !member && !started:
-		// the first sweep of the join: a page written after now is new
-		// writing even while an old page holds the join open (R12)
+		// the first sweep of the join. The doc was outside the rule at the
+		// rule's last sweep, so a page written after that is new writing,
+		// even one written between the move and this sweep, or while an old
+		// page holds the join open (R12, R38). At the rule's first
+		// activation there is no earlier sweep: everything is pre-existing.
 		joinStart = now
-		d.always(func(s *State) { s.rule(ruleID).JoinStartedAt[docID] = now })
+		if !base.LastActive.IsZero() {
+			joinStart = base.LastActive
+		}
+		js := joinStart
+		d.always(func(s *State) { s.rule(ruleID).JoinStartedAt[docID] = js })
 	case member && started:
 		d.always(func(s *State) { delete(s.rule(ruleID).JoinStartedAt, docID) })
 	}
