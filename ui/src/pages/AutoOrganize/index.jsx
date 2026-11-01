@@ -5,7 +5,7 @@ import Spinner from "../../components/Spinner";
 import RuleDrawer from "./RuleDrawer";
 import {
   INTERVALS, SKIP_CHIP, SKIP_LABELS, destinationLabel, exampleRule, fmtAgo, fmtTime,
-  newRule, sourceLabel, triggerPhrase, withDisplayNames,
+  isPipeline, newRule, pipelineSummary, sourceLabel, triggerPhrase, withDisplayNames,
 } from "./rules";
 import "./AutoOrganize.scss";
 
@@ -60,8 +60,14 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, onToggle, on
   if (sharesSource) chips.push(<span key="om" className="ao-chip order" title="Shares a source with another rule; the first match wins">order matters</span>);
   if (!rule.enabled) chips.push(<span key="d" className="ao-chip">disabled</span>);
 
-  const src = sourceLabel(rule, folders, view && view.sourceName);
-  const dst = destinationLabel(rule, folders, view && view.destName);
+  const pipe = isPipeline(rule);
+  const src = pipe ? "" : sourceLabel(rule, folders, view && view.sourceName);
+  const dst = pipe ? "" : destinationLabel(rule, folders, view && view.destName);
+  if (pipe) {
+    for (const w of rule.watch || []) {
+      chips.push(<span key={`${w.kind}${w.id}`} className="ao-chip">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id || "My files"}</span>);
+    }
+  }
   return (
     <div className={`ao-rule ${rule.enabled ? "" : "off"} ${drag.over === index ? "dragover" : ""}`}
       onDragOver={(e) => { e.preventDefault(); drag.setOver(index); }}
@@ -78,8 +84,14 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, onToggle, on
         <div className="s">
           <span className="ao-num">{index + 1}.</span>
           {rule.name ? <><b>{rule.name}</b><span className="ao-hint"> · </span></> : null}
-          <b>{src}</b><span className="arr">→</span><span className="p">{triggerPhrase(rule.trigger)}</span>
-          <span className="arr">→</span><b>{dst}</b>
+          {pipe ? (
+            <><b>{pipelineSummary(rule)}</b><span className="arr">·</span><span className="p">{triggerPhrase(rule.trigger)}</span></>
+          ) : (
+            <>
+              <b>{src}</b><span className="arr">→</span><span className="p">{triggerPhrase(rule.trigger)}</span>
+              <span className="arr">→</span><b>{dst}</b>
+            </>
+          )}
           {view && view.sourceRenamedFrom && <span className="ao-hint"> (source renamed from “{view.sourceRenamedFrom}”)</span>}
           {view && view.destRenamedFrom && <span className="ao-hint"> (renamed from “{view.destRenamedFrom}”)</span>}
         </div>
@@ -88,7 +100,7 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, onToggle, on
       <Kebab items={[
         { label: "Edit", onClick: onEdit },
         { label: "Duplicate", onClick: onDuplicate },
-        { label: "Preview this rule", onClick: onPreview },
+        { label: "Preview this rule", onClick: onPreview, disabled: pipe },
         "-",
         { label: "Move up", onClick: () => onMove(-1), disabled: index === 0 },
         { label: "Move down", onClick: () => onMove(1), disabled: index === count - 1 },
@@ -227,6 +239,51 @@ function RunsPane({ runs }) {
   );
 }
 
+function PipelinePanel({ pipeline, busy, onRun }) {
+  const runs = pipeline.runs || [];
+  const last = pipeline.lastRun;
+  let status = "Page watch is off on this server.";
+  let cls = "paused";
+  if (pipeline.enabled) {
+    cls = pipeline.lastError ? "bad" : "";
+    status = pipeline.lastError
+      ? `Last run failed: ${pipeline.lastError}`
+      : last ? `Last run ${fmtTime(last.at)}` : "No run yet";
+    if (pipeline.nextAt) status += ` · next ${fmtTime(pipeline.nextAt)}`;
+  }
+  return (
+    <div className="ao-card ao-pipeline">
+      <div className="ao-card-h">
+        <h2>Pipeline</h2>
+        <span className={`ao-status ${cls}`}><span className="dot" />{status}</span>
+        <span className="ao-spacer" />
+        <button className="ao-btn primary sm" disabled={busy || !pipeline.enabled} onClick={onRun}
+          title={pipeline.enabled ? "" : "Set RM_PAGES_URL to turn page watch on"}>Run now</button>
+      </div>
+      {pipeline.enabled && pipeline.pendingPipeline > 0 && (
+        <div className="ao-grp"><span className="ao-hint">{pipeline.pendingPipeline} page change{pipeline.pendingPipeline === 1 ? "" : "s"} waiting to be accepted by rm-pages.</span></div>
+      )}
+      {runs.length === 0 ? (
+        <div className="ao-empty-pane">{pipeline.enabled ? "No runs yet." : "Pipeline rules are saved but nothing is sent."}</div>
+      ) : (
+        <div className="ao-pruns">
+          {runs.map((r) => (
+            <div className={`ao-prun ${r.error ? "bad" : ""}`} key={`${r.at}-${r.trigger}`}>
+              <span className="when">{fmtTime(r.at)}</span>
+              <span className={`ao-chip ${r.mode === "live" ? "live" : "dry"}`}>{r.mode}</span>
+              <span className="trig">{r.trigger}</span>
+              <span className="nums">
+                {r.pipeline} page{r.pipeline === 1 ? "" : "s"} changed · {r.accepted} sent · {r.skipped} skipped
+              </span>
+              {r.error && <span className="errbox">{r.error}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AutoOrganize() {
   const [config, setConfig] = useState(null);
   const [view, setView] = useState(null);
@@ -238,6 +295,8 @@ export default function AutoOrganize() {
   const [planPartial, setPlanPartial] = useState(false);
   const [busy, setBusy] = useState(false);
   const [drawer, setDrawer] = useState({ open: false, rule: null, index: -1 });
+  const [pipeline, setPipeline] = useState(null);
+  const [watchables, setWatchables] = useState([]);
   const [dragFrom, setDragFrom] = useState(null);
   const [dragOver, setDragOver] = useState(null);
   const activityRef = useRef(null);
@@ -258,7 +317,11 @@ export default function AutoOrganize() {
       setError(null);
     } catch (e) {
       setError(e.message);
+      return;
     }
+    // the pipeline extras are optional: the page works without them
+    apiService.getPipeline().then(setPipeline).catch(() => {});
+    apiService.getWatchables().then((w) => setWatchables(w.items)).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -266,6 +329,7 @@ export default function AutoOrganize() {
     const timer = setInterval(() => {
       apiService.getAutoOrganizeState().then(setView).catch(() => {});
       apiService.getAutoOrganizeLog().then(setLog).catch(() => {});
+      apiService.getPipeline().then(setPipeline).catch(() => {});
     }, 30000);
     return () => clearInterval(timer);
   }, [refresh]);
@@ -354,6 +418,20 @@ export default function AutoOrganize() {
     }
   };
 
+  const runPipeline = async () => {
+    setBusy(true);
+    try {
+      const r = await apiService.runPipelineNow();
+      if (r.error) toast.error(`Pipeline run: ${r.error}`);
+      else toast.success(`Pipeline run: ${r.pipeline} changed, ${r.accepted} sent`);
+    } catch (e) {
+      toast.error(e.status === 409 ? `Not run: ${e.message}` : e.message);
+    } finally {
+      setBusy(false);
+      apiService.getPipeline().then(setPipeline).catch(() => {});
+    }
+  };
+
   const undo = async (m) => {
     setBusy(true);
     try {
@@ -381,7 +459,10 @@ export default function AutoOrganize() {
   };
 
   const rules = config.rules;
-  const openDrawer = (rule, index) => setDrawer({ open: true, rule: JSON.parse(JSON.stringify(rule)), index });
+  const openDrawer = (rule, index) => {
+    apiService.getWatchables().then((w) => setWatchables(w.items)).catch(() => {});
+    setDrawer({ open: true, rule: JSON.parse(JSON.stringify(rule)), index });
+  };
   const closeDrawer = () => setDrawer((d) => ({ ...d, open: false }));
   const saveRule = async (rule) => {
     const named = withDisplayNames(rule, folders);
@@ -433,8 +514,9 @@ export default function AutoOrganize() {
       reorder(fromId, 0, rules[to].id);
     },
   };
-  const sharesSource = (rule) => rules.filter((r) => r.enabled && r.source.id === rule.source.id).length > 1;
-  const otherRules = rules.map((r, i) => ({ ...r, _number: i + 1 })).filter((_, i) => i !== drawer.index);
+  const sharesSource = (rule) => !isPipeline(rule) &&
+    rules.filter((r) => r.enabled && !isPipeline(r) && r.source.id === rule.source.id).length > 1;
+  const otherRules = rules.map((r, i) => ({ ...r, _number: i + 1 })).filter((r, i) => i !== drawer.index && !isPipeline(r));
 
   return (
     <div className="ao">
@@ -508,6 +590,10 @@ export default function AutoOrganize() {
           </div>
         </div>
 
+        {(pipeline && (pipeline.enabled || rules.some(isPipeline))) && (
+          <PipelinePanel pipeline={pipeline} busy={busy} onRun={runPipeline} />
+        )}
+
         {/* activity */}
         <div className="ao-card" ref={activityRef}>
           <div className="ao-tabs" role="tablist">
@@ -529,6 +615,7 @@ export default function AutoOrganize() {
       </div>
 
       <RuleDrawer open={drawer.open} initial={drawer.rule} isNew={drawer.index < 0} folders={folders}
+        watchables={watchables} pipelineDefaults={pipeline && pipeline.defaults}
         otherRules={otherRules} onCancel={closeDrawer} onSave={saveRule}
         onDelete={() => deleteRule(drawer.index)}
         onShowPreview={(p) => {

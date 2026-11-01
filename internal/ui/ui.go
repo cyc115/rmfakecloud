@@ -13,6 +13,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/messages"
+	"github.com/ddvk/rmfakecloud/internal/pagewatch"
 	"github.com/ddvk/rmfakecloud/internal/screenshare"
 	"github.com/ddvk/rmfakecloud/internal/storage"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
@@ -79,6 +80,7 @@ type ReactAppWrapper struct {
 	roomManager   *screenshare.RoomManager
 	mqtt          mqttBridge
 	organizer     *autoorganize.Service
+	pageWatch     *pagewatch.Service
 }
 
 // hack for serving index.html on /
@@ -95,7 +97,8 @@ func New(cfg *config.Config,
 	blobHandler blobHandler,
 	roomManager *screenshare.RoomManager,
 	mqttBroker mqttBridge,
-	organizer *autoorganize.Service) *ReactAppWrapper {
+	organizer *autoorganize.Service,
+	pageWatch *pagewatch.Service) *ReactAppWrapper {
 
 	sub, err := fs.Sub(webui.Assets, jsBuildFolder)
 	if err != nil {
@@ -124,6 +127,7 @@ func New(cfg *config.Config,
 		roomManager: roomManager,
 		mqtt:        mqttBroker,
 		organizer:   organizer,
+		pageWatch:   pageWatch,
 	}
 	return &staticWrapper
 }

@@ -239,7 +239,7 @@ func NewApp(cfg *config.Config) App {
 
 	app.registerRoutes(router)
 
-	uiApp := ui.New(cfg, fsStorage, codeConnector, ntfHub, pcStore, fsStorage, fsStorage, roomMgr, app.mqttBroker, organizer)
+	uiApp := ui.New(cfg, fsStorage, codeConnector, ntfHub, pcStore, fsStorage, fsStorage, roomMgr, app.mqttBroker, organizer, app.pageWatch)
 	uiApp.RegisterRoutes(router)
 
 	storageapp := fs.NewApp(cfg, fsStorage)

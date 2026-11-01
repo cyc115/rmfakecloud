@@ -251,6 +251,15 @@ class ApiServices {
   undoAutoOrganizeMove(entryId) {
     return this.autoOrganize("POST", `/undo/${encodeURIComponent(entryId)}`);
   }
+  getWatchables() {
+    return this.autoOrganize("GET", "/watchables");
+  }
+  getPipeline() {
+    return this.autoOrganize("GET", "/pipeline");
+  }
+  runPipelineNow() {
+    return this.autoOrganize("POST", "/pipeline/run-now");
+  }
   reapplyAutoOrganizeHold(holdId) {
     return this.autoOrganize("POST", `/reapply/${encodeURIComponent(holdId)}`);
   }

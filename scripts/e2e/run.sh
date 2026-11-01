@@ -3,18 +3,22 @@
 # start it on :3099, run Playwright from here. Usage: scripts/e2e/run.sh [pytest args]
 # E2E_KEEP=1 leaves the container and data dir up for debugging.
 # Env passthrough to the container: RM_PAGES_URL, PAGEWATCH_MIN_AGE.
+# E2E_STUB_RMPAGES=1 starts stub_rmpages.py on the services VM (:3098) and points
+# the container's RM_PAGES_URL at it, so page watch is on (pipeline run-now tests).
 set -euo pipefail
 
 HOST=${E2E_HOST:-mike@10.0.0.11}
 REMOTE=/tmp/rmfc-e2e
 DATA=/home/mike/rmfc-e2e-data
 NAME=rmfc-e2e
+STUB_PORT=3098
+STUB_PID=/tmp/rmfc-e2e-stub.pid
 PORT=3099
 GO_IMG=docker.io/library/golang:bookworm
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 
 cleanup() {
-  ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; rm -rf $DATA $REMOTE" || true
+  ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; [ -f $STUB_PID ] && kill \$(cat $STUB_PID) 2>/dev/null; rm -rf $DATA $REMOTE $STUB_PID" || true
 }
 [ -n "${E2E_KEEP:-}" ] || trap cleanup EXIT
 trap "exit 130" INT
@@ -24,6 +28,12 @@ cleanup
 echo ">> rsync + build image"
 rsync -az --delete --exclude ui/node_modules --exclude .git "$ROOT"/ "$HOST:$REMOTE/"
 ssh "$HOST" "cd $REMOTE && podman build -q --build-arg VERSION=e2e -t localhost/rmfakecloud:e2e -f Dockerfile ."
+
+if [ -n "${E2E_STUB_RMPAGES:-}" ]; then
+  echo ">> stub rm-pages on :$STUB_PORT"
+  ssh "$HOST" "nohup python3 $REMOTE/scripts/e2e/stub_rmpages.py $STUB_PORT >/dev/null 2>&1 </dev/null & echo \$! > $STUB_PID"
+  export RM_PAGES_URL=http://host.containers.internal:$STUB_PORT
+fi
 
 # env passthrough: expanded here (ssh does not forward env), quoted for the remote shell
 ENVS=""

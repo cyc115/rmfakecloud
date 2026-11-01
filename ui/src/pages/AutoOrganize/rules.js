@@ -32,6 +32,15 @@ export const TRIGGER_DEFAULTS = {
   pinned_is: { pinned: true },
 };
 
+// what a rule does with a matching document; pipeline sends changed pages of
+// watched notebooks to rm-pages
+export const ACTIONS = [
+  { type: "move", label: "Move" },
+  { type: "pipeline", label: "Send to pipeline" },
+];
+
+export const PAGE_CHANGED = "page_changed";
+
 export const INTERVALS = [5, 10, 15, 30, 60];
 
 export function isPageBased(type) {
@@ -42,9 +51,15 @@ export function makeTrigger(type) {
   return { type, settleHours: 6, minAgeEnabled: true, pinned: true, ...TRIGGER_DEFAULTS[type] };
 }
 
+export function isPipeline(rule) {
+  return !!rule && !!rule.action && rule.action.type === "pipeline";
+}
+
 export function triggerPhrase(t) {
   if (!t) return "";
   switch (t.type) {
+    case PAGE_CHANGED:
+      return "a watched page changes";
     case "finished_reading":
       return `finished reading, at least ${t.minPages} pages, settled ${t.settleHours} h`;
     case "read_progress":
@@ -109,6 +124,27 @@ export function newRule(folders) {
     destination: { id: ROOT_ID, name: "" },
     action: { type: "move" },
   };
+}
+
+// defaults: {prompt, model} from GET /pipeline; the UI never hard-codes them.
+// Source, destination and scope are unused by the server for pipeline rules.
+export function newPipelineRule(defaults) {
+  return {
+    id: "",
+    name: "",
+    enabled: true,
+    source: { id: ROOT_ID, name: "" },
+    scope: "all",
+    trigger: { type: PAGE_CHANGED },
+    destination: { id: ROOT_ID, name: "" },
+    action: { type: "pipeline", prompt: (defaults && defaults.prompt) || "", model: (defaults && defaults.model) || "" },
+    watch: [],
+  };
+}
+
+export function pipelineSummary(rule) {
+  const n = (rule.watch || []).length;
+  return `Watching ${n} item${n === 1 ? "" : "s"} → pipeline`;
 }
 
 // the seed rule: Research Reports + finished reading (at least 3 pages) -> Research Reports/Read

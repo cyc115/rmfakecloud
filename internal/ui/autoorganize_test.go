@@ -302,3 +302,51 @@ func TestAutoOrganizeAPIStatePreviewRunUndo(t *testing.T) {
 		t.Fatalf("paused preview: %d", code)
 	}
 }
+
+func TestWatchablesListsFoldersAndDocuments(t *testing.T) {
+	a := newAOAPI(t)
+	code, body := a.do("GET", "/ui/api/auto-organize/watchables", a.token("mike", true), nil)
+	if code != 200 {
+		t.Fatalf("watchables: %d %v", code, body)
+	}
+	items := body["items"].([]any)
+	var got []string
+	for _, it := range items {
+		m := it.(map[string]any)
+		got = append(got, m["kind"].(string)+":"+m["path"].(string))
+	}
+	want := []string{"folder:Inbox", "document:Inbox / WSJ Weekend", "folder:News"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("items = %v, want %v", got, want)
+	}
+	doc := items[1].(map[string]any)
+	if doc["id"] != a.doc || doc["name"] != "WSJ Weekend" || doc["docType"] != "pdf" {
+		t.Fatalf("document item: %v", doc)
+	}
+	if items[0].(map[string]any)["id"] != a.inbox {
+		t.Fatalf("folder item: %v", items[0])
+	}
+}
+
+func TestPipelineRunNow503WhenOff(t *testing.T) {
+	a := newAOAPI(t)
+	tok := a.token("mike", true)
+	if code, body := a.do("POST", "/ui/api/auto-organize/pipeline/run-now", tok, nil); code != http.StatusServiceUnavailable {
+		t.Fatalf("run-now with page watch off: %d %v", code, body)
+	}
+	// the drawer still needs the defaults
+	code, body := a.do("GET", "/ui/api/auto-organize/pipeline", tok, nil)
+	if code != 200 || body["enabled"] != false {
+		t.Fatalf("pipeline status off: %d %v", code, body)
+	}
+	d := body["defaults"].(map[string]any)
+	if d["prompt"] != autoorganize.DefaultPipelinePrompt || d["model"] != autoorganize.DefaultPipelineModel {
+		t.Fatalf("defaults: %v", d)
+	}
+	if runs := body["runs"].([]any); len(runs) != 0 {
+		t.Fatalf("runs: %v", runs)
+	}
+	if code, _ := a.do("POST", "/ui/api/auto-organize/pipeline/run-now", "", nil); code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d", code)
+	}
+}

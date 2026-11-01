@@ -6,6 +6,7 @@ import (
 
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/common"
+	"github.com/ddvk/rmfakecloud/internal/pagewatch"
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
@@ -21,6 +22,9 @@ func (app *ReactAppWrapper) registerAutoOrganizeRoutes(auth *gin.RouterGroup) {
 	ao.GET("state", app.autoOrganizeState)
 	ao.POST("preview", app.autoOrganizePreview)
 	ao.POST("run-now", app.autoOrganizeRunNow)
+	ao.GET("watchables", app.autoOrganizeWatchables)
+	ao.GET("pipeline", app.pipelineStatus)
+	ao.POST("pipeline/run-now", app.pipelineRunNow)
 	ao.GET("log", app.autoOrganizeLog)
 	ao.GET("runs", app.autoOrganizeLog)
 	ao.POST("undo/:entryId", app.autoOrganizeUndo)
@@ -195,4 +199,82 @@ func (app *ReactAppWrapper) autoOrganizeReapply(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, entry)
+}
+
+func (app *ReactAppWrapper) autoOrganizeWatchables(c *gin.Context) {
+	items, err := app.organizer.Watchables(userID(c))
+	if err != nil {
+		app.autoOrganizeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+// maxPipelineRuns runs shown in the Pipeline panel
+const maxPipelineRuns = 20
+
+// pipelineStatus the Pipeline panel: page watch status, the last runs and the
+// rule drawer's defaults. With page watch off it still answers, so the drawer
+// can prefill; only run-now needs the service.
+func (app *ReactAppWrapper) pipelineStatus(c *gin.Context) {
+	out := gin.H{
+		"enabled":         false,
+		"lastRun":         nil,
+		"nextAt":          0,
+		"pendingPipeline": 0,
+		"lastError":       "",
+		"runs":            []pagewatch.RunEntry{},
+		"defaults": gin.H{
+			"prompt": autoorganize.DefaultPipelinePrompt,
+			"model":  autoorganize.DefaultPipelineModel,
+		},
+	}
+	if app.pageWatch != nil {
+		uid := userID(c)
+		st, err := app.pageWatch.Status(uid)
+		if err != nil {
+			app.pipelineError(c, err)
+			return
+		}
+		runs, err := app.pageWatch.Store().LoadRuns(uid)
+		if err != nil {
+			app.pipelineError(c, err)
+			return
+		}
+		if len(runs) > maxPipelineRuns {
+			runs = runs[:maxPipelineRuns]
+		}
+		out["enabled"] = true
+		out["lastRun"] = st.LastRun
+		out["nextAt"] = st.NextAt
+		out["pendingPipeline"] = st.PendingPipeline
+		out["lastError"] = st.LastError
+		out["runs"] = runs
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (app *ReactAppWrapper) pipelineRunNow(c *gin.Context) {
+	if app.pageWatch == nil {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, viewmodel.NewErrorResponse("page watch is not available"))
+		return
+	}
+	run, err := app.pageWatch.RunNow(userID(c))
+	if err != nil {
+		app.pipelineError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, run)
+}
+
+func (app *ReactAppWrapper) pipelineError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, pagewatch.ErrBusy):
+		c.AbortWithStatusJSON(http.StatusConflict, viewmodel.NewErrorResponse(err.Error()))
+	case errors.Is(err, pagewatch.ErrSync10):
+		badReq(c, err.Error())
+	default:
+		log.Error(autoOrganizeLogger, err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, viewmodel.NewErrorResponse(err.Error()))
+	}
 }

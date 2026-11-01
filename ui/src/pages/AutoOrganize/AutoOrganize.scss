@@ -300,3 +300,40 @@
   .ao-card-h, .ao-grp, .ao-add-row, .ao-apply, .ao-skipped { padding-left: 10px; padding-right: 10px; }
   .ao-tabs .right .ao-hint { display: none; }
 }
+
+// pipeline rules: watch picker, prompt, status panel
+.ao-watch { display: flex; flex-direction: column; gap: 8px; }
+.ao-wsel {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  .ao-wcount { font-weight: 600; color: $foreground2; margin-right: 4px; }
+}
+.ao-wchip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; background: var(--ao-accent-bg);
+  color: var(--ao-accent); border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 12.5px;
+  .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  button { background: none; border: 0; color: inherit; font-size: 16px; line-height: 1; padding: 2px 6px; cursor: pointer; border-radius: 999px; }
+  button:hover { background: rgba(255, 255, 255, 0.12); }
+}
+.ao-pick li .p { min-width: 0; overflow-wrap: anywhere; }
+.ao-watch .ao-pick ul { max-height: 220px; }
+.ao-prompt {
+  width: 100%; font: inherit; font-size: 13px; line-height: 1.45; resize: vertical; min-height: 120px;
+  border: 1px solid var(--ao-line); border-radius: 7px; padding: 8px 10px; background: transparent; color: var(--ao-text);
+}
+.ao-prow { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.ao-pipeline {
+  .ao-card-h { flex-wrap: wrap; }
+  .ao-status.bad .dot { background: var(--ao-red); }
+}
+.ao-pruns { padding: 4px 0; }
+.ao-prun {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 16px; border-top: 1px solid var(--ao-line2);
+  .when { min-width: 110px; color: $foreground2; }
+  .trig { color: var(--ao-muted); }
+  .nums { color: $foreground2; }
+  .errbox { flex-basis: 100%; color: var(--ao-red); font-size: 12.5px; overflow-wrap: anywhere; }
+}
+@media (max-width: 640px) {
+  .ao-prun { padding: 8px 10px; .when { min-width: 0; } }
+  .ao-pipeline .ao-card-h .ao-status { flex-basis: 100%; order: 3; white-space: normal; }
+}

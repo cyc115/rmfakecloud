@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import apiService from "../../services/api.service";
 import FolderPicker from "./FolderPicker";
+import WatchPicker from "./WatchPicker";
 import {
-  LATER_TRIGGERS, NO_AUTOMATION_TAG, TRIGGERS,
-  destinationLabel, isPageBased, makeTrigger, patternError, ruleSentence, sourceLabel,
+  ACTIONS, LATER_TRIGGERS, NO_AUTOMATION_TAG, TRIGGERS,
+  destinationLabel, isPageBased, isPipeline, makeTrigger, newPipelineRule, newRule, patternError, pipelineSummary,
+  ruleSentence, sourceLabel,
 } from "./rules";
 
 function num(v) {
@@ -15,6 +17,10 @@ function num(v) {
 function validate(rule, otherRules, folders) {
   const errors = [];
   const warnings = [];
+  if (isPipeline(rule)) {
+    if (!(rule.watch || []).length) errors.push("Pick at least one folder or notebook to watch.");
+    return { errors, warnings };
+  }
   const cm = rule.destination.createIfMissing;
   // the pickers list only folders outside the Trash
   const exists = (id) => (folders || []).some((f) => f.id === id);
@@ -50,15 +56,18 @@ function validate(rule, otherRules, folders) {
   return { errors, warnings };
 }
 
-export default function RuleDrawer({ open, initial, isNew, folders, otherRules, onCancel, onSave, onDelete, onShowPreview }) {
+export default function RuleDrawer({ open, initial, isNew, folders, watchables, pipelineDefaults, otherRules, onCancel, onSave, onDelete, onShowPreview }) {
   const [rule, setRule] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState(null);
   const [matches, setMatches] = useState(null);
   const lastPlan = useRef(null);
+  // the move fields, kept while the action is switched to pipeline and back
+  const moveStash = useRef(null);
 
   useEffect(() => {
     setRule(initial);
+    moveStash.current = null;
     setServerError(null);
     setMatches(null);
   }, [initial]);
@@ -76,7 +85,7 @@ export default function RuleDrawer({ open, initial, isNew, folders, otherRules, 
 
   // live "Matches now", debounced against preview with the draft rule
   useEffect(() => {
-    if (!open || !rule || errors.length) {
+    if (!open || !rule || errors.length || isPipeline(rule)) {
       setMatches(null);
       return;
     }
@@ -103,6 +112,19 @@ export default function RuleDrawer({ open, initial, isNew, folders, otherRules, 
   const updateTrigger = (patch) => setRule((r) => ({ ...r, trigger: { ...r.trigger, ...patch } }));
   const cm = rule.destination.createIfMissing;
   const locked = isPageBased(rule.trigger.type);
+  const pipe = isPipeline(rule);
+  const updateAction = (patch) => setRule((r) => ({ ...r, action: { ...r.action, ...patch } }));
+
+  const setActionType = (type) => {
+    if (type === "pipeline" && !isPipeline(rule)) {
+      moveStash.current = rule;
+      const p = newPipelineRule(pipelineDefaults);
+      setRule((r) => ({ ...p, id: r.id, name: r.name, enabled: r.enabled }));
+    } else if (type === "move" && isPipeline(rule)) {
+      const m = moveStash.current || newRule(folders);
+      setRule((r) => ({ ...m, id: r.id, name: r.name, enabled: r.enabled, watch: r.watch }));
+    }
+  };
 
   const setTriggerType = (type) => {
     setRule((r) => ({ ...r, trigger: makeTrigger(type), scope: isPageBased(type) ? "pdf_epub" : r.scope }));
@@ -136,104 +158,137 @@ export default function RuleDrawer({ open, initial, isNew, folders, otherRules, 
           <button className="x" onClick={onCancel} aria-label="Close">×</button>
         </div>
         <div className="ao-db">
-          <div className="ao-ph">When a document in</div>
-          <FolderPicker label="source folder" folders={folders} selected={rule.source.id}
-            onSelect={(f) => update({ source: { id: f.id, name: f.name } })} />
-
-          <div className="ao-ph">that applies to</div>
-          <div className="ao-radios">
-            {[["pdf_epub", "PDF & EPUB"], ["notebooks", "Notebooks"], ["all", "Both"]].map(([v, l]) => (
-              <label key={v}>
-                <input type="radio" name="ao-scope" value={v} checked={rule.scope === v}
-                  disabled={locked && v !== "pdf_epub"} onChange={() => update({ scope: v })} /> {l}
+          <div className="ao-ph">Action</div>
+          <div className="ao-radios" role="radiogroup" aria-label="Action">
+            {ACTIONS.map((a) => (
+              <label key={a.type}>
+                <input type="radio" name="ao-action" value={a.type} checked={rule.action.type === a.type}
+                  onChange={() => setActionType(a.type)} /> {a.label}
               </label>
             ))}
           </div>
-          <div className="ao-fixed">
-            <span className="ao-chip tag">{NO_AUTOMATION_TAG}</span> Documents carrying this tag are always skipped, by every rule.
-          </div>
 
-          <div className="ao-ph">and</div>
-          <select className="ao-trig" value={t.type} onChange={(e) => setTriggerType(e.target.value)} aria-label="Trigger">
-            {TRIGGERS.map((o) => <option key={o.type} value={o.type}>{o.label}</option>)}
-            {Object.entries(LATER_TRIGGERS).map(([stage, list]) => [
-              <option key={stage} disabled>── {stage} ──</option>,
-              ...list.map((l) => <option key={l} disabled>{l}</option>),
-            ])}
-          </select>
+          {pipe ? (
+            <>
+              <div className="ao-ph">When a page changes in</div>
+              <WatchPicker items={watchables} selected={rule.watch || []} onChange={(watch) => update({ watch })} />
+              <div className="ao-fixed">
+                <span className="ao-chip tag">{NO_AUTOMATION_TAG}</span> Documents carrying this tag are always skipped, by every rule.
+              </div>
 
-          <div className="ao-frag">
-            {t.type === "finished_reading" && (
-              <>
-                and has at least {numInput("minPages", 1)} pages, and hasn't been opened for {numInput("settleHours", 0)} hours
-                <br /><span className="ao-hint">Inclusive: a {t.minPages}-page document counts. Locked to PDF &amp; EPUB. Both lastOpenedPage values are logged in Preview.</span>
-              </>
-            )}
-            {t.type === "read_progress" && (
-              <>at least {numInput("percent", 1, 100)} % of the way, and hasn't been opened for {numInput("settleHours", 0)} hours</>
-            )}
-            {t.type === "not_opened_for_days" && (
-              <>
-                for {numInput("days", 1)} days &nbsp;
-                <label className="chk">
-                  <input type="checkbox" checked={t.minAgeEnabled} onChange={(e) => updateTrigger({ minAgeEnabled: e.target.checked })} />
-                  and is at least {numInput("minAgeDays", 0)} days old
-                </label>
-                <br /><span className="ao-hint">Recommended on: upload-only documents have never been opened and would match immediately.</span>
-              </>
-            )}
-            {t.type === "not_modified_for_days" && (
-              <>for {numInput("days", 1)} days<br /><span className="ao-hint">Annotations count as modifications. Sweeper moves do not reset this clock.</span></>
-            )}
-            {t.type === "name_matches" && (
-              <>
-                matching <input type="text" value={t.pattern} placeholder="glob or /regex/" aria-label="pattern"
-                  onChange={(e) => updateTrigger({ pattern: e.target.value })} />{" "}
-                <span className="ao-hint">case-insensitive · glob (* and ?) or /RE2 regex/</span>
-              </>
-            )}
-            {t.type === "tag_is" && (
-              <>
-                tagged <input type="text" value={t.tag} placeholder="tag name" aria-label="tag"
-                  onChange={(e) => updateTrigger({ tag: e.target.value })} />{" "}
-                <span className="ao-hint">document-level tags from the tablet</span>
-              </>
-            )}
-            {t.type === "age_since_created" && (
-              <>at least {numInput("days", 1)} days ago <span className="ao-hint">createdTime, else lastModified, else first seen</span></>
-            )}
-            {t.type === "pinned_is" && (
-              <>
-                <label className="chk"><input type="radio" name="ao-pin" checked={t.pinned} onChange={() => updateTrigger({ pinned: true })} /> is pinned</label>
-                &nbsp;
-                <label className="chk"><input type="radio" name="ao-pin" checked={!t.pinned} onChange={() => updateTrigger({ pinned: false })} /> is not pinned</label>
-                <br /><span className="ao-hint">This rule ignores the default “skip pinned” guard.</span>
-              </>
-            )}
-          </div>
+              <div className="ao-ph">send new action items to the pipeline using this prompt</div>
+              <textarea className="ao-prompt" rows={8} value={rule.action.prompt} aria-label="prompt"
+                onChange={(e) => updateAction({ prompt: e.target.value })} />
+              <div className="ao-prow">
+                <button type="button" className="ao-btn link sm" disabled={rule.action.prompt === (pipelineDefaults && pipelineDefaults.prompt)}
+                  onClick={() => updateAction({ prompt: (pipelineDefaults && pipelineDefaults.prompt) || "" })}>Reset prompt</button>
+                <span className="ao-hint">Edits apply to new pages only.</span>
+              </div>
 
-          <div className="ao-ph">move it to</div>
-          <FolderPicker label="destination folder" folders={folders} selected={cm ? null : rule.destination.id}
-            onSelect={(f) => update({ destination: { id: f.id, name: f.name } })}
-            extra={
-              <li className={`new ${cm ? "sel" : ""}`} onClick={() => update({ destination: { id: "", name: "", createIfMissing: cm || { name: "", parent: "source" } } })}>
-                + New subfolder of source
-              </li>
-            } />
-          {cm && (
-            <div className="ao-newname">
-              <span>Named</span>
-              <input type="text" placeholder="e.g. Read" value={cm.name} aria-label="new folder name" autoFocus
-                onChange={(e) => update({ destination: { id: "", name: "", createIfMissing: { ...cm, name: e.target.value } } })} />
-              <span className="ao-hint">Created on the first live sweep if no folder of that name exists under {sourceLabel(rule, folders)}.</span>
-            </div>
+              <div className="ao-ph">Model</div>
+              <input type="text" className="ao-namef" value={rule.action.model} aria-label="model"
+                onChange={(e) => updateAction({ model: e.target.value })} />
+            </>
+          ) : (
+            <>
+              <div className="ao-ph">When a document in</div>
+              <FolderPicker label="source folder" folders={folders} selected={rule.source.id}
+                onSelect={(f) => update({ source: { id: f.id, name: f.name } })} />
+
+              <div className="ao-ph">that applies to</div>
+              <div className="ao-radios">
+                {[["pdf_epub", "PDF & EPUB"], ["notebooks", "Notebooks"], ["all", "Both"]].map(([v, l]) => (
+                  <label key={v}>
+                    <input type="radio" name="ao-scope" value={v} checked={rule.scope === v}
+                      disabled={locked && v !== "pdf_epub"} onChange={() => update({ scope: v })} /> {l}
+                  </label>
+                ))}
+              </div>
+              <div className="ao-fixed">
+                <span className="ao-chip tag">{NO_AUTOMATION_TAG}</span> Documents carrying this tag are always skipped, by every rule.
+              </div>
+
+              <div className="ao-ph">and</div>
+              <select className="ao-trig" value={t.type} onChange={(e) => setTriggerType(e.target.value)} aria-label="Trigger">
+                {TRIGGERS.map((o) => <option key={o.type} value={o.type}>{o.label}</option>)}
+                {Object.entries(LATER_TRIGGERS).map(([stage, list]) => [
+                  <option key={stage} disabled>── {stage} ──</option>,
+                  ...list.map((l) => <option key={l} disabled>{l}</option>),
+                ])}
+              </select>
+
+              <div className="ao-frag">
+                {t.type === "finished_reading" && (
+                  <>
+                    and has at least {numInput("minPages", 1)} pages, and hasn't been opened for {numInput("settleHours", 0)} hours
+                    <br /><span className="ao-hint">Inclusive: a {t.minPages}-page document counts. Locked to PDF &amp; EPUB. Both lastOpenedPage values are logged in Preview.</span>
+                  </>
+                )}
+                {t.type === "read_progress" && (
+                  <>at least {numInput("percent", 1, 100)} % of the way, and hasn't been opened for {numInput("settleHours", 0)} hours</>
+                )}
+                {t.type === "not_opened_for_days" && (
+                  <>
+                    for {numInput("days", 1)} days &nbsp;
+                    <label className="chk">
+                      <input type="checkbox" checked={t.minAgeEnabled} onChange={(e) => updateTrigger({ minAgeEnabled: e.target.checked })} />
+                      and is at least {numInput("minAgeDays", 0)} days old
+                    </label>
+                    <br /><span className="ao-hint">Recommended on: upload-only documents have never been opened and would match immediately.</span>
+                  </>
+                )}
+                {t.type === "not_modified_for_days" && (
+                  <>for {numInput("days", 1)} days<br /><span className="ao-hint">Annotations count as modifications. Sweeper moves do not reset this clock.</span></>
+                )}
+                {t.type === "name_matches" && (
+                  <>
+                    matching <input type="text" value={t.pattern} placeholder="glob or /regex/" aria-label="pattern"
+                      onChange={(e) => updateTrigger({ pattern: e.target.value })} />{" "}
+                    <span className="ao-hint">case-insensitive · glob (* and ?) or /RE2 regex/</span>
+                  </>
+                )}
+                {t.type === "tag_is" && (
+                  <>
+                    tagged <input type="text" value={t.tag} placeholder="tag name" aria-label="tag"
+                      onChange={(e) => updateTrigger({ tag: e.target.value })} />{" "}
+                    <span className="ao-hint">document-level tags from the tablet</span>
+                  </>
+                )}
+                {t.type === "age_since_created" && (
+                  <>at least {numInput("days", 1)} days ago <span className="ao-hint">createdTime, else lastModified, else first seen</span></>
+                )}
+                {t.type === "pinned_is" && (
+                  <>
+                    <label className="chk"><input type="radio" name="ao-pin" checked={t.pinned} onChange={() => updateTrigger({ pinned: true })} /> is pinned</label>
+                    &nbsp;
+                    <label className="chk"><input type="radio" name="ao-pin" checked={!t.pinned} onChange={() => updateTrigger({ pinned: false })} /> is not pinned</label>
+                    <br /><span className="ao-hint">This rule ignores the default “skip pinned” guard.</span>
+                  </>
+                )}
+              </div>
+
+              <div className="ao-ph">move it to</div>
+              <FolderPicker label="destination folder" folders={folders} selected={cm ? null : rule.destination.id}
+                onSelect={(f) => update({ destination: { id: f.id, name: f.name } })}
+                extra={
+                  <li className={`new ${cm ? "sel" : ""}`} onClick={() => update({ destination: { id: "", name: "", createIfMissing: cm || { name: "", parent: "source" } } })}>
+                    + New subfolder of source
+                  </li>
+                } />
+              {cm && (
+                <div className="ao-newname">
+                  <span>Named</span>
+                  <input type="text" placeholder="e.g. Read" value={cm.name} aria-label="new folder name" autoFocus
+                    onChange={(e) => update({ destination: { id: "", name: "", createIfMissing: { ...cm, name: e.target.value } } })} />
+                  <span className="ao-hint">Created on the first live sweep if no folder of that name exists under {sourceLabel(rule, folders)}.</span>
+                </div>
+              )}
+
+            </>
           )}
 
-          <div className="ao-ph">Action</div>
-          <div className="ao-act">Move <span className="ao-hint">· other actions (notify digest, tag, pin, rename, trash) arrive in later versions</span></div>
-
           <div className="ao-ph">Name <span className="ao-hint">(optional)</span></div>
-          <input type="text" className="ao-namef" value={rule.name} placeholder={ruleSentence(rule, folders)}
+          <input type="text" className="ao-namef" value={rule.name} placeholder={pipe ? pipelineSummary(rule) : ruleSentence(rule, folders)}
             onChange={(e) => update({ name: e.target.value })} aria-label="rule name" />
 
           {errors.map((e) => <div className="ao-valid" key={e}>⚠ <span>{e}</span></div>)}
@@ -242,13 +297,20 @@ export default function RuleDrawer({ open, initial, isNew, folders, otherRules, 
         </div>
 
         <div className="ao-df">
-          <div className="ao-matches">
-            Matches now:{" "}
-            <span className="n">{matches === null ? "…" : `${matches} document${matches === 1 ? "" : "s"}`}</span>
-            <button className="ao-btn link sm" disabled={matches === null}
-              onClick={() => lastPlan.current && onShowPreview(lastPlan.current)}>▸ show</button>
-            <span className="ao-hint">→ {destinationLabel(rule, folders)}</span>
-          </div>
+          {pipe ? (
+            <div className="ao-matches">
+              <span className="n">{(rule.watch || []).length} watched</span>
+              <span className="ao-hint">Page changes are sent on the next page-watch run.</span>
+            </div>
+          ) : (
+            <div className="ao-matches">
+              Matches now:{" "}
+              <span className="n">{matches === null ? "…" : `${matches} document${matches === 1 ? "" : "s"}`}</span>
+              <button className="ao-btn link sm" disabled={matches === null}
+                onClick={() => lastPlan.current && onShowPreview(lastPlan.current)}>▸ show</button>
+              <span className="ao-hint">→ {destinationLabel(rule, folders)}</span>
+            </div>
+          )}
           <div className="ao-dfb">
             {!isNew && <button className="ao-btn danger" onClick={() => onDelete(rule)}>Delete</button>}
             <span className="ao-spacer" />
