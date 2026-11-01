@@ -16,7 +16,7 @@ const (
 	StateFileName = "page-watch.state.json"
 	// BackupSuffix the previous good state, kept next to the state file
 	BackupSuffix = ".bak"
-	RunsFileName  = "page-watch.runs.json"
+	RunsFileName = "page-watch.runs.json"
 	// MaxRuns the run log keeps this many entries, newest first
 	MaxRuns = 50
 )

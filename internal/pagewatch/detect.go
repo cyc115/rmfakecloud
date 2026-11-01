@@ -12,7 +12,8 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 )
 
-// DefaultMinAge a page blob younger than this is skipped (Input.MinAge 0)
+// DefaultMinAge a page blob younger than this is skipped (the service's
+// default MinAge)
 const DefaultMinAge = 10 * time.Minute
 
 // Input everything Detect reads. Snap must have had AttachPages called.
@@ -24,7 +25,7 @@ type Input struct {
 	// ModTime the blob's write time; an error skips the page (never "old")
 	ModTime func(hash string) (time.Time, error)
 	Now     time.Time
-	// MinAge 0 means DefaultMinAge
+	// MinAge a page blob younger than this is skipped; 0 = no skip window
 	MinAge time.Duration
 	User   string
 }
@@ -63,12 +64,9 @@ const EmptyTreeGuard = 10
 // Detect compares the snapshot with the baselines and plans the events.
 // It is pure: no I/O beyond the Content and ModTime callbacks.
 func Detect(in Input) Plan {
-	if in.MinAge == 0 {
-		in.MinAge = DefaultMinAge
-	}
 	d := &detector{
-		in:       in,
-		base:     in.State.Clone(),
+		in:        in,
+		base:      in.State.Clone(),
 		mtimes:    map[string]mtime{},
 		seenSkip:  map[SkipNote]bool{},
 		skipRules: map[SkipNote]string{},

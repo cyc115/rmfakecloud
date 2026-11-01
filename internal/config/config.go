@@ -85,7 +85,8 @@ const (
 
 	// envRMPagesURL base URL of the rm-pages service; empty turns the page watch off
 	envRMPagesURL = "RM_PAGES_URL"
-	// envPageWatchMinAge page blobs younger than this are skipped (Go duration, default 10m; tests only)
+	// envPageWatchMinAge page blobs younger than this are skipped (Go duration, default 10m, 0s = no
+	// skip window; tests only)
 	envPageWatchMinAge = "PAGEWATCH_MIN_AGE"
 	// envAutoOrganizeInterval default sweep interval (minutes) for users without an auto-organize config
 	envAutoOrganizeInterval = "AUTO_ORGANIZE_INTERVAL"
@@ -121,7 +122,7 @@ type Config struct {
 	HashSchemaVersion string
 	// RMPagesURL base URL of rm-pages, "" = page watch off
 	RMPagesURL string
-	// PageWatchMinAge page blobs younger than this are skipped, 0 = built-in 10m
+	// PageWatchMinAge page blobs younger than this are skipped (default 10m); 0 = no skip window
 	PageWatchMinAge time.Duration
 	// AutoOrganizeInterval bootstrap default sweep interval in minutes, 0 = built-in default
 	AutoOrganizeInterval int
@@ -304,12 +305,9 @@ func FromEnv() *Config {
 		}
 	}
 
-	var pageWatchMinAge time.Duration
-	if v := os.Getenv(envPageWatchMinAge); v != "" {
-		pageWatchMinAge, err = time.ParseDuration(v)
-		if err != nil || pageWatchMinAge < 0 {
-			log.Fatalf("%s must be a Go duration such as 10m, got: %s", envPageWatchMinAge, v)
-		}
+	pageWatchMinAge, err := parsePageWatchMinAge(os.Getenv(envPageWatchMinAge))
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	cfg := Config{
@@ -342,6 +340,22 @@ func FromEnv() *Config {
 }
 
 // normalizeICEServers expands "urls" arrays into singular "url" entries; xochitl rejects anything else
+// DefaultPageWatchMinAge the page watch's skip window when PAGEWATCH_MIN_AGE is unset
+const DefaultPageWatchMinAge = 10 * time.Minute
+
+// parsePageWatchMinAge "" = the default; an explicit duration, 0s included,
+// is taken as is (0 = no skip window)
+func parsePageWatchMinAge(v string) (time.Duration, error) {
+	if v == "" {
+		return DefaultPageWatchMinAge, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("%s must be a Go duration such as 10m (0s = no skip window), got: %s", envPageWatchMinAge, v)
+	}
+	return d, nil
+}
+
 func normalizeICEServers(servers []interface{}) []interface{} {
 	normalized := make([]interface{}, 0, len(servers))
 	for _, s := range servers {
@@ -432,7 +446,7 @@ General:
 	%s	Hash tree schema version: "3" or "4" (default: 3)
 	%s	Auto-organize default sweep interval for users without a config: 5, 10, 15, 30 or 60 minutes (default: 15)
 	%s	Base URL of the rm-pages service; empty turns the page watch off (default: off)
-	%s	Page watch skips page blobs younger than this Go duration, for tests (default: 10m)
+	%s	Page watch skips page blobs younger than this Go duration, for tests; 0s = no skip window (default: 10m)
 	%s	Sentry/GlitchTip DSN the server reports its errors to (default: off)
 	%s	DSN the web UI reports to, if browsers reach GlitchTip by another host (default: GLITCHTIP_DSN)
 

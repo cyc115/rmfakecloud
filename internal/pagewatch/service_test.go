@@ -735,3 +735,10 @@ func TestEmptyTreeSkipsRunWithError(t *testing.T) {
 		t.Fatalf("%d detect errors, want 1", n)
 	}
 }
+
+func TestServiceDefaultMinAge(t *testing.T) {
+	e := newSvcEnv(t)
+	if s := NewService(e.st, e.cfgs, e.sender); s.MinAge != DefaultMinAge {
+		t.Fatalf("MinAge = %v", s.MinAge)
+	}
+}

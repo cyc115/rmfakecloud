@@ -62,7 +62,8 @@ type Service struct {
 
 	// Now the clock, replaceable in tests
 	Now func() time.Time
-	// MinAge a page blob younger than this is skipped; 0 means DefaultMinAge
+	// MinAge a page blob younger than this is skipped (DefaultMinAge unless
+	// set); 0 = no skip window
 	MinAge time.Duration
 	// UserRescan how often the user list is re-read to start new loops
 	UserRescan time.Duration
@@ -95,7 +96,7 @@ type userLoop struct {
 	missingAlerted map[string]bool
 	// missing the last run's missing watch entries, for Status
 	missing atomic.Value // []MissingWatch
-	started bool // guarded by Service.mu
+	started bool         // guarded by Service.mu
 	nextAt  atomic.Int64
 	// pending pipeline events not accepted by the last run
 	pending atomic.Int64
@@ -110,6 +111,7 @@ func NewService(st autoorganize.Storage, cfgs *autoorganize.Store, sender Sender
 		sender:       sender,
 		store:        NewStore(st.UserDataPath),
 		Now:          time.Now,
+		MinAge:       DefaultMinAge,
 		UserRescan:   time.Minute,
 		IntervalUnit: time.Minute,
 		ChunkEvents:  DefaultChunkEvents,

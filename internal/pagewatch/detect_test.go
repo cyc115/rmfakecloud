@@ -135,7 +135,7 @@ func (e *env) snapshot() (*autoorganize.Snapshot, func(*autoorganize.DocSnap) au
 func (e *env) input(snap *autoorganize.Snapshot, content func(*autoorganize.DocSnap) autoorganize.ContentInfo) Input {
 	return Input{
 		Snap: snap, Config: e.cfg, State: e.state, Content: content,
-		ModTime: e.modTime, Now: e.now, User: uid,
+		ModTime: e.modTime, Now: e.now, MinAge: DefaultMinAge, User: uid,
 	}
 }
 
@@ -1214,5 +1214,21 @@ func TestEmptyTreeWithFewKnownDocsPrunes(t *testing.T) {
 	}
 	if st := p.Advance(all(p)); len(st.Feed) != 0 || len(st.Seen) != 0 {
 		t.Fatalf("not pruned: %+v", st)
+	}
+}
+
+func TestZeroMinAgeHasNoSkipWindow(t *testing.T) {
+	e := newEnv(t)
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.sweep()
+	e.page("nb", "p1", "strokes_ab.rm")
+	e.recent[e.pageHash("nb", "p1")] = true
+	e.now = e.now.Add(time.Minute)
+	snap, content := e.snapshot()
+	in := e.input(snap, content)
+	in.MinAge = 0
+	if p := Detect(in); len(p.Feed) != 1 || len(p.Skipped) != 0 {
+		t.Fatalf("feed %d skipped %+v", len(p.Feed), p.Skipped)
 	}
 }
