@@ -318,7 +318,7 @@ type ContentInfo struct {
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 7
+const contentParseVersion = 8
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -405,8 +405,9 @@ func ParseContent(b []byte) ContentInfo {
 // (array order). A "pages" value of another shape is an error, not zero pages.
 //
 // unusable is true when cPages.pages holds no object with a string id (empty,
-// or only junk): with pageCount > 0 that is a broken list, not zero pages
-// (R26). A list whose pages are all deleted is a real zero.
+// or only junk), or a v1 "pages" array holds no id: with pageCount > 0 that is
+// a broken list, not zero pages (R26, R38). A cPages list whose pages are all
+// deleted is a real zero.
 func pageOrder(raw map[string]any) (out []string, unusable bool, err error) {
 	if c := raw["cPages"]; c != nil {
 		if _, ok := c.(map[string]any); !ok {
@@ -415,8 +416,9 @@ func pageOrder(raw map[string]any) (out []string, unusable bool, err error) {
 	}
 	cp, _ := raw["cPages"].(map[string]any)
 	if cp["pages"] == nil {
+		// a v1 list cannot say "all deleted": present but empty is unusable
 		out, err = v1PageOrder(raw["pages"])
-		return out, false, err
+		return out, raw["pages"] != nil && len(out) == 0, err
 	}
 	items, ok := cp["pages"].([]any)
 	if !ok {
