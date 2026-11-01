@@ -68,6 +68,15 @@
 // doc/page is skipped more than LagRuns runs in a row; the streak resets when
 // the skip stops.
 //
+// # Guards
+//
+//   - A watch entry whose folder or doc id is gone from the tree is listed in
+//     Plan.MissingWatches; the service logs one Error per (rule, id) streak
+//     and the Pipeline panel flags the rule.
+//   - A snapshot with no documents while the state knows more than
+//     EmptyTreeGuard is a broken tree read: Plan.Abort is set, the run sends
+//     and saves nothing and logs an Error (pruning would drop every baseline).
+//
 // Trace ids are deterministic (TraceID): the same change gets the same id on
 // every sweep until it is accepted.
 //

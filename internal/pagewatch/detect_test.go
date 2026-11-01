@@ -3,6 +3,7 @@ package pagewatch
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
@@ -1148,5 +1149,70 @@ func TestLeavingClearsJoinStart(t *testing.T) {
 	e.sweep()
 	if rs := ruleState(e.state, "r1"); len(rs.JoinStartedAt) != 0 {
 		t.Fatalf("join start kept after leaving: %+v", rs)
+	}
+}
+
+func TestMissingWatchEntriesReported(t *testing.T) {
+	e := newEnv(t)
+	e.ft.Folder("w", "Watched", "")
+	e.ft.Notebook("nb", "Notes", "w")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.rule("r1", folderWatch(autoorganize.RootID), folderWatch("w"), docWatch("nb"),
+		autoorganize.WatchRef{ID: "gone-f", Kind: autoorganize.WatchFolder, Name: "Old"}, docWatch("gone-d"))
+	p := e.detect()
+	want := []MissingWatch{
+		{RuleID: "r1", WatchID: "gone-f", Kind: autoorganize.WatchFolder, Name: "Old"},
+		{RuleID: "r1", WatchID: "gone-d", Kind: autoorganize.WatchDocument},
+	}
+	if !reflect.DeepEqual(p.MissingWatches, want) {
+		t.Fatalf("missing = %+v", p.MissingWatches)
+	}
+	// a disabled rule reports nothing
+	e.cfg.Rules[0].Enabled = false
+	if p := e.detect(); len(p.MissingWatches) != 0 {
+		t.Fatalf("disabled rule reported %+v", p.MissingWatches)
+	}
+}
+
+func TestEmptyTreeWithManyKnownDocsAborts(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	for i := 0; i <= EmptyTreeGuard; i++ {
+		id := fmt.Sprintf("nb%02d", i)
+		e.ft.Notebook(id, id, "")
+		e.page(id, "p1", "strokes_a.rm")
+	}
+	e.sweep()
+	e.sweep()
+	before := stateJSON(t, e.state)
+	for id := range e.ft.Docs {
+		delete(e.ft.Docs, id)
+	}
+	p := e.detect()
+	if p.Abort == "" || len(p.Feed)+len(p.Pipeline) != 0 {
+		t.Fatalf("plan abort=%q feed=%d pipeline=%d", p.Abort, len(p.Feed), len(p.Pipeline))
+	}
+	if got := stateJSON(t, p.Advance(all(p))); got != before {
+		t.Fatalf("aborted plan changed the state:\n%s\n%s", got, before)
+	}
+}
+
+func TestEmptyTreeWithFewKnownDocsPrunes(t *testing.T) {
+	e := newEnv(t)
+	for i := 0; i < EmptyTreeGuard; i++ {
+		id := fmt.Sprintf("nb%02d", i)
+		e.ft.Notebook(id, id, "")
+		e.page(id, "p1", "strokes_a.rm")
+	}
+	e.sweep()
+	for id := range e.ft.Docs {
+		delete(e.ft.Docs, id)
+	}
+	p := e.detect()
+	if p.Abort != "" {
+		t.Fatalf("aborted with %d known docs", EmptyTreeGuard)
+	}
+	if st := p.Advance(all(p)); len(st.Feed) != 0 || len(st.Seen) != 0 {
+		t.Fatalf("not pruned: %+v", st)
 	}
 }

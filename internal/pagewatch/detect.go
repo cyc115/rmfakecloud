@@ -38,9 +38,27 @@ type Plan struct {
 	Skipped  []SkipNote `json:"skipped"`
 	// SkipRules the first pipeline rule a skipped page was evaluated for
 	// (absent when only the feed saw it)
-	SkipRules map[SkipNote]string                   `json:"-"`
-	Advance   func(accepted map[string]bool) *State `json:"-"`
+	SkipRules map[SkipNote]string `json:"-"`
+	// MissingWatches watch entries of enabled pipeline rules whose id is not
+	// in the tree (the folder or doc was deleted): the rule watches nothing there
+	MissingWatches []MissingWatch `json:"missingWatches"`
+	// Abort non-empty: the snapshot cannot be trusted; send nothing, save
+	// nothing (Advance returns the input state unchanged)
+	Abort   string                                `json:"abort,omitempty"`
+	Advance func(accepted map[string]bool) *State `json:"-"`
 }
+
+// MissingWatch a rule's watch entry that names an id gone from the tree
+type MissingWatch struct {
+	RuleID  string `json:"ruleId"`
+	WatchID string `json:"watchId"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name,omitempty"`
+}
+
+// EmptyTreeGuard a snapshot with no documents while the state knows more
+// than this many is taken as a broken tree read, not a wiped tablet
+const EmptyTreeGuard = 10
 
 // Detect compares the snapshot with the baselines and plans the events.
 // It is pure: no I/O beyond the Content and ModTime callbacks.
@@ -59,6 +77,12 @@ func Detect(in Input) Plan {
 		// no page lists: any comparison would read as "every page deleted"
 		d.skip(SkipNote{Reason: SkipNotAttached})
 		return d.plan()
+	}
+	if n := knownDocs(d.base); n > EmptyTreeGuard && !hasDocs(in.Snap) {
+		// pruning on this snapshot would forget every baseline
+		p := d.plan()
+		p.Abort = "the tree has no documents but the state knows " + strconv.Itoa(n) + "; run skipped"
+		return p
 	}
 	d.collectDocs()
 	d.recordSeen()
@@ -123,6 +147,7 @@ type detector struct {
 	skipRules map[SkipNote]string
 	effects   []effect
 	joins     []join
+	missing   []MissingWatch
 }
 
 func (d *detector) skip(n SkipNote) { d.skipFor(n, "") }
@@ -146,13 +171,35 @@ func (d *detector) onAccept(trace string, f func(*State)) {
 	d.effects = append(d.effects, effect{trace: trace, apply: f})
 }
 
+// knownDocs the docs the state holds baselines or a first sighting for
+func knownDocs(s *State) int {
+	docs := map[string]bool{}
+	for id := range s.Seen {
+		docs[id] = true
+	}
+	for id := range pagesOf(s.Feed) {
+		docs[id] = true
+	}
+	return len(docs)
+}
+
+func hasDocs(snap *autoorganize.Snapshot) bool {
+	for _, s := range snap.Docs {
+		if !s.IsFolder() {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *detector) plan() Plan {
 	base, effects, joins := d.base, d.effects, d.joins
 	return Plan{
-		Feed:      d.feedEvs,
-		Pipeline:  d.pipeEvs,
-		Skipped:   d.skips,
-		SkipRules: d.skipRules,
+		Feed:           d.feedEvs,
+		Pipeline:       d.pipeEvs,
+		Skipped:        d.skips,
+		SkipRules:      d.skipRules,
+		MissingWatches: d.missing,
 		Advance: func(accepted map[string]bool) *State {
 			s := base.Clone()
 			for _, e := range effects {
@@ -489,6 +536,14 @@ func (d *detector) rule(r *autoorganize.Rule) {
 	base := d.base.Rules[r.ID]
 	if base == nil {
 		base = newRuleState()
+	}
+	for _, w := range r.Watch {
+		if w.ID == autoorganize.RootID {
+			continue
+		}
+		if _, ok := d.in.Snap.Docs[w.ID]; !ok {
+			d.missing = append(d.missing, MissingWatch{RuleID: r.ID, WatchID: w.ID, Kind: w.Kind, Name: w.Name})
+		}
 	}
 	held := pagesOf(base.Baselines)
 	known := func(doc string) bool {

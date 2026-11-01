@@ -223,6 +223,7 @@ func (app *ReactAppWrapper) pipelineStatus(c *gin.Context) {
 		"nextAt":          0,
 		"pendingPipeline": 0,
 		"lastError":       "",
+		"missingWatches":  []pagewatch.MissingWatch{},
 		"runs":            []pagewatch.RunEntry{},
 		"defaults": gin.H{
 			"prompt": autoorganize.DefaultPipelinePrompt,
@@ -249,6 +250,7 @@ func (app *ReactAppWrapper) pipelineStatus(c *gin.Context) {
 		out["nextAt"] = st.NextAt
 		out["pendingPipeline"] = st.PendingPipeline
 		out["lastError"] = st.LastError
+		out["missingWatches"] = st.MissingWatches
 		out["runs"] = runs
 	}
 	c.JSON(http.StatusOK, out)

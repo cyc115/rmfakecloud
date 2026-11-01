@@ -637,3 +637,101 @@ func TestSkipErrorCarriesRuleAndPage(t *testing.T) {
 		t.Fatalf("fields %v", d)
 	}
 }
+
+func TestMissingWatchLogsOncePerStreakAndShowsInStatus(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	e.ft.Folder("w", "Watched", "")
+	if err := e.ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Rules = append(e.cfg.Rules, autoorganize.Rule{
+		ID: "r1", Enabled: true, Scope: autoorganize.ScopeAll,
+		Trigger: autoorganize.Trigger{Type: autoorganize.TriggerPageChanged},
+		Action:  autoorganize.Action{Type: autoorganize.ActionPipeline, Prompt: "p", Model: "m"},
+		Watch:   []autoorganize.WatchRef{folderWatch("w")},
+	})
+	e.save()
+	missingErrs := func() []*log.Entry {
+		var out []*log.Entry
+		for _, en := range hook.AllEntries() {
+			if en.Level == log.ErrorLevel && en.Data["watch_id"] == "w" {
+				out = append(out, en)
+			}
+		}
+		return out
+	}
+	e.run()
+	if v, _ := e.svc.Status(uid); len(v.MissingWatches) != 0 || len(missingErrs()) != 0 {
+		t.Fatalf("present folder reported missing: %+v", v.MissingWatches)
+	}
+	delete(e.ft.Docs, "w")
+	if err := e.ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	e.run()
+	e.run()
+	got := missingErrs()
+	if len(got) != 1 || got[0].Data["rule_id"] != "r1" || got[0].Data["stage"] != "detect" {
+		t.Fatalf("missing errors %v", got)
+	}
+	v, _ := e.svc.Status(uid)
+	if len(v.MissingWatches) != 1 || v.MissingWatches[0].RuleID != "r1" || v.MissingWatches[0].WatchID != "w" {
+		t.Fatalf("status %+v", v.MissingWatches)
+	}
+	e.ft.Folder("w", "Watched", "") // restored: the streak ends
+	if err := e.ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	e.run()
+	if v, _ := e.svc.Status(uid); len(v.MissingWatches) != 0 {
+		t.Fatalf("status after restore %+v", v.MissingWatches)
+	}
+	delete(e.ft.Docs, "w")
+	if err := e.ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	e.run()
+	if n := len(missingErrs()); n != 2 {
+		t.Fatalf("%d missing errors after the second streak, want 2", n)
+	}
+}
+
+func TestEmptyTreeSkipsRunWithError(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	for i := 0; i <= EmptyTreeGuard; i++ {
+		id := fmt.Sprintf("nb%02d", i)
+		e.ft.Notebook(id, id, "")
+		e.page(id, "p1", "strokes_a.rm")
+	}
+	e.run()
+	statePath := filepath.Join(e.st.UserDataPath(uid), StateFileName)
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id := range e.ft.Docs {
+		delete(e.ft.Docs, id)
+	}
+	if err := e.ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	calls := e.sender.count()
+	r, err := e.svc.RunNow(uid)
+	if err == nil || r == nil || r.Error == "" {
+		t.Fatalf("run %+v err %v", r, err)
+	}
+	if e.sender.count() != calls {
+		t.Fatal("an untrusted snapshot was sent")
+	}
+	after, _ := os.ReadFile(statePath)
+	if string(after) != string(before) {
+		t.Fatal("state saved on an empty tree")
+	}
+	if n := len(lagErrors(hook)); n != 1 {
+		t.Fatalf("%d detect errors, want 1", n)
+	}
+}

@@ -91,6 +91,10 @@ type userLoop struct {
 	// streaks that already logged their Error
 	skips       map[string]int
 	skipAlerted map[string]bool
+	// missingAlerted the (rule, watch id) entries already reported missing
+	missingAlerted map[string]bool
+	// missing the last run's missing watch entries, for Status
+	missing atomic.Value // []MissingWatch
 	started bool // guarded by Service.mu
 	nextAt  atomic.Int64
 	// pending pipeline events not accepted by the last run
@@ -130,8 +134,10 @@ func (s *Service) loopLocked(uid string) *userLoop {
 			uid: uid, cache: map[string]autoorganize.ContentInfo{},
 			lag: map[string]int{}, alerted: map[string]bool{},
 			skips: map[string]int{}, skipAlerted: map[string]bool{},
+			missingAlerted: map[string]bool{},
 		}
 		ul.lastErr.Store("")
+		ul.missing.Store([]MissingWatch{})
 		s.users[uid] = ul
 	}
 	return ul
@@ -255,6 +261,8 @@ type StatusView struct {
 	// take (all of them in dry mode)
 	PendingPipeline int    `json:"pendingPipeline"`
 	LastError       string `json:"lastError"`
+	// MissingWatches watch entries whose folder or doc no longer exists
+	MissingWatches []MissingWatch `json:"missingWatches"`
 }
 
 // Status of uid's watcher
@@ -269,6 +277,7 @@ func (s *Service) Status(uid string) (*StatusView, error) {
 	ul := s.loop(uid)
 	v := &StatusView{NextAt: ul.nextAt.Load(), PendingPipeline: int(ul.pending.Load())}
 	v.LastError, _ = ul.lastErr.Load().(string)
+	v.MissingWatches, _ = ul.missing.Load().([]MissingWatch)
 	if len(runs) > 0 {
 		v.LastRun = &runs[0]
 	}
@@ -322,8 +331,12 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 			delete(ul.cache, h)
 		}
 	}
+	if plan.Abort != "" {
+		return fail("snapshot not trusted", errors.New(plan.Abort), nil)
+	}
 	run.Feed, run.Pipeline, run.Skipped = len(plan.Feed), len(plan.Pipeline), len(plan.Skipped)
 	s.trackSkips(ul, plan)
+	s.trackMissing(ul, plan)
 
 	// dry mode sends the feed only; the pipeline events stay planned, so their
 	// baselines do not move
@@ -537,4 +550,28 @@ func (s *Service) trackSkips(ul *userLoop, plan Plan) {
 			delete(ul.skipAlerted, key)
 		}
 	}
+}
+
+// trackMissing logs one Error per (rule, watch id) when a watched folder or
+// doc disappears from the tree, again only after it came back and went
+// missing anew; Status shows the current list.
+func (s *Service) trackMissing(ul *userLoop, plan Plan) {
+	seen := map[string]bool{}
+	for _, m := range plan.MissingWatches {
+		key := m.RuleID + "|" + m.WatchID
+		seen[key] = true
+		if ul.missingAlerted[key] {
+			continue
+		}
+		ul.missingAlerted[key] = true
+		log.WithFields(log.Fields{
+			"stage": "detect", "user": ul.uid, "rule_id": m.RuleID, "watch_id": m.WatchID, "watch_kind": m.Kind,
+		}).Error(logPrefix, "watched ", m.Kind, " ", m.WatchID, " no longer exists")
+	}
+	for key := range ul.missingAlerted {
+		if !seen[key] {
+			delete(ul.missingAlerted, key)
+		}
+	}
+	ul.missing.Store(append([]MissingWatch{}, plan.MissingWatches...))
 }
