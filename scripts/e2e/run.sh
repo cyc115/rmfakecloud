@@ -16,7 +16,9 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cleanup() {
   ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; rm -rf $DATA $REMOTE" || true
 }
-[ -n "${E2E_KEEP:-}" ] || trap cleanup EXIT INT TERM
+[ -n "${E2E_KEEP:-}" ] || trap cleanup EXIT
+trap "exit 130" INT
+trap "exit 143" TERM
 cleanup
 
 echo ">> rsync + build image"
