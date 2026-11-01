@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/ddvk/rmfakecloud/internal/email"
 	log "github.com/sirupsen/logrus"
@@ -82,6 +83,10 @@ const (
 	envICEServers        = "ICE_SERVERS"
 	envHashSchemaVersion = "HASH_SCHEMA_VERSION"
 
+	// envRMPagesURL base URL of the rm-pages service; empty turns the page watch off
+	envRMPagesURL = "RM_PAGES_URL"
+	// envPageWatchMinAge page blobs younger than this are skipped (Go duration, default 10m; tests only)
+	envPageWatchMinAge = "PAGEWATCH_MIN_AGE"
 	// envAutoOrganizeInterval default sweep interval (minutes) for users without an auto-organize config
 	envAutoOrganizeInterval = "AUTO_ORGANIZE_INTERVAL"
 
@@ -114,6 +119,10 @@ type Config struct {
 	MQTTPort          string
 	ICEServers        []interface{}
 	HashSchemaVersion string
+	// RMPagesURL base URL of rm-pages, "" = page watch off
+	RMPagesURL string
+	// PageWatchMinAge page blobs younger than this are skipped, 0 = built-in 10m
+	PageWatchMinAge time.Duration
 	// AutoOrganizeInterval bootstrap default sweep interval in minutes, 0 = built-in default
 	AutoOrganizeInterval int
 	// GlitchtipDSN DSN the server reports its errors to, "" = off
@@ -295,6 +304,14 @@ func FromEnv() *Config {
 		}
 	}
 
+	var pageWatchMinAge time.Duration
+	if v := os.Getenv(envPageWatchMinAge); v != "" {
+		pageWatchMinAge, err = time.ParseDuration(v)
+		if err != nil || pageWatchMinAge < 0 {
+			log.Fatalf("%s must be a Go duration such as 10m, got: %s", envPageWatchMinAge, v)
+		}
+	}
+
 	cfg := Config{
 		Port:              port,
 		StorageURL:        uploadURL,
@@ -316,6 +333,8 @@ func FromEnv() *Config {
 		HashSchemaVersion: hashSchemaVersion,
 
 		AutoOrganizeInterval: autoOrganizeInterval,
+		RMPagesURL:           os.Getenv(envRMPagesURL),
+		PageWatchMinAge:      pageWatchMinAge,
 		GlitchtipDSN:         glitchtipDSN,
 		GlitchtipBrowserDSN:  glitchtipBrowserDSN,
 	}
@@ -412,6 +431,8 @@ General:
 	%s	Trust the proxy for X-Forwarded-For/X-Real-IP (set only if behind a proxy)
 	%s	Hash tree schema version: "3" or "4" (default: 3)
 	%s	Auto-organize default sweep interval for users without a config: 5, 10, 15, 30 or 60 minutes (default: 15)
+	%s	Base URL of the rm-pages service; empty turns the page watch off (default: off)
+	%s	Page watch skips page blobs younger than this Go duration, for tests (default: 10m)
 	%s	Sentry/GlitchTip DSN the server reports its errors to (default: off)
 	%s	DSN the web UI reports to, if browsers reach GlitchTip by another host (default: GLITCHTIP_DSN)
 
@@ -452,6 +473,8 @@ myScript hwr (needs a developer account):
 		envTrustProxy,
 		envHashSchemaVersion,
 		envAutoOrganizeInterval,
+		envRMPagesURL,
+		envPageWatchMinAge,
 		envGlitchtipDSN,
 		envGlitchtipBrowserDSN,
 

@@ -248,3 +248,52 @@ func TestNilClientGinRecoveryPassesThrough(t *testing.T) {
 		t.Errorf("status %d", w.Code)
 	}
 }
+
+func TestEventTagsInEnvelope(t *testing.T) {
+	f := newFake(t)
+	c := newClient(t, f)
+	if _, err := c.CaptureSync(glitchtip.Event{Value: "x", Tags: map[string]string{"trace_id": "abc", "stage": "deliver"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CaptureSync(glitchtip.Event{Value: "no tags"}); err != nil {
+		t.Fatal(err)
+	}
+	got := f.got()
+	tags, _ := got[0]["tags"].(map[string]any)
+	if tags["trace_id"] != "abc" || tags["stage"] != "deliver" {
+		t.Errorf("tags %v", got[0]["tags"])
+	}
+	if _, ok := got[1]["tags"]; ok {
+		t.Errorf("empty tags sent: %v", got[1]["tags"])
+	}
+}
+
+func TestHookLiftsTraceFieldsToTags(t *testing.T) {
+	f := newFake(t)
+	c := newClient(t, f)
+	log := logrus.New()
+	log.SetOutput(io.Discard)
+	log.AddHook(glitchtip.Hook{C: c})
+
+	log.WithFields(logrus.Fields{
+		"trace_id": "t1", "stage": "detect", "doc_id": "d1", "page_id": "p1", "rule_id": "r1", "user": "mike",
+	}).Error("lagging")
+	c.Flush(5 * time.Second)
+
+	ev := f.got()[0]
+	tags, _ := ev["tags"].(map[string]any)
+	for k, want := range map[string]string{"trace_id": "t1", "stage": "detect", "doc_id": "d1", "page_id": "p1", "rule_id": "r1"} {
+		if tags[k] != want {
+			t.Errorf("tag %s = %v, want %s", k, tags[k], want)
+		}
+	}
+	extra, _ := ev["extra"].(map[string]any)
+	if extra["user"] != "mike" {
+		t.Errorf("extra %v", extra)
+	}
+	for _, k := range []string{"trace_id", "stage", "doc_id", "page_id", "rule_id"} {
+		if _, ok := extra[k]; ok {
+			t.Errorf("%s left in extra", k)
+		}
+	}
+}

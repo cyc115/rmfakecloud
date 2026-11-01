@@ -68,11 +68,13 @@ func New(dsn, release string) (*Client, error) {
 
 // Event is one error report. Frames are oldest first.
 type Event struct {
-	Level   string // "error", "fatal"
-	Type    string
-	Value   string
-	Frames  []Frame
-	Extra   map[string]any
+	Level  string // "error", "fatal"
+	Type   string
+	Value  string
+	Frames []Frame
+	Extra  map[string]any
+	// Tags are searchable in GlitchTip (trace_id, stage, ...)
+	Tags    map[string]string
 	Request *Request
 }
 
@@ -213,6 +215,9 @@ func (c *Client) envelope(ev Event) (string, []byte) {
 	}
 	if len(ev.Extra) > 0 {
 		event["extra"] = ev.Extra
+	}
+	if len(ev.Tags) > 0 {
+		event["tags"] = ev.Tags
 	}
 	if ev.Request != nil {
 		event["request"] = ev.Request

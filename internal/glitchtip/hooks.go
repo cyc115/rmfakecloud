@@ -80,6 +80,9 @@ func shortFile(path string) string {
 	return path
 }
 
+// tagFields the logrus fields that become searchable tags instead of extra
+var tagFields = map[string]bool{"trace_id": true, "stage": true, "doc_id": true, "page_id": true, "rule_id": true}
+
 // Hook reports logrus entries at Error, Fatal and Panic.
 type Hook struct{ C *Client }
 
@@ -101,6 +104,13 @@ func (h Hook) Fire(e *logrus.Entry) error {
 	if len(e.Data) > 0 {
 		ev.Extra = make(map[string]any, len(e.Data))
 		for k, v := range e.Data {
+			if tagFields[k] {
+				if ev.Tags == nil {
+					ev.Tags = map[string]string{}
+				}
+				ev.Tags[k] = fmt.Sprint(v)
+				continue
+			}
 			ev.Extra[k] = fmt.Sprint(v)
 		}
 		if err, ok := e.Data[logrus.ErrorKey].(error); ok {

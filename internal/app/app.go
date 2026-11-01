@@ -18,6 +18,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/glitchtip"
 	"github.com/ddvk/rmfakecloud/internal/hwr"
 	"github.com/ddvk/rmfakecloud/internal/mqtt"
+	"github.com/ddvk/rmfakecloud/internal/pagewatch"
 	"github.com/ddvk/rmfakecloud/internal/screenshare"
 	"github.com/ddvk/rmfakecloud/internal/storage"
 
@@ -50,7 +51,14 @@ type App struct {
 	roomManager   *screenshare.RoomManager
 	organizer     *autoorganize.Service
 	stopOrganizer context.CancelFunc
+	// pageWatch sends page changes to rm-pages; nil unless RM_PAGES_URL is set.
+	// The page-watch HTTP handlers reach it through the App (not ui.New).
+	pageWatch     *pagewatch.Service
+	stopPageWatch context.CancelFunc
 }
+
+// PageWatch the page watch service, nil when RM_PAGES_URL is not set
+func (app *App) PageWatch() *pagewatch.Service { return app.pageWatch }
 
 // Start starts the app
 func (app *App) Start() {
@@ -90,6 +98,11 @@ func (app *App) Start() {
 	organizerCtx, stopOrganizer := context.WithCancel(context.Background())
 	app.stopOrganizer = stopOrganizer
 	app.organizer.Start(organizerCtx)
+	if app.pageWatch != nil {
+		pwCtx, stopPW := context.WithCancel(context.Background())
+		app.stopPageWatch = stopPW
+		app.pageWatch.Start(pwCtx)
+	}
 
 	app.srv = &http.Server{
 		Addr:      ":" + app.cfg.Port,
@@ -127,6 +140,19 @@ func (app *App) Stop() {
 		case <-done:
 		case <-time.After(3 * time.Second):
 			log.Warn("auto-organize: sweeper did not stop in time")
+		}
+	}
+	if app.stopPageWatch != nil {
+		app.stopPageWatch()
+		done := make(chan struct{})
+		go func() {
+			app.pageWatch.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			log.Warn("page-watch: watcher did not stop in time")
 		}
 	}
 	if app.mqttBroker != nil {
@@ -199,6 +225,12 @@ func NewApp(cfg *config.Config) App {
 		hwrClient: &hwr.HWRClient{
 			Cfg: cfg,
 		},
+	}
+
+	if cfg.RMPagesURL != "" {
+		pw := pagewatch.NewService(fsStorage, organizer.Store(), pagewatch.NewHTTPSender(cfg.RMPagesURL, nil))
+		pw.MinAge = cfg.PageWatchMinAge
+		app.pageWatch = pw
 	}
 
 	roomMgr := screenshare.NewRoomManager()
