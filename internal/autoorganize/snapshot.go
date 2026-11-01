@@ -33,6 +33,22 @@ type DocSnap struct {
 	Hash           string
 	ContentHash    string
 	Fingerprint    string
+	// PDFHash hash of the <doc>.pdf entry, empty when there is none
+	PDFHash string
+	// Pages the live cPages pages in idx order; filled by AttachPages
+	Pages []PageSnap
+
+	// pageHashes page id to the hash of its <doc>/<id>.rm entry
+	pageHashes map[string]string
+}
+
+// PageSnap one page of a document
+type PageSnap struct {
+	ID string
+	// Hash of the page's .rm blob; empty for a blank page
+	Hash string
+	// Index position in cPages order, from 0
+	Index int
 }
 
 // IsFolder a collection
@@ -94,7 +110,35 @@ func snapDoc(d *models.HashDoc) *DocSnap {
 		snap.ContentHash = e.Hash
 	}
 	snap.Fingerprint = fingerprint(d)
+	for _, f := range d.Files {
+		switch {
+		case f.EntryName == d.EntryName+".pdf":
+			snap.PDFHash = f.Hash
+		case strings.HasPrefix(f.EntryName, d.EntryName+"/") && strings.HasSuffix(f.EntryName, ".rm"):
+			id := strings.TrimSuffix(strings.TrimPrefix(f.EntryName, d.EntryName+"/"), ".rm")
+			if snap.pageHashes == nil {
+				snap.pageHashes = map[string]string{}
+			}
+			snap.pageHashes[id] = f.Hash
+		}
+	}
 	return snap
+}
+
+// AttachPages fills Pages of every document from its .content PageOrder and
+// its .rm entries. Entries that are not in cPages (toc.rm) and deleted pages
+// are left out; a page without an .rm entry (blank) has no Hash.
+func (s *Snapshot) AttachPages(content func(*DocSnap) ContentInfo) {
+	for _, d := range s.Docs {
+		if d.IsFolder() || d.ContentHash == "" {
+			continue
+		}
+		ci := content(d)
+		d.Pages = nil
+		for i, id := range ci.PageOrder {
+			d.Pages = append(d.Pages, PageSnap{ID: id, Hash: d.pageHashes[id], Index: i})
+		}
+	}
 }
 
 func contentEntry(d *models.HashDoc) *models.HashEntry {
@@ -245,7 +289,14 @@ type ContentInfo struct {
 	PageCount      int      `json:"pageCount"`
 	LastOpenedPage int      `json:"lastOpenedPage"`
 	Tags           []string `json:"tags,omitempty"`
+	// PageOrder ids of the live cPages pages, sorted by idx.value
+	PageOrder []string `json:"pageOrder,omitempty"`
+	// ParseVersion the parser that wrote the entry; older entries are re-read
+	ParseVersion int `json:"parseVersion,omitempty"`
 }
+
+// contentParseVersion bump when ParseContent starts reading more fields
+const contentParseVersion = 2
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -295,7 +346,7 @@ func ParseContent(b []byte) ContentInfo {
 	if err := dec.Decode(&raw); err != nil {
 		return ContentInfo{Error: "cannot parse .content: " + err.Error()}
 	}
-	info := ContentInfo{}
+	info := ContentInfo{ParseVersion: contentParseVersion}
 	if s, ok := raw["fileType"].(string); ok {
 		info.FileType = s
 	}
@@ -313,7 +364,35 @@ func ParseContent(b []byte) ContentInfo {
 			}
 		}
 	}
+	info.PageOrder = pageOrder(raw["cPages"])
 	return info
+}
+
+// pageOrder the ids of the cPages pages that are not deleted, by idx.value
+func pageOrder(cp any) []string {
+	m, _ := cp.(map[string]any)
+	items, _ := m["pages"].([]any)
+	type pg struct{ id, idx string }
+	var pages []pg
+	for _, it := range items {
+		p, ok := it.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, _ := p["id"].(string)
+		if _, del := p["deleted"]; id == "" || del {
+			continue
+		}
+		ix, _ := p["idx"].(map[string]any)
+		v, _ := ix["value"].(string)
+		pages = append(pages, pg{id, v})
+	}
+	sort.SliceStable(pages, func(i, j int) bool { return pages[i].idx < pages[j].idx })
+	var out []string
+	for _, p := range pages {
+		out = append(out, p.id)
+	}
+	return out
 }
 
 func intOf(v any) int {
@@ -352,7 +431,7 @@ func (c *ContentCache) Get(d *DocSnap) ContentInfo {
 		return ContentInfo{Error: errNoContent.Error()}
 	}
 	c.used[d.ContentHash] = true
-	if info, ok := c.cache[d.ContentHash]; ok {
+	if info, ok := c.cache[d.ContentHash]; ok && info.ParseVersion >= contentParseVersion {
 		return info
 	}
 	r, err := c.read(d.ContentHash)

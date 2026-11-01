@@ -2,7 +2,12 @@ package fs
 
 import (
 	"io"
+	"os"
+	"path"
 	"strings"
+	"time"
+
+	"github.com/ddvk/rmfakecloud/internal/common"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -49,4 +54,16 @@ func (p *LocalBlobStorage) Write(hash string, r io.Reader) error {
 	_, err := p.fs.StoreBlob(p.uid, hash, r, -1)
 
 	return err
+}
+
+// ModTime when the blob file was last written
+func (p *LocalBlobStorage) ModTime(hash string) (time.Time, error) {
+	fi, err := os.Stat(path.Join(p.fs.getUserBlobPath(p.uid), common.Sanitize(hash)))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return time.Time{}, ErrorNotFound
+		}
+		return time.Time{}, err
+	}
+	return fi.ModTime(), nil
 }

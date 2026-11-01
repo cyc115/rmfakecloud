@@ -338,6 +338,7 @@ func (s *Service) planFor(uid string, cfg *Config, st *State, tree *models.HashT
 	snap := NewSnapshot(tree)
 	st.UpdateFirstSeen(snap, s.Now())
 	cache := s.contentCache(uid, st)
+	snap.AttachPages(cache.Get)
 	plan := BuildPlan(PlanInput{Snap: snap, Config: cfg, State: st, Content: cache.Get, Now: s.Now()})
 	return snap, cache, plan
 }
