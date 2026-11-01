@@ -33,10 +33,13 @@ type Input struct {
 // trace ids rm-pages accepted; it never changes Input.State and can be
 // called more than once.
 type Plan struct {
-	Feed     []Event                               `json:"feed"`
-	Pipeline []Event                               `json:"pipeline"`
-	Skipped  []SkipNote                            `json:"skipped"`
-	Advance  func(accepted map[string]bool) *State `json:"-"`
+	Feed     []Event    `json:"feed"`
+	Pipeline []Event    `json:"pipeline"`
+	Skipped  []SkipNote `json:"skipped"`
+	// SkipRules the first pipeline rule a skipped page was evaluated for
+	// (absent when only the feed saw it)
+	SkipRules map[SkipNote]string                   `json:"-"`
+	Advance   func(accepted map[string]bool) *State `json:"-"`
 }
 
 // Detect compares the snapshot with the baselines and plans the events.
@@ -48,8 +51,9 @@ func Detect(in Input) Plan {
 	d := &detector{
 		in:       in,
 		base:     in.State.Clone(),
-		mtimes:   map[string]mtime{},
-		seenSkip: map[SkipNote]bool{},
+		mtimes:    map[string]mtime{},
+		seenSkip:  map[SkipNote]bool{},
+		skipRules: map[SkipNote]string{},
 	}
 	if in.Snap == nil || !in.Snap.PagesAttached {
 		// no page lists: any comparison would read as "every page deleted"
@@ -116,14 +120,21 @@ type detector struct {
 	pipeEvs   []Event
 	skips     []SkipNote
 	seenSkip  map[SkipNote]bool
+	skipRules map[SkipNote]string
 	effects   []effect
 	joins     []join
 }
 
-func (d *detector) skip(n SkipNote) {
+func (d *detector) skip(n SkipNote) { d.skipFor(n, "") }
+
+// skipFor a skip seen while evaluating ruleID ("" = the feed)
+func (d *detector) skipFor(n SkipNote, ruleID string) {
 	if !d.seenSkip[n] {
 		d.seenSkip[n] = true
 		d.skips = append(d.skips, n)
+	}
+	if ruleID != "" && d.skipRules[n] == "" {
+		d.skipRules[n] = ruleID
 	}
 }
 
@@ -138,9 +149,10 @@ func (d *detector) onAccept(trace string, f func(*State)) {
 func (d *detector) plan() Plan {
 	base, effects, joins := d.base, d.effects, d.joins
 	return Plan{
-		Feed:     d.feedEvs,
-		Pipeline: d.pipeEvs,
-		Skipped:  d.skips,
+		Feed:      d.feedEvs,
+		Pipeline:  d.pipeEvs,
+		Skipped:   d.skips,
+		SkipRules: d.skipRules,
 		Advance: func(accepted map[string]bool) *State {
 			s := base.Clone()
 			for _, e := range effects {
@@ -223,8 +235,8 @@ func docType(fileType string) string {
 }
 
 // age the page blob's write time; ok false (with a skip note) when the page
-// is too recent or its mtime cannot be read
-func (d *detector) age(docID string, p autoorganize.PageSnap) (time.Time, bool) {
+// is too recent or its mtime cannot be read. ruleID "" is the feed.
+func (d *detector) age(docID, ruleID string, p autoorganize.PageSnap) (time.Time, bool) {
 	m, done := d.mtimes[p.Hash]
 	if !done {
 		if d.in.ModTime == nil {
@@ -236,10 +248,10 @@ func (d *detector) age(docID string, p autoorganize.PageSnap) (time.Time, bool) 
 	}
 	switch {
 	case m.err != nil:
-		d.skip(SkipNote{DocID: docID, PageID: p.ID, Reason: SkipMtime})
+		d.skipFor(SkipNote{DocID: docID, PageID: p.ID, Reason: SkipMtime}, ruleID)
 		return time.Time{}, false
 	case d.in.Now.Sub(m.at) < d.in.MinAge:
-		d.skip(SkipNote{DocID: docID, PageID: p.ID, Reason: SkipRecent})
+		d.skipFor(SkipNote{DocID: docID, PageID: p.ID, Reason: SkipRecent}, ruleID)
 		return time.Time{}, false
 	}
 	return m.at, true
@@ -446,7 +458,7 @@ func (d *detector) feedEdits(v *docView) {
 		if p.Hash == "" || p.Hash == prev {
 			continue
 		}
-		at, ok := d.age(v.snap.ID, p)
+		at, ok := d.age(v.snap.ID, "", p)
 		if !ok {
 			continue
 		}
@@ -606,7 +618,7 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 		if p.Hash == "" || p.Hash == prev {
 			continue
 		}
-		at, ok := d.age(docID, p)
+		at, ok := d.age(docID, ruleID, p)
 		if !ok {
 			complete = false
 			continue

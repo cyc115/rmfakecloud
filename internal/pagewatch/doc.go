@@ -63,6 +63,11 @@
 //   - pages_not_attached: Snapshot.AttachPages did not run; Detect plans
 //     nothing rather than read missing pages as deletions.
 //
+// The service logs each skip at Info (doc_id, page_id, reason, rule_id when
+// a rule saw it) and one Error (trace_id "skip", stage detect) when the same
+// doc/page is skipped more than LagRuns runs in a row; the streak resets when
+// the skip stops.
+//
 // Trace ids are deterministic (TraceID): the same change gets the same id on
 // every sweep until it is accepted.
 //

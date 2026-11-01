@@ -556,3 +556,84 @@ func TestRunAdvancesChunksThatWereAccepted(t *testing.T) {
 		t.Fatalf("resent %+v", e.sender.calls)
 	}
 }
+
+func skipErrors(h *logtest.Hook) []*log.Entry {
+	var out []*log.Entry
+	for _, en := range h.AllEntries() {
+		if en.Level == log.ErrorLevel && en.Data["trace_id"] == "skip" {
+			out = append(out, en)
+		}
+	}
+	return out
+}
+
+func TestPersistentSkipLogsOneErrorPerStreak(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	broken := func(b bool) {
+		e.ft.Docs["nb"].RawContent = nil
+		if b {
+			e.ft.Docs["nb"].RawContent = []byte("{not json")
+		}
+		if err := e.ft.Sync(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	broken(true)
+	e.run()
+	e.run()
+	if n := len(skipErrors(hook)); n != 0 {
+		t.Fatalf("%d skip errors after 2 runs", n)
+	}
+	var infos int
+	for _, en := range hook.AllEntries() {
+		if en.Level == log.InfoLevel && en.Data["doc_id"] == "nb" && en.Data["reason"] == SkipContent && en.Data["stage"] == "detect" {
+			infos++
+		}
+	}
+	if infos != 2 {
+		t.Fatalf("%d skip infos, want one per run", infos)
+	}
+	e.run()
+	got := skipErrors(hook)
+	if len(got) != 1 || got[0].Data["doc_id"] != "nb" || got[0].Data["stage"] != "detect" || got[0].Data["page_id"] != "" {
+		t.Fatalf("skip errors %v", got)
+	}
+	e.run()
+	e.run()
+	if n := len(skipErrors(hook)); n != 1 {
+		t.Fatalf("%d skip errors after 5 runs, want 1 per streak", n)
+	}
+	broken(false) // the streak ends
+	e.run()
+	broken(true)
+	e.run()
+	e.run()
+	e.run()
+	if n := len(skipErrors(hook)); n != 2 {
+		t.Fatalf("%d skip errors after the second streak, want 2", n)
+	}
+}
+
+func TestSkipErrorCarriesRuleAndPage(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	e.svc.MinAge = time.Hour // every blob stays recent
+	e.rule("r1")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	for i := 0; i < 3; i++ {
+		e.run()
+	}
+	got := skipErrors(hook)
+	if len(got) != 1 {
+		t.Fatalf("skip errors %v", got)
+	}
+	if d := got[0].Data; d["page_id"] != "p1" || d["rule_id"] != "r1" || d["reason"] != SkipRecent {
+		t.Fatalf("fields %v", d)
+	}
+}

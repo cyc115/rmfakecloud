@@ -87,6 +87,10 @@ type userLoop struct {
 	// lag consecutive runs a (rule, doc, page) event was not accepted
 	lag     map[string]int
 	alerted map[string]bool
+	// skips consecutive runs a (doc, page) was skipped; skipAlerted the
+	// streaks that already logged their Error
+	skips       map[string]int
+	skipAlerted map[string]bool
 	started bool // guarded by Service.mu
 	nextAt  atomic.Int64
 	// pending pipeline events not accepted by the last run
@@ -122,7 +126,11 @@ func (s *Service) loop(uid string) *userLoop {
 func (s *Service) loopLocked(uid string) *userLoop {
 	ul, ok := s.users[uid]
 	if !ok {
-		ul = &userLoop{uid: uid, cache: map[string]autoorganize.ContentInfo{}, lag: map[string]int{}, alerted: map[string]bool{}}
+		ul = &userLoop{
+			uid: uid, cache: map[string]autoorganize.ContentInfo{},
+			lag: map[string]int{}, alerted: map[string]bool{},
+			skips: map[string]int{}, skipAlerted: map[string]bool{},
+		}
 		ul.lastErr.Store("")
 		s.users[uid] = ul
 	}
@@ -315,6 +323,7 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 		}
 	}
 	run.Feed, run.Pipeline, run.Skipped = len(plan.Feed), len(plan.Pipeline), len(plan.Skipped)
+	s.trackSkips(ul, plan)
 
 	// dry mode sends the feed only; the pipeline events stay planned, so their
 	// baselines do not move
@@ -495,6 +504,37 @@ func (s *Service) trackLag(ul *userLoop, plan Plan, accepted map[string]bool, dr
 		if !seen[key] {
 			delete(ul.lag, key)
 			delete(ul.alerted, key)
+		}
+	}
+}
+
+// trackSkips logs every skip at Info and counts, per (doc, page), the runs in
+// a row it was skipped; past LagRuns it logs one Error per streak, so a page
+// that is never readable (or a doc with no .content) cannot stay silent.
+func (s *Service) trackSkips(ul *userLoop, plan Plan) {
+	seen := map[string]bool{}
+	for _, n := range plan.Skipped {
+		key := n.DocID + "|" + n.PageID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		f := log.Fields{"stage": "detect", "user": ul.uid, "doc_id": n.DocID, "page_id": n.PageID, "reason": n.Reason}
+		if rid := plan.SkipRules[n]; rid != "" {
+			f["rule_id"] = rid
+		}
+		log.WithFields(f).Info(logPrefix, "skipped ", n.Reason)
+		ul.skips[key]++
+		if ul.skips[key] > LagRuns && !ul.skipAlerted[key] {
+			ul.skipAlerted[key] = true
+			f["trace_id"] = "skip"
+			log.WithFields(f).Error(logPrefix, "skipped (", n.Reason, ") for ", ul.skips[key], " runs in a row")
+		}
+	}
+	for key := range ul.skips {
+		if !seen[key] {
+			delete(ul.skips, key)
+			delete(ul.skipAlerted, key)
 		}
 	}
 }
