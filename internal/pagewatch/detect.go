@@ -61,6 +61,7 @@ func Detect(in Input) Plan {
 		d.skip(SkipNote{Reason: SkipNotAttached})
 		return d.plan()
 	}
+	d.recordSeen()
 	d.collectDocs()
 	d.feed()
 	d.pipeline()
@@ -78,12 +79,9 @@ type docView struct {
 	snap    *autoorganize.DocSnap
 	ci      autoorganize.ContentInfo
 	trashed bool
-	// fresh created since the last sweep: the initialised feed has no
-	// baseline for it, so its pages are new writing (R12)
-	fresh   bool
 	path    string
 	docType string
-	// order the page ids in order, shared by the doc's pipeline events
+	// order the page ids in order; each pipeline event gets its own copy
 	order []string
 }
 
@@ -92,10 +90,11 @@ type mtime struct {
 	err error
 }
 
-// effect a change Advance applies; trace "" means always
+// effect a change Advance applies: always, or when trace is accepted
 type effect struct {
-	trace string
-	apply func(*State)
+	always bool
+	trace  string
+	apply  func(*State)
 }
 
 // join a doc becoming a rule member once every trace is accepted
@@ -128,7 +127,7 @@ func (d *detector) skip(n SkipNote) {
 }
 
 func (d *detector) always(f func(*State)) {
-	d.effects = append(d.effects, effect{apply: f})
+	d.effects = append(d.effects, effect{always: true, apply: f})
 }
 
 func (d *detector) onAccept(trace string, f func(*State)) {
@@ -144,7 +143,7 @@ func (d *detector) plan() Plan {
 		Advance: func(accepted map[string]bool) *State {
 			s := base.Clone()
 			for _, e := range effects {
-				if e.trace == "" || accepted[e.trace] {
+				if e.always || accepted[e.trace] {
 					e.apply(s)
 				}
 			}
@@ -176,7 +175,6 @@ func (d *detector) collectDocs() {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	feedDocs := pagesOf(d.base.Feed)
 	for _, id := range ids {
 		s := snap.Docs[id]
 		if s.IsFolder() {
@@ -200,7 +198,6 @@ func (d *detector) collectDocs() {
 			continue
 		}
 		v := &docView{snap: s, ci: ci, path: snap.PathName(id), docType: docType(ci.FileType)}
-		v.fresh = d.base.FeedInitialised && len(feedDocs[id]) == 0
 		for _, p := range s.Pages {
 			v.order = append(v.order, p.ID)
 		}
@@ -243,18 +240,62 @@ func (d *detector) age(docID string, p autoorganize.PageSnap) (time.Time, bool) 
 
 var errNoModTime = errors.New("no ModTime func")
 
-func (d *detector) event(kind string, v *docView, changedAt time.Time) Event {
+// event a new event for a page of v; ok false (with a skip note) when NewID
+// gives no trace id, so nothing is sent and no baseline can move
+func (d *detector) event(kind string, v *docView, pageID string, changedAt time.Time) (Event, bool) {
+	id := d.in.NewID()
+	if id == "" {
+		d.skip(SkipNote{DocID: v.snap.ID, PageID: pageID, Reason: SkipNoTraceID})
+		return Event{}, false
+	}
 	return Event{
-		TraceID:   d.in.NewID(),
+		TraceID:   id,
 		Kind:      kind,
 		User:      d.in.User,
 		DocID:     v.snap.ID,
 		DocName:   v.snap.Name,
 		DocPath:   v.path,
 		DocType:   v.docType,
+		PageID:    pageID,
 		PDFHash:   v.snap.PDFHash,
 		ChangedAt: changedAt,
+	}, true
+}
+
+// recordSeen the first sweep that saw each doc (R15); docs gone from the
+// tree are forgotten
+func (d *detector) recordSeen() {
+	now := d.in.Now
+	var add, drop []string
+	for _, id := range sortedKeys(d.in.Snap.Docs) {
+		if _, ok := d.base.Seen[id]; !ok && !d.in.Snap.Docs[id].IsFolder() {
+			add = append(add, id)
+		}
 	}
+	for _, id := range sortedKeys(d.base.Seen) {
+		if _, ok := d.in.Snap.Docs[id]; !ok {
+			drop = append(drop, id)
+		}
+	}
+	if len(add)+len(drop) == 0 {
+		return
+	}
+	d.always(func(s *State) {
+		for _, id := range add {
+			s.Seen[id] = now
+		}
+		for _, id := range drop {
+			delete(s.Seen, id)
+		}
+	})
+}
+
+// seenAt when the doc was first seen; this sweep if never before
+func (d *detector) seenAt(docID string) time.Time {
+	if t, ok := d.base.Seen[docID]; ok {
+		return t
+	}
+	return d.in.Now
 }
 
 // pagesOf baseline page ids by doc, sorted
@@ -376,13 +417,17 @@ func (d *detector) feedOpen(v *docView) {
 		return
 	}
 	at := time.UnixMilli(ms).UTC()
-	ev := d.event(KindOpen, v, at)
-	ev.OpenedAt = &at
-	ev.PageIndex = v.snap.LastOpenedPage
-	if i := ev.PageIndex; i >= 0 && i < len(v.snap.Pages) {
-		ev.PageID = v.snap.Pages[i].ID
-		ev.AfterHash = v.snap.Pages[i].Hash
+	idx := v.snap.LastOpenedPage
+	var page autoorganize.PageSnap
+	if idx >= 0 && idx < len(v.snap.Pages) {
+		page = v.snap.Pages[idx]
 	}
+	ev, ok := d.event(KindOpen, v, page.ID, at)
+	if !ok {
+		return
+	}
+	ev.OpenedAt = &at
+	ev.PageIndex, ev.AfterHash = idx, page.Hash
 	d.feedEvs = append(d.feedEvs, ev)
 	id := v.snap.ID
 	d.onAccept(ev.TraceID, func(s *State) { s.Opened[id] = cur })
@@ -400,8 +445,11 @@ func (d *detector) feedEdits(v *docView) {
 		if !ok {
 			continue
 		}
-		ev := d.event(KindEdit, v, at)
-		ev.PageID, ev.PageIndex, ev.BeforeHash, ev.AfterHash = p.ID, p.Index, prev, p.Hash
+		ev, ok := d.event(KindEdit, v, p.ID, at)
+		if !ok {
+			continue
+		}
+		ev.PageIndex, ev.BeforeHash, ev.AfterHash = p.Index, prev, p.Hash
 		d.feedEvs = append(d.feedEvs, ev)
 		hash := p.Hash
 		d.onAccept(ev.TraceID, func(s *State) { s.Feed[key] = hash })
@@ -449,6 +497,8 @@ func (d *detector) rule(r *autoorganize.Rule) {
 			d.leave(r.ID, doc)
 		}
 	}
+	ruleID, now := r.ID, d.in.Now
+	d.always(func(s *State) { s.rule(ruleID).LastActive = now })
 }
 
 // leave a doc no longer in the rule: no events; it drops its membership and
@@ -509,23 +559,21 @@ func (d *detector) under(parent, folder string) bool {
 	return false
 }
 
-// ruleDoc a member gets an edit per changed page; a joining doc (content that
+// ruleDoc a member gets an edit per changed page. A joining doc (content that
 // existed before the rule watched it) gets a transcribe_only per page not yet
-// delivered, and becomes a member once all of them are accepted with none
-// skipped. A doc created since the last sweep is a member at once (R12). Both get a page_deleted per page
-// the baseline holds that is gone.
+// delivered, and an edit for a page delivered earlier in the join that
+// changed since; it becomes a member once all of them are accepted with none
+// skipped. A doc first seen after the rule last looked is new content and a
+// member at once (R12, R15). Both get a page_deleted per page the baseline
+// holds that is gone.
 func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string, v *docView) {
 	docID, ruleID := v.snap.ID, r.ID
 	member := base.Members[docID]
-	if !member && v.fresh {
-		// a new doc is a member at once: its pages are edits with an empty
-		// before, and a page skipped now is still an edit next sweep
+	if !member && !base.LastActive.IsZero() && d.seenAt(docID).After(base.LastActive) {
+		// new content: its pages are edits with an empty before, and a page
+		// skipped now is still an edit next sweep
 		member = true
 		d.always(func(s *State) { s.rule(ruleID).Members[docID] = true })
-	}
-	kind := KindEdit
-	if !member {
-		kind = KindTranscribeOnly
 	}
 	var traces []string
 	complete := true
@@ -542,9 +590,19 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 			complete = false
 			continue
 		}
-		ev := d.pipelineEvent(kind, r, v, at)
-		ev.PageID, ev.PageIndex, ev.AfterHash = p.ID, p.Index, p.Hash
-		if member {
+		// prev != "" on a non-member: delivered earlier in this join (leaving
+		// clears baselines), so the change is new writing
+		kind := KindTranscribeOnly
+		if member || prev != "" {
+			kind = KindEdit
+		}
+		ev, ok := d.pipelineEvent(kind, r, v, p.ID, at)
+		if !ok {
+			complete = false
+			continue
+		}
+		ev.PageIndex, ev.AfterHash = p.Index, p.Hash
+		if kind == KindEdit {
 			ev.BeforeHash = prev
 		}
 		d.pipeEvs = append(d.pipeEvs, ev)
@@ -556,8 +614,12 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 		if current[pageID] {
 			continue
 		}
-		ev := d.pipelineEvent(KindPageDeleted, r, v, d.in.Now)
-		ev.PageID, ev.PageIndex = pageID, -1
+		ev, ok := d.pipelineEvent(KindPageDeleted, r, v, pageID, d.in.Now)
+		if !ok {
+			complete = false
+			continue
+		}
+		ev.PageIndex = -1
 		d.pipeEvs = append(d.pipeEvs, ev)
 		key := pageKey(docID, pageID)
 		d.onAccept(ev.TraceID, func(s *State) { delete(s.rule(ruleID).Baselines, key) })
@@ -568,9 +630,12 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 	}
 }
 
-// pipelineEvent a rule's event, page fields left to the caller
-func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, at time.Time) Event {
-	ev := d.event(kind, v, at)
+// pipelineEvent a rule's event; index and hashes are left to the caller
+func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, pageID string, at time.Time) (Event, bool) {
+	ev, ok := d.event(kind, v, pageID, at)
+	if !ok {
+		return ev, false
+	}
 	ev.Watched = true
 	ev.RuleID = r.ID
 	ev.Prompt = r.Action.Prompt
@@ -581,6 +646,6 @@ func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, 
 	if ev.Model == "" {
 		ev.Model = autoorganize.DefaultPipelineModel
 	}
-	ev.PageOrder = v.order
-	return ev
+	ev.PageOrder = append([]string(nil), v.order...)
+	return ev, true
 }

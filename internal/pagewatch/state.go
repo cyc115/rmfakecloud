@@ -1,5 +1,7 @@
 package pagewatch
 
+import "time"
+
 // State the page watch's persisted baselines. Feed and pipeline baselines are
 // independent: each moves only when its own event is accepted.
 type State struct {
@@ -11,6 +13,9 @@ type State struct {
 	Rules map[string]*RuleState `json:"rules"`
 	// FeedInitialised the first feed run recorded baselines
 	FeedInitialised bool `json:"feedInitialised"`
+	// Seen doc → the Now of the first sweep that saw it (any non-folder doc,
+	// trashed or skipped too); dropped only when the doc leaves the tree
+	Seen map[string]time.Time `json:"seen"`
 }
 
 // RuleState one pipeline rule's view of the tree
@@ -19,11 +24,14 @@ type RuleState struct {
 	Baselines map[string]string `json:"baselines"`
 	// Members docs whose join (transcribe_only of every page) completed
 	Members map[string]bool `json:"members"`
+	// LastActive the Now of the last sweep that evaluated the rule (rule and
+	// account enabled); zero before its first activation
+	LastActive time.Time `json:"lastActive"`
 }
 
 // NewState an empty state
 func NewState() *State {
-	return &State{Feed: map[string]string{}, Opened: map[string]string{}, Rules: map[string]*RuleState{}}
+	return &State{Feed: map[string]string{}, Opened: map[string]string{}, Rules: map[string]*RuleState{}, Seen: map[string]time.Time{}}
 }
 
 func newRuleState() *RuleState {
@@ -43,9 +51,13 @@ func (s *State) Clone() *State {
 	for k, v := range s.Opened {
 		out.Opened[k] = v
 	}
+	for k, v := range s.Seen {
+		out.Seen[k] = v
+	}
 	for id, rs := range s.Rules {
 		c := newRuleState()
 		if rs != nil {
+			c.LastActive = rs.LastActive
 			for k, v := range rs.Baselines {
 				c.Baselines[k] = v
 			}

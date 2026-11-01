@@ -141,6 +141,8 @@ func (e *env) input(snap *autoorganize.Snapshot, content func(*autoorganize.DocS
 
 func (e *env) detect() Plan {
 	e.t.Helper()
+	// each sweep happens later than the one before
+	e.now = e.now.Add(time.Minute)
 	snap, content := e.snapshot()
 	return Detect(e.input(snap, content))
 }
@@ -886,5 +888,134 @@ func TestNewDocRecentPageEmittedAsEditNextSweep(t *testing.T) {
 	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1")
 	if p.Pipeline[0].BeforeHash != "" {
 		t.Fatalf("before = %q", p.Pipeline[0].BeforeHash)
+	}
+}
+
+func TestPartialJoinEditedPageIsEdit(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	h1 := e.pageHash("nb", "p1")
+	p := e.detect()
+	for _, ev := range p.Pipeline {
+		if ev.PageID == "p1" {
+			e.state = p.Advance(ids(ev))
+		}
+	}
+
+	// p1 was delivered during the join: writing on it is new content
+	e.page("nb", "p1", "strokes_ab.rm")
+	p = e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1", "transcribe_only nb/p2 r1")
+	for _, ev := range p.Pipeline {
+		if ev.PageID == "p1" && ev.BeforeHash != h1 {
+			t.Fatalf("before = %q, want %q", ev.BeforeHash, h1)
+		}
+	}
+	e.state = p.Advance(all(p))
+	if !ruleState(e.state, "r1").Members["nb"] {
+		t.Fatal("join did not complete")
+	}
+}
+
+func TestDocSkippedOnFirstRunIsNotNew(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.ft.Docs["nb"].RawContent = []byte("{not json")
+	p := e.sweep()
+	if !hasSkip(p, SkipNote{DocID: "nb", Reason: SkipContent}) {
+		t.Fatalf("skipped = %+v", p.Skipped)
+	}
+
+	e.ft.Docs["nb"].RawContent = nil
+	wantEvents(t, "pipeline", e.detect().Pipeline, "transcribe_only nb/p1 r1")
+}
+
+func TestDocRestoredFromTrashIsNotNew(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("nb", "Notes", "trash")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.sweep()
+	e.sweep()
+
+	e.ft.Move("nb", "")
+	wantEvents(t, "pipeline", e.detect().Pipeline, "transcribe_only nb/p1 r1")
+}
+
+func TestDocCreatedWhilePipelineDisabledIsNewOnReenable(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("old", "Old", "")
+	e.page("old", "p1", "strokes_a.rm")
+	e.sweep()
+
+	e.cfg.Settings.Enabled = false
+	e.ft.Notebook("nb", "New", "")
+	e.page("nb", "p1", "strokes_ab.rm")
+	wantEvents(t, "disabled pipeline", e.sweep().Pipeline)
+
+	e.cfg.Settings.Enabled = true
+	wantEvents(t, "re-enabled pipeline", e.detect().Pipeline, "edit nb/p1 r1")
+}
+
+func TestDocCreatedWhileRuleDisabledIsNewOnReenable(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("old", "Old", "")
+	e.page("old", "p1", "strokes_a.rm")
+	e.sweep()
+
+	e.cfg.Rules[0].Enabled = false
+	e.ft.Notebook("nb", "New", "")
+	e.page("nb", "p1", "strokes_ab.rm")
+	wantEvents(t, "disabled rule", e.sweep().Pipeline)
+
+	e.cfg.Rules[0].Enabled = true
+	wantEvents(t, "re-enabled rule", e.detect().Pipeline, "edit nb/p1 r1")
+}
+
+func TestEmptyTraceIDSkipsEvent(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.sweep()
+	e.page("nb", "p1", "strokes_ab.rm")
+
+	in := e.input(e.snapshot())
+	in.NewID = func() string { return "" }
+	p := Detect(in)
+	wantEvents(t, "feed", p.Feed)
+	wantEvents(t, "pipeline", p.Pipeline)
+	if !hasSkip(p, SkipNote{DocID: "nb", PageID: "p1", Reason: SkipNoTraceID}) {
+		t.Fatalf("skipped = %+v", p.Skipped)
+	}
+	st := p.Advance(map[string]bool{"": true})
+	if st.Feed["nb/p1"] != e.state.Feed["nb/p1"] || ruleState(st, "r1").Baselines["nb/p1"] != ruleState(e.state, "r1").Baselines["nb/p1"] {
+		t.Fatal("a baseline moved without an event")
+	}
+}
+
+func TestPageOrderNotShared(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.rule("r2", docWatch("nb"))
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	p := e.detect()
+	if len(p.Pipeline) != 4 {
+		t.Fatalf("pipeline = %q", summary(p.Pipeline))
+	}
+	p.Pipeline[0].PageOrder[0] = "changed"
+	for _, ev := range p.Pipeline[1:] {
+		if ev.PageOrder[0] != "p1" {
+			t.Fatalf("page order shared: %v", ev.PageOrder)
+		}
 	}
 }

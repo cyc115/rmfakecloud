@@ -29,11 +29,14 @@
 //     page with a hash not yet delivered. It becomes a member when every one
 //     of those is accepted and none was skipped.
 //     Joining is for content that existed before the rule watched it: a doc
-//     the feed already knew (moved in, watch widened, rule new or enabled,
-//     tag removed), or any watched doc on the very first run.
-//   - new: a doc created since the last sweep (feed initialised, no feed
-//     baseline for it) is a member at once; its pages are edits with an
-//     empty BeforeHash, so tasks are extracted.
+//     already seen when the rule last looked (moved in, watch widened, tag
+//     removed, restored from the trash), or any doc at the rule's first
+//     activation. A page delivered earlier in the join that changes again
+//     is an edit (BeforeHash = what was delivered), never transcribe_only.
+//   - new: a doc first seen (State.Seen) after the rule last ran
+//     (RuleState.LastActive) is a member at once; its pages are edits with
+//     an empty BeforeHash, so tasks are extracted. This covers docs created
+//     while the rule or the account was disabled.
 //   - member: an "edit" per changed page, BeforeHash = the rule's baseline.
 //   - both: a "page_deleted" (no hashes, PageIndex -1) per page the baseline
 //     holds that is gone; the page leaves the baseline once that is accepted.
@@ -52,6 +55,7 @@
 //   - location: the doc's parent chain is broken; left alone likewise.
 //   - pages_not_attached: Snapshot.AttachPages did not run; Detect plans
 //     nothing rather than read missing pages as deletions.
+//   - trace_id: Input.NewID returned ""; the event is not sent.
 //
 // Detect never mutates Input.State; Plan.Advance(accepted) returns a new
 // State. The delivery loop (service.go) owns I/O, Dry mode and sending.

@@ -66,6 +66,8 @@ const (
 	SkipLocation = "location"
 	// SkipNotAttached the snapshot has no page lists: nothing is detected
 	SkipNotAttached = "pages_not_attached"
+	// SkipNoTraceID Input.NewID returned an empty id: the event is not sent
+	SkipNoTraceID = "trace_id"
 )
 
 // SkipNote a page (or a doc, PageID empty) left for a later sweep
