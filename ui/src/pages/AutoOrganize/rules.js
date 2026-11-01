@@ -142,6 +142,66 @@ export function newPipelineRule(defaults) {
   };
 }
 
+// switchAction the rule after the action radio changes. stash holds the last
+// move and pipeline versions of the draft, so switching back restores the
+// edits (prompt, model, watch, source, ...). A move rule never keeps watch.
+// Returns { rule, stash }; inputs are not mutated.
+export function switchAction(rule, type, stash, { defaults, folders } = {}) {
+  const next = { ...(stash || {}) };
+  if (type === "pipeline" && !isPipeline(rule)) {
+    next.move = rule;
+    const p = next.pipeline || newPipelineRule(defaults);
+    return { rule: { ...p, id: rule.id, name: rule.name, enabled: rule.enabled }, stash: next };
+  }
+  if (type === "move" && isPipeline(rule)) {
+    next.pipeline = rule;
+    const m = { ...(next.move || newRule(folders)) };
+    delete m.watch;
+    return { rule: { ...m, id: rule.id, name: rule.name, enabled: rule.enabled }, stash: next };
+  }
+  return { rule, stash: next };
+}
+
+// forSave the rule as sent to the server: a pipeline prompt/model is trimmed
+// (whitespace-only → "" → the server's default); a move rule has no watch
+export function forSave(rule) {
+  const r = { ...rule };
+  if (isPipeline(r)) {
+    r.action = { ...r.action, prompt: (r.action.prompt || "").trim(), model: (r.action.model || "").trim() };
+  } else {
+    delete r.watch;
+  }
+  return r;
+}
+
+// missingFor the watch entries of ruleId the page watch reports as gone
+export function missingFor(pipeline, ruleId) {
+  return ((pipeline && pipeline.missingWatches) || []).filter((m) => m.ruleId === ruleId);
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+// pendingText the Pipeline panel's line about planned pipeline events not
+// sent: dry-run holds them on purpose; live waits for rm-pages to accept them
+export function pendingText(n, live) {
+  if (!n) return "";
+  return live
+    ? `${plural(n, "page change")} waiting to be accepted by rm-pages.`
+    : `${plural(n, "page change")} held by Dry-run mode; switch to Live to send them to the pipeline.`;
+}
+
+// runCounts one pipeline run: feed events (the timeline) and pipeline events
+// (watched pages) counted apart, so feed events never read as pipeline "sent"
+export function runCounts(r) {
+  const toPipeline = r.pipelineAccepted || 0;
+  const sent = Math.max(0, (r.accepted || 0) - toPipeline);
+  let s = `${plural(sent, "page change")} sent, ${toPipeline} to the pipeline`;
+  if (r.mode === "dry" && r.pipeline > 0) s += ` (${r.pipeline} held by Dry-run)`;
+  return s;
+}
+
 export function pipelineSummary(rule) {
   const n = (rule.watch || []).length;
   return `Watching ${n} item${n === 1 ? "" : "s"} → pipeline`;

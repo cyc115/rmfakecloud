@@ -4,8 +4,8 @@ import FolderPicker from "./FolderPicker";
 import WatchPicker from "./WatchPicker";
 import {
   ACTIONS, LATER_TRIGGERS, NO_AUTOMATION_TAG, TRIGGERS,
-  destinationLabel, isPageBased, isPipeline, makeTrigger, newPipelineRule, newRule, patternError, pipelineSummary,
-  ruleSentence, sourceLabel,
+  destinationLabel, forSave, isPageBased, isPipeline, makeTrigger, patternError, pipelineSummary,
+  ruleSentence, sourceLabel, switchAction,
 } from "./rules";
 
 function num(v) {
@@ -62,12 +62,12 @@ export default function RuleDrawer({ open, initial, isNew, folders, watchables, 
   const [serverError, setServerError] = useState(null);
   const [matches, setMatches] = useState(null);
   const lastPlan = useRef(null);
-  // the move fields, kept while the action is switched to pipeline and back
-  const moveStash = useRef(null);
+  // the move and pipeline drafts, kept while the action is switched back and forth
+  const stash = useRef(null);
 
   useEffect(() => {
     setRule(initial);
-    moveStash.current = null;
+    stash.current = null;
     setServerError(null);
     setMatches(null);
   }, [initial]);
@@ -116,14 +116,9 @@ export default function RuleDrawer({ open, initial, isNew, folders, watchables, 
   const updateAction = (patch) => setRule((r) => ({ ...r, action: { ...r.action, ...patch } }));
 
   const setActionType = (type) => {
-    if (type === "pipeline" && !isPipeline(rule)) {
-      moveStash.current = rule;
-      const p = newPipelineRule(pipelineDefaults);
-      setRule((r) => ({ ...p, id: r.id, name: r.name, enabled: r.enabled }));
-    } else if (type === "move" && isPipeline(rule)) {
-      const m = moveStash.current || newRule(folders);
-      setRule((r) => ({ ...m, id: r.id, name: r.name, enabled: r.enabled, watch: r.watch }));
-    }
+    const next = switchAction(rule, type, stash.current, { defaults: pipelineDefaults, folders });
+    stash.current = next.stash;
+    setRule(next.rule);
   };
 
   const setTriggerType = (type) => {
@@ -135,7 +130,7 @@ export default function RuleDrawer({ open, initial, isNew, folders, watchables, 
     setSaving(true);
     setServerError(null);
     try {
-      await onSave(rule);
+      await onSave(forSave(rule));
     } catch (e) {
       setServerError(e.message);
     } finally {

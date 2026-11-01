@@ -5,7 +5,7 @@ import Spinner from "../../components/Spinner";
 import RuleDrawer from "./RuleDrawer";
 import {
   INTERVALS, SKIP_CHIP, SKIP_LABELS, destinationLabel, exampleRule, fmtAgo, fmtTime,
-  isPipeline, newRule, pipelineSummary, sourceLabel, triggerPhrase, withDisplayNames,
+  isPipeline, missingFor, newRule, pendingText, pipelineSummary, runCounts, sourceLabel, triggerPhrase, withDisplayNames,
 } from "./rules";
 import "./AutoOrganize.scss";
 
@@ -42,7 +42,7 @@ function Kebab({ items }) {
   );
 }
 
-function RuleRow({ rule, index, count, view, folders, sharesSource, onToggle, onEdit, onDuplicate, onPreview, onMove, onDelete, drag }) {
+function RuleRow({ rule, index, count, view, folders, sharesSource, missing = [], onToggle, onEdit, onDuplicate, onPreview, onMove, onDelete, drag }) {
   const chips = [];
   if (view) {
     for (const p of view.problems) chips.push(<span key={p} className="ao-chip bad">{p}</span>);
@@ -64,8 +64,11 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, onToggle, on
   const src = pipe ? "" : sourceLabel(rule, folders, view && view.sourceName);
   const dst = pipe ? "" : destinationLabel(rule, folders, view && view.destName);
   if (pipe) {
+    const gone = new Set(missing.map((m) => m.watchId));
     for (const w of rule.watch || []) {
-      chips.push(<span key={`${w.kind}${w.id}`} className="ao-chip">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id || "My files"}</span>);
+      chips.push(gone.has(w.id)
+        ? <span key={`${w.kind}${w.id}`} className="ao-chip warn" title="The page watch cannot find this item in the tree; nothing is sent for it.">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id}: watched item no longer exists</span>
+        : <span key={`${w.kind}${w.id}`} className="ao-chip">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id || "My files"}</span>);
     }
   }
   return (
@@ -239,7 +242,7 @@ function RunsPane({ runs }) {
   );
 }
 
-function PipelinePanel({ pipeline, busy, onRun }) {
+function PipelinePanel({ pipeline, live, busy, onRun }) {
   const runs = pipeline.runs || [];
   const last = pipeline.lastRun;
   let status = "Page watch is off on this server.";
@@ -261,7 +264,7 @@ function PipelinePanel({ pipeline, busy, onRun }) {
           title={pipeline.enabled ? "" : "Set RM_PAGES_URL to turn page watch on"}>Run now</button>
       </div>
       {pipeline.enabled && pipeline.pendingPipeline > 0 && (
-        <div className="ao-grp"><span className="ao-hint">{pipeline.pendingPipeline} page change{pipeline.pendingPipeline === 1 ? "" : "s"} waiting to be accepted by rm-pages.</span></div>
+        <div className="ao-grp"><span className="ao-hint">{pendingText(pipeline.pendingPipeline, live)}</span></div>
       )}
       {runs.length === 0 ? (
         <div className="ao-empty-pane">{pipeline.enabled ? "No runs yet." : "Pipeline rules are saved but nothing is sent."}</div>
@@ -273,7 +276,7 @@ function PipelinePanel({ pipeline, busy, onRun }) {
               <span className={`ao-chip ${r.mode === "live" ? "live" : "dry"}`}>{r.mode}</span>
               <span className="trig">{r.trigger}</span>
               <span className="nums">
-                {r.pipeline} page{r.pipeline === 1 ? "" : "s"} changed · {r.accepted} sent · {r.skipped} skipped
+                {runCounts(r)} · {r.skipped} skipped
               </span>
               {r.error && <span className="errbox">{r.error}</span>}
             </div>
@@ -423,7 +426,7 @@ export default function AutoOrganize() {
     try {
       const r = await apiService.runPipelineNow();
       if (r.error) toast.error(`Pipeline run: ${r.error}`);
-      else toast.success(`Pipeline run: ${r.pipeline} changed, ${r.accepted} sent`);
+      else toast.success(`Pipeline run: ${runCounts(r)}`);
     } catch (e) {
       toast.error(e.status === 409 ? `Not run: ${e.message}` : e.message);
     } finally {
@@ -558,8 +561,8 @@ export default function AutoOrganize() {
         <div className="ao-card">
           <div className="ao-card-h">
             <h2>Rules</h2>
-            <span className="ao-hint">Run top to bottom · first match wins per document per sweep</span>
-            <button className="ao-tip" title="Each sweep is one pass over the rules in this order. A document is claimed by the first rule that matches it and is not evaluated by later rules in that sweep. A document the sweeper moved out of a folder in the last 24 h is never moved back into it, so two opposite rules can ping-pong at most once. Documents tagged “no automation” are always skipped.">?</button>
+            <span className="ao-hint">Move rules run top to bottom · first match wins per document per sweep · pipeline rules run independently</span>
+            <button className="ao-tip" title="Each sweep is one pass over the Move rules in this order. A document is claimed by the first Move rule that matches it and is not evaluated by later Move rules in that sweep. Pipeline rules do not take part in that order: each one sends the changed pages of everything it watches, whatever other rules match. A document the sweeper moved out of a folder in the last 24 h is never moved back into it, so two opposite rules can ping-pong at most once. Documents tagged “no automation” are always skipped.">?</button>
           </div>
           {rules.length === 0 ? (
             <div className="ao-empty">
@@ -569,7 +572,7 @@ export default function AutoOrganize() {
             </div>
           ) : rules.map((r, i) => (
             <RuleRow key={r.id} rule={r} index={i} count={rules.length} view={viewOf(r.id)} folders={folders}
-              sharesSource={sharesSource(r)} drag={drag}
+              sharesSource={sharesSource(r)} missing={missingFor(pipeline, r.id)} drag={drag}
               onToggle={(on) => setRules((cur) => cur.map((x) => (x.id === r.id ? { ...x, enabled: on } : x)))}
               onEdit={() => openDrawer(r, i)}
               onDuplicate={() => {
@@ -591,7 +594,7 @@ export default function AutoOrganize() {
         </div>
 
         {(pipeline && (pipeline.enabled || rules.some(isPipeline))) && (
-          <PipelinePanel pipeline={pipeline} busy={busy} onRun={runPipeline} />
+          <PipelinePanel pipeline={pipeline} live={live} busy={busy} onRun={runPipeline} />
         )}
 
         {/* activity */}
