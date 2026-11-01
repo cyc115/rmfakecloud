@@ -1,7 +1,7 @@
 """Pipeline rules in the Auto-organize UI; every test runs on desktop and phone.
 
-test_pipeline_panel_run_now_shows_a_run needs page watch on in the container:
-run with E2E_STUB_RMPAGES=1 (run.sh starts a stub rm-pages and sets RM_PAGES_URL).
+The run-now tests need page watch on in the container: run.sh starts a stub
+rm-pages and sets RM_PAGES_URL by default (E2E_STUB_RMPAGES=0 opts out).
 """
 from playwright.sync_api import expect
 import pytest
@@ -90,7 +90,7 @@ def test_prompt_is_prefilled_and_editable(page, api):
 
 def test_pipeline_panel_run_now_shows_a_run(page, api):
     if not api.get("/ui/api/auto-organize/pipeline").json()["enabled"]:
-        pytest.skip("page watch is off: run with E2E_STUB_RMPAGES=1")
+        pytest.skip("page watch is off: run.sh without E2E_STUB_RMPAGES=0")
     open_page(page)
     panel = page.locator(".ao-pipeline")
     expect(panel.get_by_role("heading", name="Pipeline")).to_be_visible()
@@ -98,6 +98,30 @@ def test_pipeline_panel_run_now_shows_a_run(page, api):
     panel.get_by_role("button", name="Run now").click()
     expect(panel.locator(".ao-prun").filter(has_text="run now").first).to_be_visible()
     assert len(api.get("/ui/api/auto-organize/pipeline").json()["runs"]) == before + 1
+    fits_viewport(page)
+    assert_healthy(page)
+
+
+def test_rule_watching_a_deleted_folder_warns(page, api):
+    if not api.get("/ui/api/auto-organize/pipeline").json()["enabled"]:
+        pytest.skip("page watch is off: run.sh without E2E_STUB_RMPAGES=0")
+    gone = "99999999-9999-4999-8999-999999999999"  # not in the tree
+    cfg = api.get("/ui/api/auto-organize").json()
+    cfg["rules"] = [{
+        "id": "", "name": "", "enabled": True, "scope": "all",
+        "source": {"id": "", "name": ""}, "destination": {"id": "", "name": ""},
+        "trigger": {"type": "page_changed"},
+        "action": {"type": "pipeline", "prompt": "", "model": ""},
+        "watch": [{"id": gone, "kind": "folder", "name": "Old projects"}],
+    }]
+    r = api.put("/ui/api/auto-organize", data=cfg)
+    assert r.ok, r.text()
+    run = api.post("/ui/api/auto-organize/pipeline/run-now")
+    assert run.ok, run.text()
+    missing = api.get("/ui/api/auto-organize/pipeline").json()["missingWatches"]
+    assert [m["watchId"] for m in missing] == [gone], missing
+    open_page(page)
+    expect(page.locator(".ao-rule .ao-chip.warn")).to_contain_text("Old projects: watched item no longer exists")
     fits_viewport(page)
     assert_healthy(page)
 

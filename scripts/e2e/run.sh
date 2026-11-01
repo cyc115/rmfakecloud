@@ -3,11 +3,17 @@
 # start it on :3099, run Playwright from here. Usage: scripts/e2e/run.sh [pytest args]
 # E2E_KEEP=1 leaves the container and data dir up for debugging.
 # Env passthrough to the container: RM_PAGES_URL, PAGEWATCH_MIN_AGE.
-# E2E_STUB_RMPAGES=1 starts stub_rmpages.py on the services VM (:3098) and points
-# the container's RM_PAGES_URL at it, so page watch is on (pipeline run-now tests).
-# With the real rm-pages (RM_PAGES_URL, no stub) the rows of user e2e are deleted before
-# and after the run (test_pipeline_e2e.py; see README).
+# E2E_STUB_RMPAGES (default 1) starts stub_rmpages.py on the services VM (:3098) and
+# points the container's RM_PAGES_URL at it, so page watch is on (pipeline run-now tests).
+# E2E_STUB_RMPAGES=0 opts out; setting RM_PAGES_URL without E2E_STUB_RMPAGES also means
+# no stub (the real rm-pages). With the real rm-pages the rows of user e2e are deleted
+# before and after the run (test_pipeline_e2e.py; see README).
 set -euo pipefail
+
+if [ -z "${E2E_STUB_RMPAGES:-}" ]; then
+  if [ -n "${RM_PAGES_URL:-}" ]; then E2E_STUB_RMPAGES=0; else E2E_STUB_RMPAGES=1; fi
+fi
+export E2E_STUB_RMPAGES
 
 HOST=${E2E_HOST:-mike@10.0.0.11}
 REMOTE=/tmp/rmfc-e2e
@@ -36,9 +42,11 @@ COMMIT;"
 
 cleanup() {
   ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; [ -f $STUB_PID ] && kill \$(cat $STUB_PID) 2>/dev/null; rm -rf $DATA $REMOTE $STUB_PID" || true
-  if [ -n "${RM_PAGES_URL:-}" ] && [ -z "${E2E_STUB_RMPAGES:-}" ]; then
+  if [ -n "${RM_PAGES_URL:-}" ] && [ "$E2E_STUB_RMPAGES" != 1 ]; then
     echo ">> delete rm-pages rows of user e2e"
-    ssh "$HOST" "podman exec -i personal-db psql -U personal -d personal -X -q -v ON_ERROR_STOP=1" <<<"$RMPAGES_CLEANUP_SQL" || true
+    if ! ssh "$HOST" "podman exec -i personal-db psql -U personal -d personal -X -q -v ON_ERROR_STOP=1" <<<"$RMPAGES_CLEANUP_SQL"; then
+      echo "WARNING: rm-pages cleanup of user e2e failed; rows of user e2e may remain in rm_pages.*" >&2
+    fi
   fi
 }
 [ -n "${E2E_KEEP:-}" ] || trap cleanup EXIT
@@ -50,7 +58,7 @@ echo ">> rsync + build image"
 rsync -az --delete --exclude ui/node_modules --exclude .git "$ROOT"/ "$HOST:$REMOTE/"
 ssh "$HOST" "cd $REMOTE && podman build -q --build-arg VERSION=e2e -t localhost/rmfakecloud:e2e -f Dockerfile ."
 
-if [ -n "${E2E_STUB_RMPAGES:-}" ]; then
+if [ "$E2E_STUB_RMPAGES" = 1 ]; then
   echo ">> stub rm-pages on :$STUB_PORT"
   ssh "$HOST" "nohup python3 $REMOTE/scripts/e2e/stub_rmpages.py $STUB_PORT >/dev/null 2>&1 </dev/null & echo \$! > $STUB_PID"
   export RM_PAGES_URL=http://host.containers.internal:$STUB_PORT

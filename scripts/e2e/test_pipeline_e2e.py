@@ -2,9 +2,11 @@
 
 Needs the REAL rm-pages (it calls the LLM, ~$0.001 a run) and the homelab vault writer:
 
-    RM_PAGES_URL=http://host.containers.internal:8801 PAGEWATCH_MIN_AGE=1ms \\
+    E2E_STUB_RMPAGES=0 RM_PAGES_URL=http://host.containers.internal:8801 PAGEWATCH_MIN_AGE=1ms \\
       E2E_WRITER=~/workspace/github/homelab/scripts/rm-pages-vault/writer.py \\
       scripts/e2e/run.sh -k pipeline_e2e
+
+A real run (RM_PAGES_URL set, no stub) with E2E_WRITER missing fails rather than skips.
 
 rm-pages must read user e2e's blobs from the e2e data dir (RMPAGES_EXTRA_ROOTS=e2e=...,
 set by homelab's ansible/rm-pages.yml). run.sh deletes every rm-pages row of user e2e
@@ -45,9 +47,17 @@ TESTDATA = "/src/internal/testkit/tablet/testdata"  # in the rmseed container
 USER = "e2e"
 DOC = "55555555-5555-4555-8555-555555555555"  # "E2E Notes" in Projects, seeded by run.sh
 
+REAL_RUN = bool(RM_PAGES_URL) and os.environ.get("E2E_STUB_RMPAGES", "0") != "1"
+
 pytestmark = pytest.mark.skipif(
-    not RM_PAGES_URL or os.environ.get("E2E_STUB_RMPAGES") or not os.path.isfile(WRITER),
-    reason="needs the real rm-pages (RM_PAGES_URL, no E2E_STUB_RMPAGES) and E2E_WRITER")
+    not REAL_RUN, reason="needs the real rm-pages (RM_PAGES_URL and E2E_STUB_RMPAGES=0)")
+
+
+@pytest.fixture(autouse=True)
+def writer_present():
+    """A real run without the vault writer must fail loudly, never skip."""
+    if not os.path.isfile(WRITER):
+        pytest.fail(f"E2E_WRITER not found: {WRITER} (set E2E_WRITER to homelab's rm-pages-vault/writer.py)")
 
 INBOX = """# Inbox
 

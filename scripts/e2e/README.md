@@ -13,12 +13,14 @@ Playwright (Chromium) from this machine, then removes the container, data dir an
 - `RM_PAGES_URL` and `PAGEWATCH_MIN_AGE` pass through to the container when set.
 - If Chromium is missing: `uv run --with playwright playwright install chromium`.
 - Every logged-in context (`page`, `phone_page`, `api`) starts with Auto-organize rules reset (dry mode, no rules).
-- `E2E_STUB_RMPAGES=1` runs a stub rm-pages (page watch on, nothing processed) for the pipeline UI tests.
+- A default run starts a stub rm-pages (page watch on, nothing processed) for the pipeline UI tests
+  (`E2E_STUB_RMPAGES` defaults to 1). `E2E_STUB_RMPAGES=0` opts out; so does setting `RM_PAGES_URL`
+  without `E2E_STUB_RMPAGES`.
 - **Full pipeline (`test_pipeline_e2e.py`)** needs the real rm-pages (LLM calls, ~$0.001/run) and the
-  homelab vault writer; it skips otherwise:
-  `RM_PAGES_URL=http://host.containers.internal:8801 PAGEWATCH_MIN_AGE=1ms E2E_WRITER=~/workspace/github/homelab/scripts/rm-pages-vault/writer.py scripts/e2e/run.sh -k pipeline_e2e`.
-  `PAGEWATCH_MIN_AGE=0s` means the 10 m default, so use `1ms`. rm-pages reads user e2e's blobs via
+  homelab vault writer; it skips without the real rm-pages and fails if `E2E_WRITER` is missing:
+  `E2E_STUB_RMPAGES=0 RM_PAGES_URL=http://host.containers.internal:8801 PAGEWATCH_MIN_AGE=1ms E2E_WRITER=~/workspace/github/homelab/scripts/rm-pages-vault/writer.py scripts/e2e/run.sh -k pipeline_e2e`.
+  `PAGEWATCH_MIN_AGE=0s` turns the skip window off (unset = 10 m). rm-pages reads user e2e's blobs via
   `RMPAGES_EXTRA_ROOTS=e2e=/home/mike/rmfc-e2e-data` (homelab `ansible/rm-pages.yml`). The vault is a
   temp dir; the live timeline is read (plus one `POST /api/sync` round) to prove e2e events never show.
   run.sh deletes every rm-pages row of user e2e (events, jobs, results, trail, llm_requests, contact)
-  before and after a real-rm-pages run.
+  before and after a real-rm-pages run, and prints a WARNING when that cleanup fails.
