@@ -311,7 +311,7 @@ type ContentInfo struct {
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 3
+const contentParseVersion = 4
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -379,14 +379,23 @@ func ParseContent(b []byte) ContentInfo {
 			}
 		}
 	}
-	info.PageOrder = pageOrder(raw["cPages"])
+	order, err := pageOrder(raw)
+	if err != nil {
+		return ContentInfo{Error: "cannot read pages: " + err.Error(), ParseVersion: contentParseVersion}
+	}
+	info.PageOrder = order
 	return info
 }
 
 // pageOrder the ids of the cPages pages that are not deleted, by idx.value
-func pageOrder(cp any) []string {
-	m, _ := cp.(map[string]any)
-	items, _ := m["pages"].([]any)
+// (formatVersion 2), else from the plain "pages" id array of formatVersion 1
+// (array order). A "pages" value of another shape is an error, not zero pages.
+func pageOrder(raw map[string]any) ([]string, error) {
+	cp, _ := raw["cPages"].(map[string]any)
+	if _, ok := cp["pages"]; !ok {
+		return v1PageOrder(raw["pages"])
+	}
+	items, _ := cp["pages"].([]any)
 	type pg struct{ id, idx string }
 	var pages []pg
 	for _, it := range items {
@@ -412,7 +421,31 @@ func pageOrder(cp any) []string {
 		seen[p.id] = true
 		out = append(out, p.id)
 	}
-	return out
+	return out, nil
+}
+
+func v1PageOrder(v any) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return nil, errors.New("pages is not an array")
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, it := range items {
+		id, ok := it.(string)
+		if !ok {
+			return nil, errors.New("pages holds a non-string entry")
+		}
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 // deletedFlag a cPages "deleted" register is set: absent or value 0 means the

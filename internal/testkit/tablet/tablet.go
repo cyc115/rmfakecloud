@@ -126,6 +126,20 @@ func (ft *Tablet) PDF(id, name, parent string, pageCount, lastOpenedPage int, la
 	return d
 }
 
+// PDFv1 adds a PDF with a formatVersion 1 .content: a plain "pages" array of
+// page ids (array order = page order) and no cPages. Page blobs go in d.RM.
+func (ft *Tablet) PDFv1(id, name, parent string, pageIDs []string) *Doc {
+	d := ft.PDF(id, name, parent, len(pageIDs), 0, time.Time{})
+	ids := make([]any, len(pageIDs))
+	for i, p := range pageIDs {
+		ids[i] = p
+	}
+	d.Content["formatVersion"] = 1
+	d.Content["pages"] = ids
+	d.Content["redirectionPageMap"] = make([]any, len(pageIDs))
+	return d
+}
+
 // Notebook adds a v6 notebook with no pages yet
 func (ft *Tablet) Notebook(id, name, parent string) *Doc {
 	d := &Doc{ID: id, Meta: baseMeta(name, parent, common.DocumentType, time.Now())}

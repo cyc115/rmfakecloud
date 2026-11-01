@@ -161,3 +161,35 @@ func TestPlanForSnapshotHasPages(t *testing.T) {
 		t.Fatalf("attached=%v pages=%v", snap.PagesAttached, snap.Docs["nb"].Pages)
 	}
 }
+
+func TestSnapshotPagesFromFormatV1PagesArray(t *testing.T) {
+	ft, storage := newHarness(t, uid, true)
+	ft.PDFv1("pdf", "Paper", "", []string{"p1", "p2", "p3"})
+	ft.Docs["pdf"].RM = map[string][]byte{"p2": []byte("ink")}
+	ft.Sync()
+	snap, _ := snapshotOf(t, storage)
+	d := snap.Docs["pdf"]
+	if d.PagesErr != "" || len(d.Pages) != 3 {
+		t.Fatalf("err=%q pages=%+v", d.PagesErr, d.Pages)
+	}
+	for i, want := range []string{"p1", "p2", "p3"} {
+		p := d.Pages[i]
+		if p.ID != want || p.Index != i || (p.ID == "p2") != (p.Hash != "") {
+			t.Fatalf("page %d = %+v", i, p)
+		}
+	}
+}
+
+func TestFormatV1MalformedPagesIsUnreadable(t *testing.T) {
+	for _, body := range []string{`{"pages":"nope"}`, `{"pages":[1,2]}`, `{"pages":{"a":1}}`} {
+		if ci := ParseContent([]byte(body)); ci.Readable() {
+			t.Fatalf("%s readable: %+v", body, ci)
+		}
+	}
+	if ci := ParseContent([]byte(`{"pages":["a","","b","a"]}`)); !reflect.DeepEqual(ci.PageOrder, []string{"a", "b"}) {
+		t.Fatalf("order = %v", ci.PageOrder)
+	}
+	if ci := ParseContent([]byte(`{"fileType":"pdf"}`)); !ci.Readable() || ci.PageOrder != nil {
+		t.Fatalf("no pages = %+v", ci)
+	}
+}
