@@ -40,7 +40,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	// Error reporting config for the browser. No auth: errors on the login page
 	// count too, and a DSN only grants sending events.
 	r.GET("glitchtip", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"dsn": app.cfg.GlitchtipDSN, "release": app.cfg.Version})
+		c.JSON(http.StatusOK, gin.H{"dsn": app.cfg.GlitchtipBrowserDSN, "release": app.cfg.Version})
 	})
 	r.GET("logout", func(c *gin.Context) {
 		c.SetCookie(cookieName, "/", -1, "", "", false, true)

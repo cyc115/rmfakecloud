@@ -15,6 +15,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
+	"github.com/ddvk/rmfakecloud/internal/glitchtip"
 	"github.com/ddvk/rmfakecloud/internal/hwr"
 	"github.com/ddvk/rmfakecloud/internal/mqtt"
 	"github.com/ddvk/rmfakecloud/internal/screenshare"
@@ -163,6 +164,8 @@ func NewApp(cfg *config.Config) App {
 	pcStore := passcodestore.NewInMemory()
 	codeConnector := NewCodeConnector()
 	router := gin.Default()
+	// inside gin's Recovery: reports the panic, then lets Recovery answer 500
+	router.Use(glitchtip.Default().GinRecovery())
 
 	// corsConfig := cors.DefaultConfig()
 

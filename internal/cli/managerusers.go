@@ -72,6 +72,7 @@ func (cli *Cli) SetUser(args []string) {
 // Cli cli interface
 type Cli struct {
 	storage *fs.FileSystemStorage
+	cfg     *config.Config
 }
 
 // New creates
@@ -81,6 +82,7 @@ func New(cfg *config.Config) *Cli {
 	}
 	return &Cli{
 		storage: storage,
+		cfg:     cfg,
 	}
 
 }
@@ -95,6 +97,8 @@ func (cli *Cli) Handle(args []string) bool {
 			cli.SetUser(otherarg)
 		case "listusers":
 			cli.ListUsers(otherarg)
+		case "glitchtip-test":
+			cli.GlitchtipTest(otherarg)
 		case "rmuser":
 		default:
 			log.Warn("unknown command: ", cmd)
@@ -108,6 +112,7 @@ func (cli *Cli) Handle(args []string) bool {
 func Usage() string {
 	return `Commands:
 	setuser		create users / reset passwords
+	glitchtip-test	send one test event to GLITCHTIP_DSN, print its id (exit 1 if not accepted)
 	listusers	list available users
 `
 }

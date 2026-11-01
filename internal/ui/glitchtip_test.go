@@ -13,7 +13,7 @@ import (
 // The browser fetches its error reporting config before anyone logs in.
 func TestGlitchtipConfigIsPublic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	cfg := &config.Config{GlitchtipDSN: "http://key@log.svc/7", Version: "1.2.3", JWTSecretKey: []byte("x")}
+	cfg := &config.Config{GlitchtipDSN: "http://key@host.containers.internal:8797/7", GlitchtipBrowserDSN: "http://key@log.svc/7", Version: "1.2.3", JWTSecretKey: []byte("x")}
 	app := &ReactAppWrapper{cfg: cfg, prefix: "/assets"}
 	router := gin.New()
 	app.RegisterRoutes(router)
@@ -27,7 +27,7 @@ func TestGlitchtipConfigIsPublic(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["dsn"] != cfg.GlitchtipDSN || body["release"] != "1.2.3" {
+	if body["dsn"] != cfg.GlitchtipBrowserDSN || body["release"] != "1.2.3" {
 		t.Errorf("body %v", body)
 	}
 }

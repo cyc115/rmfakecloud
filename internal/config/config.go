@@ -85,8 +85,10 @@ const (
 	// envAutoOrganizeInterval default sweep interval (minutes) for users without an auto-organize config
 	envAutoOrganizeInterval = "AUTO_ORGANIZE_INTERVAL"
 
-	// envGlitchtipDSN Sentry-protocol DSN the web UI reports its errors to
+	// envGlitchtipDSN Sentry-protocol DSN the server reports its errors to
 	envGlitchtipDSN = "GLITCHTIP_DSN"
+	// envGlitchtipBrowserDSN DSN handed to the web UI, when browsers reach GlitchTip by another host
+	envGlitchtipBrowserDSN = "GLITCHTIP_BROWSER_DSN"
 )
 
 // Config config
@@ -114,8 +116,10 @@ type Config struct {
 	HashSchemaVersion string
 	// AutoOrganizeInterval bootstrap default sweep interval in minutes, 0 = built-in default
 	AutoOrganizeInterval int
-	// GlitchtipDSN DSN handed to the web UI for error reports, "" = off
+	// GlitchtipDSN DSN the server reports its errors to, "" = off
 	GlitchtipDSN string
+	// GlitchtipBrowserDSN DSN handed to the web UI, defaults to GlitchtipDSN
+	GlitchtipBrowserDSN string
 	// Version build version, the release tag on error reports
 	Version string
 }
@@ -277,6 +281,12 @@ func FromEnv() *Config {
 		log.Fatalf("%s must be either '3' or '4', got: %s", envHashSchemaVersion, hashSchemaVersion)
 	}
 
+	glitchtipDSN := os.Getenv(envGlitchtipDSN)
+	glitchtipBrowserDSN := os.Getenv(envGlitchtipBrowserDSN)
+	if glitchtipBrowserDSN == "" {
+		glitchtipBrowserDSN = glitchtipDSN
+	}
+
 	autoOrganizeInterval := 0
 	if v := os.Getenv(envAutoOrganizeInterval); v != "" {
 		autoOrganizeInterval, err = strconv.Atoi(v)
@@ -306,7 +316,8 @@ func FromEnv() *Config {
 		HashSchemaVersion: hashSchemaVersion,
 
 		AutoOrganizeInterval: autoOrganizeInterval,
-		GlitchtipDSN:         os.Getenv(envGlitchtipDSN),
+		GlitchtipDSN:         glitchtipDSN,
+		GlitchtipBrowserDSN:  glitchtipBrowserDSN,
 	}
 	return &cfg
 }
@@ -401,7 +412,8 @@ General:
 	%s	Trust the proxy for X-Forwarded-For/X-Real-IP (set only if behind a proxy)
 	%s	Hash tree schema version: "3" or "4" (default: 3)
 	%s	Auto-organize default sweep interval for users without a config: 5, 10, 15, 30 or 60 minutes (default: 15)
-	%s	Sentry/GlitchTip DSN the web UI sends its errors to (public, read by the browser; default: off)
+	%s	Sentry/GlitchTip DSN the server reports its errors to (default: off)
+	%s	DSN the web UI reports to, if browsers reach GlitchTip by another host (default: GLITCHTIP_DSN)
 
 MQTT (for screenshare):
 	%s	MQTT TCP port (default: 8883)
@@ -441,6 +453,7 @@ myScript hwr (needs a developer account):
 		envHashSchemaVersion,
 		envAutoOrganizeInterval,
 		envGlitchtipDSN,
+		envGlitchtipBrowserDSN,
 
 		envMQTTPort,
 		envICEServers,

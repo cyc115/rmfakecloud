@@ -12,6 +12,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/app"
 	"github.com/ddvk/rmfakecloud/internal/cli"
 	"github.com/ddvk/rmfakecloud/internal/config"
+	"github.com/ddvk/rmfakecloud/internal/glitchtip"
 	"github.com/gin-gonic/gin"
 	"github.com/rifflock/lfshook"
 	"github.com/sirupsen/logrus"
@@ -76,6 +77,13 @@ func main() {
 	if cmd.Handle(os.Args) {
 		return
 	}
+
+	if err := glitchtip.Init(cfg.GlitchtipDSN, version); err != nil {
+		logrus.Warn(err)
+	} else if glitchtip.Default() != nil {
+		logrus.Info("Errors are reported to GlitchTip")
+	}
+	defer glitchtip.Close()
 
 	cfg.Verify()
 
