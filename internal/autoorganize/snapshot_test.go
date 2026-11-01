@@ -118,3 +118,45 @@ func TestContentCacheReparsesOldEntries(t *testing.T) {
 		t.Fatalf("cache entry not refreshed: %+v", old[ch])
 	}
 }
+
+func TestSnapshotUnreadableContentSetsPagesErr(t *testing.T) {
+	ft, storage := newHarness(t, uid, true)
+	ft.Notebook("nb", "Notes", "")
+	ft.SetPage("nb", "p1", []byte("a"))
+	ft.Sync()
+	tree, _ := storage.GetCachedTree(uid)
+	snap := NewSnapshot(tree)
+	if snap.PagesAttached {
+		t.Fatal("PagesAttached before AttachPages")
+	}
+	snap.AttachPages(func(*DocSnap) ContentInfo { return ContentInfo{Error: "cannot read .content: boom"} })
+	d := snap.Docs["nb"]
+	if !snap.PagesAttached || d.Pages != nil || d.PagesErr == "" {
+		t.Fatalf("attached=%v pages=%v err=%q", snap.PagesAttached, d.Pages, d.PagesErr)
+	}
+}
+
+func TestPageOrderDeletedRegisterAndDuplicates(t *testing.T) {
+	ci := ParseContent([]byte(`{"cPages":{"pages":[
+	 {"id":"a","idx":{"value":"b"}},
+	 {"id":"gone","idx":{"value":"c"},"deleted":{"timestamp":"1:2","value":1}},
+	 {"id":"back","idx":{"value":"d"},"deleted":{"timestamp":"1:3","value":0}},
+	 {"id":"a","idx":{"value":"e"}},
+	 {"id":"first","idx":{"value":"a"}}]}}`))
+	if want := []string{"first", "a", "back"}; !reflect.DeepEqual(ci.PageOrder, want) {
+		t.Fatalf("order = %v, want %v", ci.PageOrder, want)
+	}
+}
+
+func TestPlanForSnapshotHasPages(t *testing.T) {
+	ft, storage := newHarness(t, uid, true)
+	ft.Notebook("nb", "Notes", "")
+	ft.SetPage("nb", "p1", []byte("a"))
+	ft.Sync()
+	svc, _, _ := newService(t, storage)
+	tree, _ := storage.GetCachedTree(uid)
+	snap, _, _ := svc.planFor(uid, DefaultConfig(15), NewState(), tree)
+	if !snap.PagesAttached || len(snap.Docs["nb"].Pages) != 1 {
+		t.Fatalf("attached=%v pages=%v", snap.PagesAttached, snap.Docs["nb"].Pages)
+	}
+}

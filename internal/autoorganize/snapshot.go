@@ -35,8 +35,12 @@ type DocSnap struct {
 	Fingerprint    string
 	// PDFHash hash of the <doc>.pdf entry, empty when there is none
 	PDFHash string
-	// Pages the live cPages pages in idx order; filled by AttachPages
+	// Pages the live cPages pages in idx order. Only meaningful when
+	// Snapshot.PagesAttached is true and PagesErr is empty: otherwise nil
+	// means "unknown", not "no pages".
 	Pages []PageSnap
+	// PagesErr why Pages is unknown (unreadable .content); empty when known
+	PagesErr string
 
 	// pageHashes page id to the hash of its <doc>/<id>.rm entry
 	pageHashes map[string]string
@@ -59,11 +63,14 @@ func (d *DocSnap) IsFolder() bool {
 // Snapshot the tree as it was at sweep start (R3)
 type Snapshot struct {
 	Docs map[string]*DocSnap
+	// PagesAttached AttachPages ran; when false every Pages is unfilled
+	PagesAttached bool
 	// children by parent id, sorted by name then id
 	children map[string][]*DocSnap
 }
 
-// NewSnapshot deep copies the relevant fields of the tree
+// NewSnapshot deep copies the relevant fields of the tree. Pages are NOT
+// filled: call AttachPages (planFor does) before reading DocSnap.Pages.
 func NewSnapshot(tree *models.HashTree) *Snapshot {
 	s := &Snapshot{Docs: map[string]*DocSnap{}, children: map[string][]*DocSnap{}}
 	for _, d := range tree.Docs {
@@ -129,12 +136,18 @@ func snapDoc(d *models.HashDoc) *DocSnap {
 // its .rm entries. Entries that are not in cPages (toc.rm) and deleted pages
 // are left out; a page without an .rm entry (blank) has no Hash.
 func (s *Snapshot) AttachPages(content func(*DocSnap) ContentInfo) {
+	s.PagesAttached = true
 	for _, d := range s.Docs {
 		if d.IsFolder() || d.ContentHash == "" {
 			continue
 		}
 		ci := content(d)
 		d.Pages = nil
+		d.PagesErr = ""
+		if !ci.Readable() {
+			d.PagesErr = ci.Error
+			continue
+		}
 		for i, id := range ci.PageOrder {
 			d.Pages = append(d.Pages, PageSnap{ID: id, Hash: d.pageHashes[id], Index: i})
 		}
@@ -380,7 +393,7 @@ func pageOrder(cp any) []string {
 			continue
 		}
 		id, _ := p["id"].(string)
-		if _, del := p["deleted"]; id == "" || del {
+		if id == "" || deletedFlag(p["deleted"]) {
 			continue
 		}
 		ix, _ := p["idx"].(map[string]any)
@@ -389,10 +402,36 @@ func pageOrder(cp any) []string {
 	}
 	sort.SliceStable(pages, func(i, j int) bool { return pages[i].idx < pages[j].idx })
 	var out []string
+	seen := map[string]bool{}
 	for _, p := range pages {
+		if seen[p.id] {
+			continue
+		}
+		seen[p.id] = true
 		out = append(out, p.id)
 	}
 	return out
+}
+
+// deletedFlag a cPages "deleted" register is set: absent or value 0 means the
+// page is present (a restored page can keep the key)
+func deletedFlag(v any) bool {
+	switch d := v.(type) {
+	case nil:
+		return false
+	case map[string]any:
+		return deletedFlag(d["value"])
+	case bool:
+		return d
+	case json.Number:
+		f, err := d.Float64()
+		return err != nil || f != 0
+	case float64:
+		return d != 0
+	case string:
+		return d != "" && d != "0" && d != "false"
+	}
+	return true
 }
 
 func intOf(v any) int {
