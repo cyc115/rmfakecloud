@@ -142,8 +142,9 @@ func TestPageOrderDeletedRegisterAndDuplicates(t *testing.T) {
 	 {"id":"gone","idx":{"value":"c"},"deleted":{"timestamp":"1:2","value":1}},
 	 {"id":"back","idx":{"value":"d"},"deleted":{"timestamp":"1:3","value":0}},
 	 {"id":"a","idx":{"value":"e"}},
+	 {"id":"odd","idx":{"value":"f"},"deleted":{"value":"x"}},
 	 {"id":"first","idx":{"value":"a"}}]}}`))
-	if want := []string{"first", "a", "back"}; !reflect.DeepEqual(ci.PageOrder, want) {
+	if want := []string{"first", "a", "back", "odd"}; !reflect.DeepEqual(ci.PageOrder, want) {
 		t.Fatalf("order = %v, want %v", ci.PageOrder, want)
 	}
 }

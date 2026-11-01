@@ -37,7 +37,9 @@ type DocSnap struct {
 	PDFHash string
 	// Pages the live cPages pages in idx order. Only meaningful when
 	// Snapshot.PagesAttached is true and PagesErr is empty: otherwise nil
-	// means "unknown", not "no pages".
+	// means "unknown", not "no pages". A doc without .content (folders,
+	// ContentHash == "") also has nil Pages and empty PagesErr: it has no
+	// page list to compare, so consumers must not read it as "all pages gone".
 	Pages []PageSnap
 	// PagesErr why Pages is unknown (unreadable .content); empty when known
 	PagesErr string
@@ -309,7 +311,7 @@ type ContentInfo struct {
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 2
+const contentParseVersion = 3
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -425,13 +427,14 @@ func deletedFlag(v any) bool {
 		return d
 	case json.Number:
 		f, err := d.Float64()
-		return err != nil || f != 0
+		return err == nil && f != 0
 	case float64:
 		return d != 0
 	case string:
-		return d != "" && d != "0" && d != "false"
+		return d == "1" || d == "true"
 	}
-	return true
+	// unknown shape: keep the page; a false "present" only leaves a stale page
+	return false
 }
 
 func intOf(v any) int {
