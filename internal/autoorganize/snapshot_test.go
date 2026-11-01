@@ -220,3 +220,37 @@ func TestMalformedPagesKeepsOtherFields(t *testing.T) {
 		t.Fatalf("fields lost: %+v", ci)
 	}
 }
+
+func TestCPagesNullPagesIsUnreadable(t *testing.T) {
+	for _, body := range []string{
+		`{"pageCount":3,"cPages":{"pages":null}}`,
+		`{"pageCount":3,"cPages":{}}`,
+		`{"pageCount":3,"cPages":{"pages":[1,"x",{"idx":{}}]}}`,
+	} {
+		ci := ParseContent([]byte(body))
+		if !ci.Readable() || ci.PagesError == "" || ci.PageCount != 3 {
+			t.Fatalf("%s: %+v", body, ci)
+		}
+	}
+	// pageCount 0, or all pages deleted, stays a real zero
+	for _, body := range []string{
+		`{"pageCount":0,"cPages":{"pages":null}}`,
+		`{"pageCount":1,"cPages":{"pages":[{"id":"a","deleted":{"value":1}}]}}`,
+	} {
+		if ci := ParseContent([]byte(body)); !ci.Readable() || ci.PagesError != "" {
+			t.Fatalf("%s flagged: %+v", body, ci)
+		}
+	}
+}
+
+func TestCPagesWrongTypeIsUnreadable(t *testing.T) {
+	for _, body := range []string{
+		`{"cPages":{"pages":"nope"}}`,
+		`{"cPages":{"pages":{"a":1}}}`,
+		`{"cPages":"x"}`,
+	} {
+		if ci := ParseContent([]byte(body)); ci.Readable() {
+			t.Fatalf("%s readable: %+v", body, ci)
+		}
+	}
+}

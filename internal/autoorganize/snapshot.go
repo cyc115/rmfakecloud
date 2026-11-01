@@ -318,7 +318,7 @@ type ContentInfo struct {
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 5
+const contentParseVersion = 6
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -386,11 +386,11 @@ func ParseContent(b []byte) ContentInfo {
 			}
 		}
 	}
-	order, err := pageOrder(raw)
-	if err == nil && len(order) == 0 && info.PageCount > 0 && !hasPagesList(raw) {
+	order, allInvalid, err := pageOrder(raw)
+	if err == nil && len(order) == 0 && info.PageCount > 0 && (!hasPagesList(raw) || allInvalid) {
 		// a page count with no list would read as "every page deleted"; the
 		// move rules still use the blob, so only the page list is flagged
-		info.PagesError = "pageCount > 0 but no cPages or pages list"
+		info.PagesError = "pageCount > 0 but no usable cPages or pages list"
 	}
 	if err != nil {
 		info.Error = "cannot read pages: " + err.Error()
@@ -403,12 +403,25 @@ func ParseContent(b []byte) ContentInfo {
 // pageOrder the ids of the cPages pages that are not deleted, by idx.value
 // (formatVersion 2), else from the plain "pages" id array of formatVersion 1
 // (array order). A "pages" value of another shape is an error, not zero pages.
-func pageOrder(raw map[string]any) ([]string, error) {
-	cp, _ := raw["cPages"].(map[string]any)
-	if _, ok := cp["pages"]; !ok {
-		return v1PageOrder(raw["pages"])
+//
+// allInvalid is true when cPages.pages has items but none is an object with a
+// string id: the list is unusable, not empty.
+func pageOrder(raw map[string]any) (out []string, allInvalid bool, err error) {
+	if c := raw["cPages"]; c != nil {
+		if _, ok := c.(map[string]any); !ok {
+			return nil, false, errors.New("cPages is not an object")
+		}
 	}
-	items, _ := cp["pages"].([]any)
+	cp, _ := raw["cPages"].(map[string]any)
+	if cp["pages"] == nil {
+		out, err = v1PageOrder(raw["pages"])
+		return out, false, err
+	}
+	items, ok := cp["pages"].([]any)
+	if !ok {
+		return nil, false, errors.New("cPages.pages is not an array")
+	}
+	valid := 0
 	type pg struct{ id, idx string }
 	var pages []pg
 	for _, it := range items {
@@ -417,7 +430,11 @@ func pageOrder(raw map[string]any) ([]string, error) {
 			continue
 		}
 		id, _ := p["id"].(string)
-		if id == "" || deletedFlag(p["deleted"]) {
+		if id == "" {
+			continue
+		}
+		valid++
+		if deletedFlag(p["deleted"]) {
 			continue
 		}
 		ix, _ := p["idx"].(map[string]any)
@@ -425,7 +442,6 @@ func pageOrder(raw map[string]any) ([]string, error) {
 		pages = append(pages, pg{id, v})
 	}
 	sort.SliceStable(pages, func(i, j int) bool { return pages[i].idx < pages[j].idx })
-	var out []string
 	seen := map[string]bool{}
 	for _, p := range pages {
 		if seen[p.id] {
@@ -434,13 +450,13 @@ func pageOrder(raw map[string]any) ([]string, error) {
 		seen[p.id] = true
 		out = append(out, p.id)
 	}
-	return out, nil
+	return out, len(items) > 0 && valid == 0, nil
 }
 
 // hasPagesList .content carries cPages.pages or a pages array
 func hasPagesList(raw map[string]any) bool {
 	cp, _ := raw["cPages"].(map[string]any)
-	if _, ok := cp["pages"]; ok {
+	if cp["pages"] != nil {
 		return true
 	}
 	return raw["pages"] != nil
