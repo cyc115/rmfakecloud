@@ -5,6 +5,7 @@ import { useParams, useHistory } from "react-router-dom";
 import { Container, Row, Col } from "react-bootstrap";
 import File from "./File";
 import Folder from "./Folder";
+import { findPseudoNode } from "./pseudoTree";
 import Navbar from 'react-bootstrap/Navbar';
 import { BsSearch, BsFolder2Open } from "react-icons/bs";
 import Form from 'react-bootstrap/Form';
@@ -161,53 +162,6 @@ export default function DocumentList() {
 		loadDocs().catch(e => toast.error(e));
 	},[counter])
 
-  // Helper function to recursively search for an item by ID in the tree
-  // Returns both the item and its parent chain
-  const findItemInEntries = (entries, targetId, parent = null) => {
-    for (const entry of entries) {
-      if (entry.id === targetId) {
-        return { item: entry, parent };
-      }
-      if (entry.children && entry.children.length > 0) {
-        const found = findItemInEntries(entry.children, targetId, entry);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-
-  // Helper to build parent chain for breadcrumb
-  const buildParentChain = (parentItem) => {
-    if (!parentItem) return null;
-
-    const parentNode = {
-      id: parentItem.id,
-      data: parentItem,
-      isLeaf: !parentItem.isFolder,
-      isRoot: parentItem.id === 'root' || parentItem.id === 'trash',
-      // Add a dummy toggle function for compatibility
-      toggle: () => {},
-    };
-
-    // If this parent is not root/trash, try to find its parent
-    if (parentItem.id !== 'root' && parentItem.id !== 'trash') {
-      const grandparentResult = findItemInEntries(entries, parentItem.id);
-      if (grandparentResult && grandparentResult.parent) {
-        parentNode.parent = buildParentChain(grandparentResult.parent);
-      }
-    } else {
-      // This is root or trash - add the internal react-arborist root above it
-      parentNode.parent = {
-        id: '__REACT_ARBORIST_INTERNAL_ROOT__',
-        data: { id: '__REACT_ARBORIST_INTERNAL_ROOT__', name: '' },
-        isLeaf: false,
-        parent: null,
-      };
-    }
-
-    return parentNode;
-  };
-
   // Handle URL navigation: restore selection from URL parameter
   useEffect(() => {
     // Only proceed if we have entries and an itemId
@@ -215,36 +169,14 @@ export default function DocumentList() {
       return;
     }
 
-    // Find the item in our data
-    const result = findItemInEntries(entries, itemId);
+    const pseudoNode = findPseudoNode(entries, itemId);
 
-    if (!result) {
+    if (!pseudoNode) {
       // Item doesn't exist in our data
       toast.warning(`Item not found, returning to root`);
       history.push('/documents');
       return;
     }
-
-    const { item: foundItem, parent: parentItem } = result;
-
-    // Create a pseudo-node object that matches what onSelect expects.
-    // React-arborist wraps the data, so the node has both top-level properties
-    // and a 'data' property containing the actual item. Children are built the
-    // same way (with their own children and a parent link), so opening a
-    // subfolder from the pane shows its contents and a full breadcrumb trail.
-    const toPseudoNode = (item, parent) => {
-      const node = {
-        id: item.id,
-        data: item,
-        isLeaf: !item.isFolder,
-        parent,
-        isRoot: item.id === 'root' || item.id === 'trash',
-        toggle: () => {},
-      };
-      node.children = (item.children || []).map(child => toPseudoNode(child, node));
-      return node;
-    };
-    const pseudoNode = toPseudoNode(foundItem, parentItem ? buildParentChain(parentItem) : null);
 
     // Set the selection directly
     setSelected(pseudoNode);
