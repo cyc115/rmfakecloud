@@ -84,6 +84,9 @@ const (
 
 	// envAutoOrganizeInterval default sweep interval (minutes) for users without an auto-organize config
 	envAutoOrganizeInterval = "AUTO_ORGANIZE_INTERVAL"
+
+	// envGlitchtipDSN Sentry-protocol DSN the web UI reports its errors to
+	envGlitchtipDSN = "GLITCHTIP_DSN"
 )
 
 // Config config
@@ -111,6 +114,10 @@ type Config struct {
 	HashSchemaVersion string
 	// AutoOrganizeInterval bootstrap default sweep interval in minutes, 0 = built-in default
 	AutoOrganizeInterval int
+	// GlitchtipDSN DSN handed to the web UI for error reports, "" = off
+	GlitchtipDSN string
+	// Version build version, the release tag on error reports
+	Version string
 }
 
 // Verify verify
@@ -299,6 +306,7 @@ func FromEnv() *Config {
 		HashSchemaVersion: hashSchemaVersion,
 
 		AutoOrganizeInterval: autoOrganizeInterval,
+		GlitchtipDSN:         os.Getenv(envGlitchtipDSN),
 	}
 	return &cfg
 }
@@ -393,6 +401,7 @@ General:
 	%s	Trust the proxy for X-Forwarded-For/X-Real-IP (set only if behind a proxy)
 	%s	Hash tree schema version: "3" or "4" (default: 3)
 	%s	Auto-organize default sweep interval for users without a config: 5, 10, 15, 30 or 60 minutes (default: 15)
+	%s	Sentry/GlitchTip DSN the web UI sends its errors to (public, read by the browser; default: off)
 
 MQTT (for screenshare):
 	%s	MQTT TCP port (default: 8883)
@@ -431,6 +440,7 @@ myScript hwr (needs a developer account):
 		envTrustProxy,
 		envHashSchemaVersion,
 		envAutoOrganizeInterval,
+		envGlitchtipDSN,
 
 		envMQTTPort,
 		envICEServers,

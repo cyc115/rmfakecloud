@@ -69,6 +69,7 @@ func main() {
 	}
 
 	cfg := config.FromEnv()
+	cfg.Version = version
 
 	//cli
 	cmd := cli.New(cfg)

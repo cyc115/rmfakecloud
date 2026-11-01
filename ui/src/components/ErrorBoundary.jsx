@@ -1,10 +1,8 @@
 import React from "react";
+import { captureException } from "../common/glitchtip";
 
 class ErrorBoundary extends React.Component {
   state = { hasError: false, errorMessage: null };
-
-  // A fake logging service
-  logErrorToServices = console.log;
 
   static getDerivedStateFromError(error) {
     // Update state so the next render will show the fallback UI.
@@ -12,7 +10,8 @@ class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    this.logErrorToServices(error, info.componentStack);
+    console.log(error, info.componentStack);
+    captureException(error, { source: "ErrorBoundary", componentStack: info.componentStack });
   }
 
   render() {

@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import "./index.css";
+import { initGlitchtip } from "./common/glitchtip";
+
+initGlitchtip();
 
 const domNode = document.getElementById('root');
 const root = createRoot(domNode);
