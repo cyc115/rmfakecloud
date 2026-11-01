@@ -1,6 +1,6 @@
 // Package autoorganize moves documents between folders on the server according
 // to per-user rules: source folder -> scope -> trigger -> action. One sweeper
-
+// loop per sync15 user evaluates the rules against a snapshot of the tree, in
 // dry (log only) or live mode, on a timer, after a tablet sync, or on request.
 //
 // # Files

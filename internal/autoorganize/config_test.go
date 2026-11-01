@@ -373,7 +373,7 @@ func TestNormalizeFillsPipelineDefaults(t *testing.T) {
 	if r.Action.Model != DefaultPipelineModel || r.Action.Prompt != DefaultPipelinePrompt {
 		t.Fatalf("defaults not filled: %+v", r.Action)
 	}
-	if r.Scope != ScopeNotebooks || r.ID == "" {
+	if r.Scope != ScopeAll || r.ID == "" {
 		t.Fatalf("common defaults: %+v", r)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -418,5 +418,16 @@ func TestConfigJSONRoundTripWithWatch(t *testing.T) {
 		if strings.Contains(string(mb), k) {
 			t.Errorf("move rule JSON contains %s: %s", k, mb)
 		}
+	}
+}
+
+func TestNormalizePipelineScopeDefaultsToAll(t *testing.T) {
+	cfg := &Config{Rules: []Rule{
+		{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "a", Kind: WatchFolder}}},
+		{Scope: ScopeNotebooks, Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "a", Kind: WatchFolder}}},
+	}}
+	cfg.Normalize()
+	if cfg.Rules[0].Scope != ScopeAll || cfg.Rules[1].Scope != ScopeNotebooks {
+		t.Fatalf("scopes = %q, %q", cfg.Rules[0].Scope, cfg.Rules[1].Scope)
 	}
 }

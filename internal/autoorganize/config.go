@@ -238,7 +238,8 @@ func (c *Config) Normalize() {
 		if r.Scope == "" {
 			r.Scope = ScopePdfEpub
 			if r.IsPipeline() {
-				r.Scope = ScopeNotebooks
+				// watched documents include annotated PDFs/EPUBs
+				r.Scope = ScopeAll
 			}
 		}
 		if r.IsPipeline() {
