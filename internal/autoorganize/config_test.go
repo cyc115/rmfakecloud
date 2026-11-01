@@ -292,3 +292,131 @@ func TestSaveConfigRevisionAndBackup(t *testing.T) {
 		t.Errorf("rejected config was written: rev %d", cur.Revision)
 	}
 }
+
+func pipelineRule() Rule {
+	return Rule{
+		ID: "pipe", Enabled: true,
+		Scope:   ScopeNotebooks,
+		Trigger: Trigger{Type: TriggerPageChanged},
+		Action:  Action{Type: ActionPipeline},
+		Watch:   []WatchRef{{ID: "nb1", Kind: "folder", Name: "Notebooks"}},
+	}
+}
+
+func TestPipelineRuleValidates(t *testing.T) {
+	r := pipelineRule()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("pipeline rule must validate: %v", err)
+	}
+	if !r.IsPipeline() {
+		t.Fatal("IsPipeline false")
+	}
+	mv := seedRule()
+	if mv.IsPipeline() {
+		t.Fatal("move rule reported as pipeline")
+	}
+	r.Watch = append(r.Watch, WatchRef{ID: "doc1", Kind: "document"})
+	if err := r.Validate(); err != nil {
+		t.Fatalf("folder + document watch must validate: %v", err)
+	}
+	// a root folder watch is allowed (empty id is the root)
+	r.Watch = []WatchRef{{ID: RootID, Kind: "folder"}}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("root watch must validate: %v", err)
+	}
+	r.Watch = []WatchRef{{ID: "x", Kind: "page"}}
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "kind") {
+		t.Fatalf("bad kind: %v", err)
+	}
+	r = pipelineRule()
+	r.Trigger = Trigger{Type: TriggerNameMatches, Pattern: "*"}
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "page_changed") {
+		t.Fatalf("pipeline needs page_changed: %v", err)
+	}
+	r = pipelineRule()
+	r.Scope = "pdf"
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("scope still checked: %v", err)
+	}
+}
+
+func TestPipelineRuleRequiresWatch(t *testing.T) {
+	r := pipelineRule()
+	r.Watch = nil
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "watch") {
+		t.Fatalf("empty watch: %v", err)
+	}
+}
+
+func TestPipelineRuleRejectsTrashWatch(t *testing.T) {
+	r := pipelineRule()
+	r.Watch = []WatchRef{{ID: "trash", Kind: "folder"}}
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "trash") {
+		t.Fatalf("trash watch: %v", err)
+	}
+}
+
+func TestPageChangedRejectedOnMoveRule(t *testing.T) {
+	r := seedRule()
+	r.Trigger = Trigger{Type: TriggerPageChanged}
+	r.Scope = ScopeAll
+	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "page_changed") {
+		t.Fatalf("page_changed on a move rule: %v", err)
+	}
+}
+
+func TestNormalizeFillsPipelineDefaults(t *testing.T) {
+	cfg := &Config{Rules: []Rule{{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline},
+		Watch: []WatchRef{{ID: "a", Kind: "folder"}}}}}
+	cfg.Normalize()
+	r := cfg.Rules[0]
+	if r.Action.Model != DefaultPipelineModel || r.Action.Prompt != DefaultPipelinePrompt {
+		t.Fatalf("defaults not filled: %+v", r.Action)
+	}
+	if r.Scope != ScopeNotebooks || r.ID == "" {
+		t.Fatalf("common defaults: %+v", r)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("normalized pipeline config invalid: %v", err)
+	}
+	// explicit values are kept
+	cfg = &Config{Rules: []Rule{{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline, Model: "m/x", Prompt: "p"},
+		Watch: []WatchRef{{ID: "a", Kind: "folder"}}}}}
+	cfg.Normalize()
+	if cfg.Rules[0].Action.Model != "m/x" || cfg.Rules[0].Action.Prompt != "p" {
+		t.Fatalf("explicit values overwritten: %+v", cfg.Rules[0].Action)
+	}
+	// move rules get no model or prompt
+	mv := &Config{Rules: []Rule{seedRule()}}
+	mv.Normalize()
+	if mv.Rules[0].Action.Model != "" || mv.Rules[0].Action.Prompt != "" {
+		t.Fatalf("move rule got pipeline defaults: %+v", mv.Rules[0].Action)
+	}
+}
+
+func TestConfigJSONRoundTripWithWatch(t *testing.T) {
+	cfg := &Config{Revision: 2, Settings: Settings{Enabled: true, Mode: ModeLive, IntervalMinutes: 15},
+		Rules: []Rule{pipelineRule(), seedRule()}}
+	cfg.Normalize()
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Config
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg, &back) {
+		t.Fatalf("round trip differs:\n%+v\n%+v", cfg, &back)
+	}
+	if !strings.Contains(string(b), `"watch":[{"id":"nb1","kind":"folder","name":"Notebooks"}]`) {
+		t.Errorf("watch not serialised: %s", b)
+	}
+	// a move rule serialises without watch, prompt or model
+	mb, _ := json.Marshal(seedRule())
+	for _, k := range []string{`"watch"`, `"prompt"`, `"model"`} {
+		if strings.Contains(string(mb), k) {
+			t.Errorf("move rule JSON contains %s: %s", k, mb)
+		}
+	}
+}

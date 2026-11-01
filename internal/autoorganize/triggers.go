@@ -167,6 +167,12 @@ func evalAgeSinceCreated(t *Trigger, d *DocSnap, _ *ContentInfo, fs *FirstSeen, 
 }
 
 // evalPinnedIs pinned_is
+// evalNotAMoveTrigger the Eval of triggers the move planner does not own
+// (page_changed): a skip, never a match and never nil
+func evalNotAMoveTrigger(t *Trigger, _ *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+	return evaluation{skip: SkipOutOfScope, skipDetail: t.Type + " is evaluated by the page watch, not the move planner"}
+}
+
 func evalPinnedIs(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
 	ev := evaluation{inputs: map[string]string{"pinned": strconv.FormatBool(d.Pinned)}}
 	ev.match = d.Pinned == t.Pinned

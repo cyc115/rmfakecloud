@@ -158,6 +158,10 @@ func BuildPlan(in PlanInput) *Plan {
 
 	for i := range in.Config.Rules {
 		r := &in.Config.Rules[i]
+		if r.IsPipeline() {
+			// pipeline rules never claim a document; numbering keeps the config position
+			continue
+		}
 		num := i + 1
 		rr := RuleResult{RuleID: r.ID, Number: num, Name: r.Name, Enabled: r.Enabled, SourceID: r.Source.ID, Problems: []string{}}
 

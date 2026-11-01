@@ -35,10 +35,34 @@ const (
 	TriggerReadProgress    = "read_progress"
 	TriggerAgeSinceCreated = "age_since_created"
 	TriggerPinnedIs        = "pinned_is"
+	// TriggerPageChanged belongs to pipeline rules only; the move planner never evaluates it
+	TriggerPageChanged = "page_changed"
 )
 
-// ActionMove the only v1 action
-const ActionMove = "move"
+// Actions
+const (
+	// ActionMove moves a matching document to a folder (the sweeper)
+	ActionMove = "move"
+	// ActionPipeline sends changed pages of watched notebooks to rm-pages (internal/pagewatch)
+	ActionPipeline = "pipeline"
+)
+
+// Watch kinds
+const (
+	WatchFolder   = "folder"
+	WatchDocument = "document"
+)
+
+// DefaultPipelineModel the OpenRouter model a pipeline rule uses when it names none
+const DefaultPipelineModel = "deepseek/deepseek-v4.1-flash"
+
+// DefaultPipelinePrompt the extraction intent a pipeline rule carries to rm-pages
+// when it names none. rm-pages adds the fixed output contract on its side.
+const DefaultPipelinePrompt = `Compare the BEFORE and AFTER images of one handwritten notebook page.
+List only the action items that are new in AFTER: things Mike intends to do. Ignore anything already present in BEFORE.
+Skip anything marked "-inbox": on a line, skip that line; on a heading, skip the block under it until the next heading or a clear gap; at the top of the page, skip the whole page. Put skipped items in "skipped".
+Write each task as one short line that starts with a verb. Fix obvious handwriting misreads.
+`
 
 // ParentSource createIfMissing parent meaning "the rule's source folder"
 const ParentSource = "source"
@@ -120,9 +144,19 @@ func (t *Trigger) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Action of a rule
+// WatchRef a folder or document a pipeline rule watches, by UUID only.
+// Name is a display cache. An empty folder id is the root.
+type WatchRef struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"` // WatchFolder | WatchDocument
+	Name string `json:"name,omitempty"`
+}
+
+// Action of a rule; Prompt and Model are used by the pipeline action only
 type Action struct {
-	Type string `json:"type"`
+	Type   string `json:"type"`
+	Prompt string `json:"prompt,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 // Rule a single organisation rule
@@ -135,6 +169,8 @@ type Rule struct {
 	Trigger     Trigger     `json:"trigger"`
 	Destination Destination `json:"destination"`
 	Action      Action      `json:"action"`
+	// Watch what a pipeline rule watches; unused by move rules
+	Watch []WatchRef `json:"watch,omitempty"`
 }
 
 // Config the UI owned config, auto-organize.json
@@ -153,6 +189,11 @@ func DefaultConfig(interval int) *Config {
 		Settings: Settings{Enabled: true, Mode: ModeDry, IntervalMinutes: interval},
 		Rules:    []Rule{},
 	}
+}
+
+// IsPipeline reports whether the rule runs the pipeline action (not the move planner)
+func (r *Rule) IsPipeline() bool {
+	return r.Action.Type == ActionPipeline
 }
 
 // SkipsPinned the default pinned guard applies unless the trigger is about pinning
@@ -191,11 +232,22 @@ func (c *Config) Normalize() {
 		if r.ID == "" {
 			r.ID = uuid.NewString()
 		}
-		if r.Scope == "" {
-			r.Scope = ScopePdfEpub
-		}
 		if r.Action.Type == "" {
 			r.Action.Type = ActionMove
+		}
+		if r.Scope == "" {
+			r.Scope = ScopePdfEpub
+			if r.IsPipeline() {
+				r.Scope = ScopeNotebooks
+			}
+		}
+		if r.IsPipeline() {
+			if r.Action.Model == "" {
+				r.Action.Model = DefaultPipelineModel
+			}
+			if r.Action.Prompt == "" {
+				r.Action.Prompt = DefaultPipelinePrompt
+			}
 		}
 		if def, ok := triggerDefs[r.Trigger.Type]; ok && def.Defaults != nil {
 			def.Defaults(&r.Trigger)
@@ -247,7 +299,11 @@ func (c *Config) Validate() error {
 
 // Validate a single rule
 func (r *Rule) Validate() error {
-	if r.Action.Type != ActionMove {
+	switch r.Action.Type {
+	case ActionMove:
+	case ActionPipeline:
+		return r.validatePipeline()
+	default:
 		return fmt.Errorf("unsupported action %q", r.Action.Type)
 	}
 	switch r.Scope {
@@ -277,11 +333,45 @@ func (r *Rule) Validate() error {
 	if !ok {
 		return fmt.Errorf("unknown trigger %q", t.Type)
 	}
+	if def.PipelineOnly {
+		return fmt.Errorf("trigger %q is only for pipeline rules", t.Type)
+	}
 	if def.PageBased && r.Scope != ScopePdfEpub {
 		return errors.New("this trigger only applies to PDF & EPUB")
 	}
 	if def.Validate != nil {
 		return def.Validate(t)
+	}
+	return nil
+}
+
+// validatePipeline the pipeline action: page_changed trigger and a non-empty
+// watch list; source and destination are not used
+func (r *Rule) validatePipeline() error {
+	switch r.Scope {
+	case ScopePdfEpub, ScopeNotebooks, ScopeAll:
+	default:
+		return fmt.Errorf("unknown scope %q", r.Scope)
+	}
+	if r.Trigger.Type != TriggerPageChanged {
+		return fmt.Errorf("a pipeline rule needs the %s trigger", TriggerPageChanged)
+	}
+	if len(r.Watch) == 0 {
+		return errors.New("a pipeline rule needs at least one watch entry")
+	}
+	for _, w := range r.Watch {
+		switch w.Kind {
+		case WatchFolder:
+		case WatchDocument:
+			if w.ID == "" {
+				return errors.New("a watched document needs an id")
+			}
+		default:
+			return fmt.Errorf("unknown watch kind %q", w.Kind)
+		}
+		if w.ID == trashID {
+			return errors.New("cannot watch the trash")
+		}
 	}
 	return nil
 }

@@ -1,6 +1,6 @@
 // Package autoorganize moves documents between folders on the server according
 // to per-user rules: source folder -> scope -> trigger -> action. One sweeper
-// loop per sync15 user evaluates the rules against a snapshot of the tree, in
+
 // dry (log only) or live mode, on a timer, after a tablet sync, or on request.
 //
 // # Files
@@ -47,13 +47,31 @@
 //
 // # Adding an action
 //
-// Today the only action is "move". Its pieces are: Action.Type validation in
-// Rule.Validate (config.go); the planner's PlannedMove (plan.go); the
-// sweeper's applyMove and the shared recordLiveMove (service.go); the
-// explicit variants Undo and Reapply (service.go); and the move closure
-// itself (move.go). A second action would add a plan entry type next to
-// PlannedMove, a sibling of applyMove switched on Action.Type, and its own
-// undo semantics; the holds/cycle guard are move-specific and would not apply.
+// There are two actions. "move" is run by the sweeper (service.go) over the
+// plan from BuildPlan; "pipeline" is run by internal/pagewatch and is
+// invisible to the planner. Where an action lives:
+//
+//   - config.go: the Action* constant, any Action/Rule fields (pipeline adds
+//     Action.Prompt, Action.Model and Rule.Watch), the Normalize defaults and
+//     the per-action branch at the top of Rule.Validate. Move validates source,
+//     destination and trigger; pipeline (validatePipeline) requires the
+//     page_changed trigger and at least one valid, non-trash Watch entry, and
+//     uses neither Source nor Destination.
+//   - registry.go: a trigger that belongs to one action sets PipelineOnly, so
+//     the other action rejects it (page_changed is rejected on move rules). Its
+//     Eval must still be non-nil; page_changed uses evalNotAMoveTrigger, a skip.
+//   - plan.go: BuildPlan and LoopWarnings (config.go) consider move rules only.
+//     A new action that must not claim documents is skipped at the top of the
+//     BuildPlan loop (as IsPipeline rules are); rule numbers keep the config
+//     position.
+//   - move: PlannedMove (plan.go), applyMove and recordLiveMove (service.go),
+//     Undo and Reapply, and moveDoc (move.go). The holds/cycle guard are
+//     move-specific. A further action adds its own plan entry type and a
+//     sibling of applyMove switched on Action.Type, with its own undo
+//     semantics.
+//   - pipeline: DefaultPipelineModel and DefaultPipelinePrompt are the values
+//     Normalize fills for an empty model/prompt; the page watch reads
+//     Rule.Watch, Action.Prompt/Model and Enabled from the saved config.
 //
 // # Adding a sweep trigger
 //

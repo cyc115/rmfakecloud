@@ -646,3 +646,37 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+func TestPlanIgnoresPipelineRules(t *testing.T) {
+	now := time.Now()
+	m := newMemTree()
+	m.folder("inbox", "Inbox", "")
+	m.folder("news", "News", "")
+	m.doc("wsj", "WSJ Weekend", "inbox", pdfInfo(0), nil)
+	pipe := Rule{ID: "pipe", Enabled: true, Scope: ScopeAll, Trigger: Trigger{Type: TriggerPageChanged},
+		Action: Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "inbox", Kind: "folder"}}}
+	mv := moveRule("r2", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"})
+	p := m.plan(t, now, nil, pipe, mv)
+	if got := strings.Join(movedIDs(p), ","); got != "wsj" {
+		t.Fatalf("moves = %q, want wsj (a pipeline rule must not claim documents)", got)
+	}
+	if p.Moves[0].RuleNumber != 2 {
+		t.Errorf("rule number = %d, want 2 (numbering keeps the config position)", p.Moves[0].RuleNumber)
+	}
+	if skipOf(p, "wsj") != nil {
+		t.Errorf("unexpected skip: %+v", skipOf(p, "wsj"))
+	}
+	if ruleResult(p, "pipe") != nil {
+		t.Errorf("pipeline rule must not appear in the move plan")
+	}
+}
+
+func TestLoopWarningsIgnorePipelineRules(t *testing.T) {
+	a := moveRule("a", "f1", "f2", Trigger{Type: TriggerPinnedIs, Pinned: true})
+	pipe := Rule{ID: "p", Enabled: true, Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline},
+		Source: FolderRef{ID: "f2"}, Destination: Destination{FolderRef: FolderRef{ID: "f1"}}}
+	cfg := &Config{Rules: []Rule{a, pipe}}
+	if got := LoopWarnings(cfg, func(r *Rule) (string, bool) { return r.Destination.ID, true }); len(got) != 0 {
+		t.Fatalf("pipeline rule formed a loop: %v", got)
+	}
+}

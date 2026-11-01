@@ -8,7 +8,7 @@ import (
 
 func TestRegistryCoversEveryTriggerType(t *testing.T) {
 	want := []string{TriggerAgeSinceCreated, TriggerFinishedReading, TriggerNameMatches, TriggerNotModified,
-		TriggerNotOpened, TriggerPinnedIs, TriggerReadProgress, TriggerTagIs}
+		TriggerNotOpened, TriggerPageChanged, TriggerPinnedIs, TriggerReadProgress, TriggerTagIs}
 	got := TriggerTypes()
 	if len(got) != len(want) {
 		t.Fatalf("TriggerTypes = %v, want %v", got, want)
@@ -76,5 +76,13 @@ func TestUnknownTriggerIsRejectedAndSkipped(t *testing.T) {
 	ev := evalTrigger(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
 	if ev.skip != SkipInvalidRule {
 		t.Errorf("evalTrigger skip = %q", ev.skip)
+	}
+}
+
+func TestPageChangedEvalSkipsNeverMatches(t *testing.T) {
+	r := Rule{Scope: ScopeAll, Action: Action{Type: ActionPipeline}, Trigger: Trigger{Type: TriggerPageChanged}}
+	ev := evalTrigger(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
+	if ev.match || ev.skip == "" {
+		t.Errorf("page_changed under the move planner must skip, got %+v", ev)
 	}
 }

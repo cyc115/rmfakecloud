@@ -13,6 +13,8 @@ import (
 type triggerDef struct {
 	// PageBased needs a pageCount, which locks the rule to PDF & EPUB
 	PageBased bool
+	// PipelineOnly the trigger belongs to pipeline rules; move rules reject it
+	PipelineOnly bool
 	// AbsentMinAgeDays what minAgeDays means when the JSON leaves it out
 	AbsentMinAgeDays int
 	// Defaults fills parameters that are zero on save (before Validate)
@@ -121,6 +123,11 @@ var triggerDefs = map[string]*triggerDef{
 	},
 	TriggerPinnedIs: {
 		Eval: evalPinnedIs,
+	},
+	// page_changed is evaluated by internal/pagewatch, never by the move planner
+	TriggerPageChanged: {
+		PipelineOnly: true,
+		Eval:         evalNotAMoveTrigger,
 	},
 }
 
