@@ -4,15 +4,24 @@ const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 // Between returns a key strictly between a and b in string order. a == ""
 // means no lower bound, b == "" no upper bound. Keys never end in "0", so a
-// key can always be inserted before any other.
+// key can always be inserted before any other. Nothing sorts below "0", so
+// Between("", "0") has no valid answer and returns "0".
 func Between(a, b string) string {
+	if b == "0" {
+		return b
+	}
 	if b != "" {
 		n := 0
 		for n < len(b) && digitAt(a, n) == digitAt(b, n) {
 			n++
 		}
 		if n > 0 {
-			return b[:n] + Between(a[n:], b[n:])
+			// a is zero-padded: past its end it is the empty (minimum) key
+			rest := ""
+			if n < len(a) {
+				rest = a[n:]
+			}
+			return b[:n] + Between(rest, b[n:])
 		}
 	}
 	da := 0

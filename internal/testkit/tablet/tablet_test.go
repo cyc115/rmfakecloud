@@ -84,10 +84,14 @@ func TestAppendedPagesSortInOrder(t *testing.T) {
 	ft.Notebook("nb", "Notes", "")
 	var want []string
 	for _, id := range []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"} {
-		ft.SetPage("nb", id, []byte(id))
+		if err := ft.SetPage("nb", id, []byte(id)); err != nil {
+			t.Fatal(err)
+		}
 		want = append(want, id)
 	}
-	ft.Sync()
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	if got := pageOrder(t, ft, "nb"); !eq(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
@@ -96,13 +100,21 @@ func TestAppendedPagesSortInOrder(t *testing.T) {
 func TestDeletePageRemovesEntry(t *testing.T) {
 	ft := setup(t)
 	ft.Notebook("nb", "Notes", "")
-	ft.SetPage("nb", "p1", fixture(t, "strokes_a.rm"))
-	ft.SetPage("nb", "p2", fixture(t, "strokes_ab.rm"))
-	ft.Sync()
+	if err := ft.SetPage("nb", "p1", fixture(t, "strokes_a.rm")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.SetPage("nb", "p2", fixture(t, "strokes_ab.rm")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	if err := ft.DeletePage("nb", "p1"); err != nil {
 		t.Fatal(err)
 	}
-	ft.Sync()
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	if ft.ServerBlob("nb", "nb/p1.rm") != nil {
 		t.Fatal("deleted page still has an .rm entry")
 	}
@@ -129,9 +141,13 @@ func TestMovePageBeforeReorders(t *testing.T) {
 	ft := setup(t)
 	ft.Notebook("nb", "Notes", "")
 	for _, id := range []string{"p1", "p2", "p3"} {
-		ft.SetPage("nb", id, []byte(id))
+		if err := ft.SetPage("nb", id, []byte(id)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	ft.Sync()
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	if got := pageOrder(t, ft, "nb"); !eq(got, []string{"p1", "p2", "p3"}) {
 		t.Fatalf("before = %v", got)
 	}
@@ -148,10 +164,53 @@ func TestMovePageBeforeReorders(t *testing.T) {
 		if err := ft.MovePageBefore("nb", c.page, c.before); err != nil {
 			t.Fatal(err)
 		}
-		ft.Sync()
+		if err := ft.Sync(); err != nil {
+			t.Fatal(err)
+		}
 		if got := pageOrder(t, ft, "nb"); !eq(got, c.want) {
 			t.Fatalf("move %s before %s: got %v, want %v", c.page, c.before, got, c.want)
 		}
+	}
+}
+
+func TestMovePageBeforeToFrontManyTimes(t *testing.T) {
+	ft := setup(t)
+	ft.Notebook("nb", "Notes", "")
+	for _, id := range []string{"p1", "p2", "p3"} {
+		if err := ft.SetPage("nb", id, []byte(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// alternate which page goes to the front so the first idx keeps shrinking
+	front, other := "p1", "p3"
+	for i := 0; i < 30; i++ {
+		if err := ft.MovePageBefore("nb", other, front); err != nil {
+			t.Fatal(err)
+		}
+		front, other = other, front
+		if err := ft.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		got := pageOrder(t, ft, "nb")
+		if len(got) != 3 || got[0] != front {
+			t.Fatalf("move %d: order = %v, want %s first", i, got, front)
+		}
+	}
+}
+
+func TestBetween(t *testing.T) {
+	cases := []struct{ a, b string }{
+		{"", ""}, {"i", ""}, {"", "i"}, {"", "0i"}, {"", "1"}, {"", "00i"},
+		{"a", "b"}, {"a", "a1"}, {"az", "b"}, {"0i", "1"}, {"09", "0i"},
+	}
+	for _, c := range cases {
+		got := tablet.Between(c.a, c.b)
+		if !(c.a < got) || (c.b != "" && !(got < c.b)) {
+			t.Errorf("Between(%q, %q) = %q, not strictly between", c.a, c.b, got)
+		}
+	}
+	if got := tablet.Between("", "0"); got != "0" { // no key sorts below "0"
+		t.Errorf(`Between("", "0") = %q`, got)
 	}
 }
 
@@ -162,7 +221,9 @@ func TestOpenSetsLastOpened(t *testing.T) {
 	if err := ft.Open("nb", 4, at); err != nil {
 		t.Fatal(err)
 	}
-	ft.Sync()
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	m := ft.ServerMetaRaw("nb")
 	if m["lastOpened"] != tablet.Ms(at) {
 		t.Fatalf("lastOpened = %v, want %s", m["lastOpened"], tablet.Ms(at))
@@ -189,8 +250,12 @@ func TestNilTestReturnsErrors(t *testing.T) {
 func TestLoadRoundTripsPages(t *testing.T) {
 	ft := setup(t)
 	ft.Notebook("nb", "Notes", "")
-	ft.SetPage("nb", "p1", fixture(t, "strokes_a.rm"))
-	ft.Sync()
+	if err := ft.SetPage("nb", "p1", fixture(t, "strokes_a.rm")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
 	fresh := tablet.New(nil, ft.FS, "u")
 	if err := fresh.Load(); err != nil {
 		t.Fatal(err)
