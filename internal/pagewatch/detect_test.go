@@ -1019,3 +1019,26 @@ func TestPageOrderNotShared(t *testing.T) {
 		}
 	}
 }
+
+func TestNewDocSkippedOnItsFirstSweepIsStillNew(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("old", "Old", "")
+	e.page("old", "p1", "strokes_a.rm")
+	e.sweep()
+
+	e.ft.Notebook("nb", "New", "")
+	e.page("nb", "p1", "strokes_ab.rm")
+	e.ft.Docs["nb"].RawContent = []byte("{not json")
+	p := e.sweep()
+	if !hasSkip(p, SkipNote{DocID: "nb", Reason: SkipContent}) {
+		t.Fatalf("skipped = %+v", p.Skipped)
+	}
+
+	e.ft.Docs["nb"].RawContent = nil
+	p = e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1")
+	if p.Pipeline[0].BeforeHash != "" {
+		t.Fatalf("before = %q", p.Pipeline[0].BeforeHash)
+	}
+}

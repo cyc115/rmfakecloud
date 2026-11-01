@@ -36,7 +36,9 @@
 //   - new: a doc first seen (State.Seen) after the rule last ran
 //     (RuleState.LastActive) is a member at once; its pages are edits with
 //     an empty BeforeHash, so tasks are extracted. This covers docs created
-//     while the rule or the account was disabled.
+//     while the rule or the account was disabled. Seen is recorded for
+//     trashed docs always, for content/location-skipped docs only on the
+//     very first run (otherwise from their first processable sweep).
 //   - member: an "edit" per changed page, BeforeHash = the rule's baseline.
 //   - both: a "page_deleted" (no hashes, PageIndex -1) per page the baseline
 //     holds that is gone; the page leaves the baseline once that is accepted.

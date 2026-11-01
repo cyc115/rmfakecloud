@@ -61,8 +61,8 @@ func Detect(in Input) Plan {
 		d.skip(SkipNote{Reason: SkipNotAttached})
 		return d.plan()
 	}
-	d.recordSeen()
 	d.collectDocs()
+	d.recordSeen()
 	d.feed()
 	d.pipeline()
 	return d.plan()
@@ -109,14 +109,16 @@ type detector struct {
 	base *State
 	// docs every non-folder doc that can be compared; docs left alone this
 	// sweep (content/location skips) are absent, so nothing touches them
-	docs     []*docView
-	mtimes   map[string]mtime
-	feedEvs  []Event
-	pipeEvs  []Event
-	skips    []SkipNote
-	seenSkip map[SkipNote]bool
-	effects  []effect
-	joins    []join
+	docs []*docView
+	// leftAlone docs skipped this sweep for content or location
+	leftAlone map[string]bool
+	mtimes    map[string]mtime
+	feedEvs   []Event
+	pipeEvs   []Event
+	skips     []SkipNote
+	seenSkip  map[SkipNote]bool
+	effects   []effect
+	joins     []join
 }
 
 func (d *detector) skip(n SkipNote) {
@@ -175,6 +177,7 @@ func (d *detector) collectDocs() {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	d.leftAlone = map[string]bool{}
 	for _, id := range ids {
 		s := snap.Docs[id]
 		if s.IsFolder() {
@@ -185,15 +188,18 @@ func (d *detector) collectDocs() {
 			d.docs = append(d.docs, &docView{snap: s, trashed: true})
 			continue
 		case autoorganize.LocUnknown:
+			d.leftAlone[id] = true
 			d.skip(SkipNote{DocID: id, Reason: SkipLocation})
 			continue
 		}
 		if s.PagesErr != "" || s.ContentHash == "" {
+			d.leftAlone[id] = true
 			d.skip(SkipNote{DocID: id, Reason: SkipContent})
 			continue
 		}
 		ci := d.in.Content(s)
 		if !ci.Readable() {
+			d.leftAlone[id] = true
 			d.skip(SkipNote{DocID: id, Reason: SkipContent})
 			continue
 		}
@@ -263,14 +269,20 @@ func (d *detector) event(kind string, v *docView, pageID string, changedAt time.
 }
 
 // recordSeen the first sweep that saw each doc (R15); docs gone from the
-// tree are forgotten
+// tree are forgotten. A doc left alone (content/location) is recorded only
+// on the very first run: later, a new doc skipped on its first sweep must
+// still be new when it becomes processable (R16).
 func (d *detector) recordSeen() {
 	now := d.in.Now
 	var add, drop []string
 	for _, id := range sortedKeys(d.in.Snap.Docs) {
-		if _, ok := d.base.Seen[id]; !ok && !d.in.Snap.Docs[id].IsFolder() {
-			add = append(add, id)
+		if _, ok := d.base.Seen[id]; ok || d.in.Snap.Docs[id].IsFolder() {
+			continue
 		}
+		if d.leftAlone[id] && d.base.FeedInitialised {
+			continue
+		}
+		add = append(add, id)
 	}
 	for _, id := range sortedKeys(d.base.Seen) {
 		if _, ok := d.in.Snap.Docs[id]; !ok {
