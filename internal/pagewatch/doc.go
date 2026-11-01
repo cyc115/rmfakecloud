@@ -11,6 +11,20 @@
 //     sweeps.
 //   - detect.go  Detect, the pure detector: Snapshot + Config + State →
 //     Plan{Feed, Pipeline, Skipped, Advance}.
+//   - store.go   the per-user files: page-watch.state.json (+ .bak, the
+//     previous good state) and page-watch.runs.json.
+//
+// # State recovery
+//
+// Each save first copies the current state file to page-watch.state.json.bak
+// (only when it parses). A state file that does not parse is replaced by the
+// .bak on load, with an Error; the changes since that save are re-sent under
+// the same trace ids, which rm-pages recognises, so nothing is lost or
+// doubled. When both are unreadable every run fails with an Error and nothing
+// is sent. To recover by hand: stop rmfakecloud, copy a good .bak over the
+// state file (or fix the JSON), start again. Deleting both files is a reset:
+// the next run is a first run (baselines only, no events), so changes made
+// since the last good state are not sent — prefer the .bak.
 //
 // # Two streams
 //
