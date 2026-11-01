@@ -59,6 +59,7 @@ def _context(browser, base_url, **kw):
     pg.goto("/login")
     token = pg.evaluate(LOGIN_JS, [USER, PASSWORD])
     ctx.set_extra_http_headers({"Authorization": f"Bearer {token}"})
+    _reset_rules(ctx.request)
     pg.console_errors = []
     pg.on("console", lambda m: pg.console_errors.append(m.text) if m.type == "error" else None)
     pg.on("pageerror", lambda e: pg.console_errors.append(str(e)))
@@ -80,9 +81,9 @@ def seed_pdf(browser, base_url):
     ctx, _ = _context(browser, base_url)
     api = ctx.request
     docs = api.get("/ui/api/documents").json()
-    if not find(docs["Entries"], "Paper"):
-        inbox = find(docs["Entries"], "Inbox")
-        assert inbox, "seed missing: Inbox folder"
+    inbox = find(docs["Entries"], "Inbox")
+    assert inbox, "seed missing: Inbox folder"
+    if not any(c["name"] == "Paper" for c in inbox.get("children") or []):
         r = api.post("/ui/api/documents/upload", multipart={
             "parent": inbox["id"],
             "file": {"name": "Paper.pdf", "mimeType": "application/pdf", "buffer": PDF}})
@@ -105,7 +106,6 @@ def page(request, browser, base_url):
     kw = {} if request.param == "desktop" else {
         "viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True}
     ctx, pg = _context(browser, base_url, **kw)
-    _reset_rules(ctx.request)
     yield pg
     ctx.close()
 

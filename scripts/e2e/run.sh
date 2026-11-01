@@ -16,12 +16,18 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cleanup() {
   ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; rm -rf $DATA $REMOTE" || true
 }
-[ -n "${E2E_KEEP:-}" ] || trap cleanup EXIT
+[ -n "${E2E_KEEP:-}" ] || trap cleanup EXIT INT TERM
 cleanup
 
 echo ">> rsync + build image"
 rsync -az --delete --exclude ui/node_modules --exclude .git "$ROOT"/ "$HOST:$REMOTE/"
 ssh "$HOST" "cd $REMOTE && podman build -q --build-arg VERSION=e2e -t localhost/rmfakecloud:e2e -f Dockerfile ."
+
+# env passthrough: expanded here (ssh does not forward env), quoted for the remote shell
+ENVS=""
+for v in RM_PAGES_URL PAGEWATCH_MIN_AGE; do
+  [ -n "${!v:-}" ] && ENVS="$ENVS -e $(printf '%q' "$v=${!v}")"
+done
 
 echo ">> seed data dir"
 ssh "$HOST" bash -s <<REMOTE_EOF
@@ -41,19 +47,17 @@ seed notebook 55555555-5555-4555-8555-555555555555 "E2E Notes" 33333333-3333-433
 seed page 55555555-5555-4555-8555-555555555555 p1 /src/\$T/strokes_a.rm
 # password login e2e / e2epass123 (rmseed init uses a placeholder password)
 podman run --rm -v $DATA:/data:Z -e DATADIR=/data localhost/rmfakecloud:e2e setuser -u e2e -p e2epass123 -a -s
-envs=""
-[ -n "\${RM_PAGES_URL:-}" ] && envs="\$envs -e RM_PAGES_URL=\$RM_PAGES_URL"
-[ -n "\${PAGEWATCH_MIN_AGE:-}" ] && envs="\$envs -e PAGEWATCH_MIN_AGE=\$PAGEWATCH_MIN_AGE"
-podman run -d --name $NAME -p $PORT:3000 -v $DATA:/data:Z -e DATADIR=/data -e JWT_SECRET_KEY=e2e \$envs localhost/rmfakecloud:e2e
+podman run -d --name $NAME -p $PORT:3000 -v $DATA:/data:Z -e DATADIR=/data -e JWT_SECRET_KEY=e2e $ENVS localhost/rmfakecloud:e2e
 REMOTE_EOF
 
 BASE=${E2E_BASE_URL:-http://${HOST#*@}:$PORT}
 echo ">> wait for $BASE"
+up=""
 for _ in $(seq 60); do
-  curl -fs -o /dev/null "$BASE/ui/api/login" -X POST -d '{}' -H 'Content-Type: application/json' && break
-  [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/")" != 000 ] && break
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/")" != 000 ] && { up=1; break; }
   sleep 1
 done
+[ -n "$up" ] || { echo "server not up after 60s: $BASE" >&2; ssh "$HOST" "podman logs --tail 50 $NAME" >&2 || true; exit 1; }
 
 echo ">> pytest"
 cd "$ROOT"
