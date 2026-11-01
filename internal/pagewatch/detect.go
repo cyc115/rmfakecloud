@@ -78,6 +78,9 @@ type docView struct {
 	snap    *autoorganize.DocSnap
 	ci      autoorganize.ContentInfo
 	trashed bool
+	// fresh created since the last sweep: the initialised feed has no
+	// baseline for it, so its pages are new writing (R12)
+	fresh   bool
 	path    string
 	docType string
 	// order the page ids in order, shared by the doc's pipeline events
@@ -173,6 +176,7 @@ func (d *detector) collectDocs() {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	feedDocs := pagesOf(d.base.Feed)
 	for _, id := range ids {
 		s := snap.Docs[id]
 		if s.IsFolder() {
@@ -196,6 +200,7 @@ func (d *detector) collectDocs() {
 			continue
 		}
 		v := &docView{snap: s, ci: ci, path: snap.PathName(id), docType: docType(ci.FileType)}
+		v.fresh = d.base.FeedInitialised && len(feedDocs[id]) == 0
 		for _, p := range s.Pages {
 			v.order = append(v.order, p.ID)
 		}
@@ -504,13 +509,20 @@ func (d *detector) under(parent, folder string) bool {
 	return false
 }
 
-// ruleDoc a member gets an edit per changed page; a joining doc gets a
-// transcribe_only per page not yet delivered, and becomes a member once all
-// of them are accepted with none skipped. Both get a page_deleted per page
+// ruleDoc a member gets an edit per changed page; a joining doc (content that
+// existed before the rule watched it) gets a transcribe_only per page not yet
+// delivered, and becomes a member once all of them are accepted with none
+// skipped. A doc created since the last sweep is a member at once (R12). Both get a page_deleted per page
 // the baseline holds that is gone.
 func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string, v *docView) {
 	docID, ruleID := v.snap.ID, r.ID
 	member := base.Members[docID]
+	if !member && v.fresh {
+		// a new doc is a member at once: its pages are edits with an empty
+		// before, and a page skipped now is still an edit next sweep
+		member = true
+		d.always(func(s *State) { s.rule(ruleID).Members[docID] = true })
+	}
 	kind := KindEdit
 	if !member {
 		kind = KindTranscribeOnly

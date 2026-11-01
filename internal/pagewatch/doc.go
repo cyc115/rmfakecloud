@@ -28,6 +28,12 @@
 //   - joining: a doc that is not yet a member gets one "transcribe_only" per
 //     page with a hash not yet delivered. It becomes a member when every one
 //     of those is accepted and none was skipped.
+//     Joining is for content that existed before the rule watched it: a doc
+//     the feed already knew (moved in, watch widened, rule new or enabled,
+//     tag removed), or any watched doc on the very first run.
+//   - new: a doc created since the last sweep (feed initialised, no feed
+//     baseline for it) is a member at once; its pages are edits with an
+//     empty BeforeHash, so tasks are extracted.
 //   - member: an "edit" per changed page, BeforeHash = the rule's baseline.
 //   - both: a "page_deleted" (no hashes, PageIndex -1) per page the baseline
 //     holds that is gone; the page leaves the baseline once that is accepted.

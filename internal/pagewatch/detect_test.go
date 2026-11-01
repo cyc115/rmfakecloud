@@ -817,3 +817,74 @@ func ruleState(s *State, id string) *RuleState {
 	}
 	return newRuleState()
 }
+
+func TestNewDocInWatchedFolderEmitsEditsNotTranscribeOnly(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("old", "Old", "")
+	e.page("old", "p1", "strokes_a.rm")
+	e.sweep()
+
+	// created since the last sweep: its pages are new writing, so tasks get extracted
+	e.ft.Notebook("nb", "New", "")
+	e.page("nb", "p1", "strokes_ab.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	p := e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1", "edit nb/p2 r1")
+	wantEvents(t, "feed", p.Feed, "edit nb/p1", "edit nb/p2")
+	for _, ev := range p.Pipeline {
+		if ev.BeforeHash != "" || ev.AfterHash != e.pageHash("nb", ev.PageID) || !ev.Watched {
+			t.Fatalf("event = %+v", ev)
+		}
+	}
+	if st := p.Advance(nil); !ruleState(st, "r1").Members["nb"] {
+		t.Fatal("new doc is not a member at once")
+	}
+}
+
+func TestKnownDocMovedInEmitsTranscribeOnly(t *testing.T) {
+	e := newEnv(t)
+	e.ft.Folder("w", "Watched", "")
+	e.ft.Folder("o", "Other", "")
+	e.ft.Notebook("nb", "Notes", "o")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.rule("r1", folderWatch("w"))
+	e.sweep()
+
+	e.ft.Move("nb", "w")
+	// a rule created after the feed knew the doc: pre-existing content too
+	e.rule("r2", docWatch("nb"))
+	p := e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "transcribe_only nb/p1 r1", "transcribe_only nb/p1 r2")
+	wantEvents(t, "feed", p.Feed)
+}
+
+func TestNewDocRecentPageEmittedAsEditNextSweep(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("old", "Old", "")
+	e.page("old", "p1", "strokes_a.rm")
+	e.sweep()
+
+	e.ft.Notebook("nb", "New", "")
+	e.page("nb", "p1", "strokes_ab.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	e.recent[e.pageHash("nb", "p1")] = true
+	p := e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p2 r1")
+	if !hasSkip(p, SkipNote{DocID: "nb", PageID: "p1", Reason: SkipRecent}) {
+		t.Fatalf("skipped = %+v", p.Skipped)
+	}
+	e.state = p.Advance(all(p))
+	if !ruleState(e.state, "r1").Members["nb"] {
+		t.Fatal("new doc is not a member")
+	}
+
+	// the feed now knows the doc; the waiting page is still an edit
+	e.recent = map[string]bool{}
+	p = e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1")
+	if p.Pipeline[0].BeforeHash != "" {
+		t.Fatalf("before = %q", p.Pipeline[0].BeforeHash)
+	}
+}
