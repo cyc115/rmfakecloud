@@ -150,6 +150,10 @@ func (s *Snapshot) AttachPages(content func(*DocSnap) ContentInfo) {
 			d.PagesErr = ci.Error
 			continue
 		}
+		if ci.PagesError != "" {
+			d.PagesErr = ci.PagesError
+			continue
+		}
 		for i, id := range ci.PageOrder {
 			d.Pages = append(d.Pages, PageSnap{ID: id, Hash: d.pageHashes[id], Index: i})
 		}
@@ -308,10 +312,13 @@ type ContentInfo struct {
 	PageOrder []string `json:"pageOrder,omitempty"`
 	// ParseVersion the parser that wrote the entry; older entries are re-read
 	ParseVersion int `json:"parseVersion,omitempty"`
+	// PagesError the page list is missing although pageCount > 0: the rest of
+	// the blob is fine (Readable) but PageOrder must not be read as "no pages"
+	PagesError string `json:"pagesError,omitempty"`
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 4
+const contentParseVersion = 5
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -380,8 +387,14 @@ func ParseContent(b []byte) ContentInfo {
 		}
 	}
 	order, err := pageOrder(raw)
+	if err == nil && len(order) == 0 && info.PageCount > 0 && !hasPagesList(raw) {
+		// a page count with no list would read as "every page deleted"; the
+		// move rules still use the blob, so only the page list is flagged
+		info.PagesError = "pageCount > 0 but no cPages or pages list"
+	}
 	if err != nil {
-		return ContentInfo{Error: "cannot read pages: " + err.Error(), ParseVersion: contentParseVersion}
+		info.Error = "cannot read pages: " + err.Error()
+		return info
 	}
 	info.PageOrder = order
 	return info
@@ -422,6 +435,15 @@ func pageOrder(raw map[string]any) ([]string, error) {
 		out = append(out, p.id)
 	}
 	return out, nil
+}
+
+// hasPagesList .content carries cPages.pages or a pages array
+func hasPagesList(raw map[string]any) bool {
+	cp, _ := raw["cPages"].(map[string]any)
+	if _, ok := cp["pages"]; ok {
+		return true
+	}
+	return raw["pages"] != nil
 }
 
 func v1PageOrder(v any) ([]string, error) {

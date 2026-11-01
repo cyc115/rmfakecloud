@@ -193,3 +193,30 @@ func TestFormatV1MalformedPagesIsUnreadable(t *testing.T) {
 		t.Fatalf("no pages = %+v", ci)
 	}
 }
+
+func TestPageCountWithoutPagesListIsUnreadable(t *testing.T) {
+	ft, storage := newHarness(t, uid, true)
+	ft.PDF("pdf", "Paper", "", 5, 0, time.Time{}) // pageCount 5, no pages list
+	ft.Sync()
+	snap, _ := snapshotOf(t, storage)
+	if d := snap.Docs["pdf"]; d.PagesErr == "" || d.Pages != nil {
+		t.Fatalf("pages=%v err=%q", d.Pages, d.PagesErr)
+	}
+	// the rest of the blob stays usable for the move rules
+	ci := ParseContent([]byte(`{"fileType":"pdf","pageCount":5,"tags":["x"]}`))
+	if !ci.Readable() || ci.PagesError == "" || ci.PageCount != 5 {
+		t.Fatalf("ci = %+v", ci)
+	}
+	for _, body := range []string{`{"pageCount":0}`, `{"fileType":"pdf"}`, `{"pageCount":2,"pages":["a","b"]}`, `{"pageCount":1,"cPages":{"pages":[]}}`} {
+		if ci := ParseContent([]byte(body)); !ci.Readable() || ci.PagesError != "" {
+			t.Fatalf("%s flagged: %+v", body, ci)
+		}
+	}
+}
+
+func TestMalformedPagesKeepsOtherFields(t *testing.T) {
+	ci := ParseContent([]byte(`{"fileType":"pdf","pageCount":3,"lastOpenedPage":2,"tags":["No Automation"],"pages":"x"}`))
+	if ci.Readable() || ci.FileType != "pdf" || ci.PageCount != 3 || ci.LastOpenedPage != 2 || !ci.HasNoAutomationTag() {
+		t.Fatalf("fields lost: %+v", ci)
+	}
+}
