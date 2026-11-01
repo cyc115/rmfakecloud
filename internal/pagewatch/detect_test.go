@@ -30,6 +30,8 @@ type env struct {
 	recent map[string]bool
 	// mtimeErr blob hashes whose mtime cannot be read
 	mtimeErr map[string]bool
+	// at blob hashes with a fixed mtime (others: an hour before now)
+	at map[string]time.Time
 }
 
 func newEnv(t *testing.T) *env {
@@ -50,6 +52,7 @@ func newEnv(t *testing.T) *env {
 		now:      time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC),
 		recent:   map[string]bool{},
 		mtimeErr: map[string]bool{},
+		at:       map[string]time.Time{},
 	}
 }
 
@@ -105,6 +108,9 @@ func (e *env) modTime(hash string) (time.Time, error) {
 	}
 	if e.recent[hash] {
 		return e.now.Add(-time.Minute), nil
+	}
+	if t, ok := e.at[hash]; ok {
+		return t, nil
 	}
 	return e.now.Add(-time.Hour), nil
 }
@@ -1051,5 +1057,96 @@ func TestNewDocSkippedOnItsFirstSweepIsStillNew(t *testing.T) {
 	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1")
 	if p.Pipeline[0].BeforeHash != "" {
 		t.Fatalf("before = %q", p.Pipeline[0].BeforeHash)
+	}
+}
+
+func pipelineEv(t *testing.T, evs []Event, page string) Event {
+	t.Helper()
+	for _, ev := range evs {
+		if ev.PageID == page {
+			return ev
+		}
+	}
+	t.Fatalf("no pipeline event for %s in %q", page, summary(evs))
+	return Event{}
+}
+
+func TestPageAddedMidJoinIsEdit(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	e.recent[e.pageHash("nb", "p1")] = true
+	p := e.sweep() // the join starts; p1 holds it open
+	wantEvents(t, "join", p.Pipeline, "transcribe_only nb/p2 r1")
+	start := ruleState(e.state, "r1").JoinStartedAt["nb"]
+	if start.IsZero() || ruleState(e.state, "r1").Members["nb"] {
+		t.Fatalf("rule state = %+v", ruleState(e.state, "r1"))
+	}
+
+	// p3 is written after the join started: new writing, tasks extracted
+	e.page("nb", "p3", "strokes_ab.rm")
+	e.at[e.pageHash("nb", "p3")] = start.Add(time.Minute)
+	e.now = e.now.Add(time.Hour) // p3 is old enough to send
+	p = e.sweep()
+	wantEvents(t, "mid-join", p.Pipeline, "edit nb/p3 r1")
+	if ev := pipelineEv(t, p.Pipeline, "p3"); ev.BeforeHash != "" {
+		t.Fatalf("before = %q", ev.BeforeHash)
+	}
+	if got := ruleState(e.state, "r1").JoinStartedAt["nb"]; !got.Equal(start) {
+		t.Fatalf("join start moved: %v, want %v", got, start)
+	}
+
+	// p1 existed when the join started: transcribe_only, and the join completes
+	e.recent = map[string]bool{}
+	e.at[e.pageHash("nb", "p1")] = start.Add(-time.Minute)
+	p = e.sweep()
+	wantEvents(t, "rest of join", p.Pipeline, "transcribe_only nb/p1 r1")
+	rs := ruleState(e.state, "r1")
+	if !rs.Members["nb"] || len(rs.JoinStartedAt) != 0 {
+		t.Fatalf("rule state after join = %+v", rs)
+	}
+}
+
+func TestJoinWithUnreadableMtimeStillExtractsNewPages(t *testing.T) {
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	e.mtimeErr[e.pageHash("nb", "p1")] = true // never readable: the join never completes
+	wantEvents(t, "join", e.sweep().Pipeline, "transcribe_only nb/p2 r1")
+	start := ruleState(e.state, "r1").JoinStartedAt["nb"]
+
+	for i := 0; i < 3; i++ {
+		e.sweep()
+	}
+	e.page("nb", "p3", "strokes_ab.rm")
+	e.at[e.pageHash("nb", "p3")] = e.now // written after the join started
+	e.now = e.now.Add(time.Hour)
+	p := e.sweep()
+	wantEvents(t, "new page", p.Pipeline, "edit nb/p3 r1")
+	if ruleState(e.state, "r1").Members["nb"] || !ruleState(e.state, "r1").JoinStartedAt["nb"].Equal(start) {
+		t.Fatalf("rule state = %+v", ruleState(e.state, "r1"))
+	}
+}
+
+func TestLeavingClearsJoinStart(t *testing.T) {
+	e := newEnv(t)
+	e.ft.Folder("w", "Watched", "")
+	e.ft.Folder("o", "Other", "")
+	e.ft.Notebook("nb", "Notes", "w")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.mtimeErr[e.pageHash("nb", "p1")] = true
+	e.rule("r1", folderWatch("w"))
+	e.sweep()
+	if _, ok := ruleState(e.state, "r1").JoinStartedAt["nb"]; !ok {
+		t.Fatal("no join start")
+	}
+	e.ft.Move("nb", "o")
+	e.sweep()
+	if rs := ruleState(e.state, "r1"); len(rs.JoinStartedAt) != 0 {
+		t.Fatalf("join start kept after leaving: %+v", rs)
 	}
 }

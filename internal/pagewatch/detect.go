@@ -150,7 +150,9 @@ func (d *detector) plan() Plan {
 			}
 			for _, j := range joins {
 				if allAccepted(j.traces, accepted) {
-					s.rule(j.ruleID).Members[j.docID] = true
+					rs := s.rule(j.ruleID)
+					rs.Members[j.docID] = true
+					delete(rs.JoinStartedAt, j.docID)
 				}
 			}
 			return s
@@ -477,7 +479,10 @@ func (d *detector) rule(r *autoorganize.Rule) {
 		base = newRuleState()
 	}
 	held := pagesOf(base.Baselines)
-	known := func(doc string) bool { return base.Members[doc] || len(held[doc]) > 0 }
+	known := func(doc string) bool {
+		_, joining := base.JoinStartedAt[doc]
+		return base.Members[doc] || len(held[doc]) > 0 || joining
+	}
 	for _, v := range d.docs {
 		if d.inRule(r, v) {
 			d.ruleDoc(r, base, held[v.snap.ID], v)
@@ -491,6 +496,9 @@ func (d *detector) rule(r *autoorganize.Rule) {
 		gone[doc] = true
 	}
 	for doc := range held {
+		gone[doc] = true
+	}
+	for doc := range base.JoinStartedAt {
 		gone[doc] = true
 	}
 	for _, doc := range sortedKeys(gone) {
@@ -508,6 +516,7 @@ func (d *detector) leave(ruleID, docID string) {
 	d.always(func(s *State) {
 		rs := s.rule(ruleID)
 		delete(rs.Members, docID)
+		delete(rs.JoinStartedAt, docID)
 		for k := range rs.Baselines {
 			if strings.HasPrefix(k, docID+"/") {
 				delete(rs.Baselines, k)
@@ -562,19 +571,30 @@ func (d *detector) under(parent, folder string) bool {
 
 // ruleDoc a member gets an edit per changed page. A joining doc (content that
 // existed before the rule watched it) gets a transcribe_only per page not yet
-// delivered, and an edit for a page delivered earlier in the join that
-// changed since; it becomes a member once all of them are accepted with none
-// skipped. A doc first seen after the rule last looked is new content and a
-// member at once (R12, R15). Both get a page_deleted per page the baseline
-// holds that is gone.
+// delivered whose blob is no newer than the join's start, and an edit for any
+// other changed page (delivered earlier in the join and changed since, or
+// written after the join started); it becomes a member once all of them are
+// accepted with none skipped. A doc first seen after the rule last looked is
+// new content and a member at once (R12, R15). Both get a page_deleted per
+// page the baseline holds that is gone.
 func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string, v *docView) {
-	docID, ruleID := v.snap.ID, r.ID
+	docID, ruleID, now := v.snap.ID, r.ID, d.in.Now
 	member := base.Members[docID]
 	if !member && !base.LastActive.IsZero() && d.seenAt(docID).After(base.LastActive) {
 		// new content: its pages are edits with an empty before, and a page
 		// skipped now is still an edit next sweep
 		member = true
 		d.always(func(s *State) { s.rule(ruleID).Members[docID] = true })
+	}
+	joinStart, started := base.JoinStartedAt[docID]
+	switch {
+	case !member && !started:
+		// the first sweep of the join: a page written after now is new
+		// writing even while an old page holds the join open (R12)
+		joinStart = now
+		d.always(func(s *State) { s.rule(ruleID).JoinStartedAt[docID] = now })
+	case member && started:
+		d.always(func(s *State) { delete(s.rule(ruleID).JoinStartedAt, docID) })
 	}
 	var traces []string
 	complete := true
@@ -592,9 +612,10 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 			continue
 		}
 		// prev != "" on a non-member: delivered earlier in this join (leaving
-		// clears baselines), so the change is new writing
+		// clears baselines), so the change is new writing; so is a blob
+		// written after the join started. Over-capture is the safe side.
 		kind := KindTranscribeOnly
-		if member || prev != "" {
+		if member || prev != "" || at.After(joinStart) {
 			kind = KindEdit
 		}
 		ev := d.pipelineEvent(kind, r, v, p.ID, at)
@@ -612,7 +633,7 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 		if current[pageID] {
 			continue
 		}
-		ev := d.pipelineEvent(KindPageDeleted, r, v, pageID, d.in.Now)
+		ev := d.pipelineEvent(KindPageDeleted, r, v, pageID, now)
 		ev.PageIndex = -1
 		// the deleted page's baseline stands in for before_hash, so a page
 		// that is re-created and deleted again gets a new id

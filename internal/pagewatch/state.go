@@ -22,11 +22,15 @@ type State struct {
 type RuleState struct {
 	// Baselines "doc/page" → the hash last delivered for this rule
 	Baselines map[string]string `json:"baselines"`
-	// Members docs whose join (transcribe_only of every page) completed
+	// Members docs whose join (transcribe_only of every pre-existing page) completed
 	Members map[string]bool `json:"members"`
 	// LastActive the Now of the last sweep that evaluated the rule (rule and
 	// account enabled); zero before its first activation
 	LastActive time.Time `json:"lastActive"`
+	// JoinStartedAt doc → the Now of the first sweep that saw it joining; a
+	// page whose blob is newer is new writing (an edit), not pre-existing
+	// content. Dropped when the join completes or the doc leaves.
+	JoinStartedAt map[string]time.Time `json:"joinStartedAt,omitempty"`
 }
 
 // NewState an empty state
@@ -35,7 +39,7 @@ func NewState() *State {
 }
 
 func newRuleState() *RuleState {
-	return &RuleState{Baselines: map[string]string{}, Members: map[string]bool{}}
+	return &RuleState{Baselines: map[string]string{}, Members: map[string]bool{}, JoinStartedAt: map[string]time.Time{}}
 }
 
 // Clone a deep copy; nil gives an empty state
@@ -63,6 +67,9 @@ func (s *State) Clone() *State {
 			}
 			for k, v := range rs.Members {
 				c.Members[k] = v
+			}
+			for k, v := range rs.JoinStartedAt {
+				c.JoinStartedAt[k] = v
 			}
 		}
 		out.Rules[id] = c

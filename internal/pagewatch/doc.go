@@ -26,8 +26,13 @@
 // "no automation" tag. Each rule has its own baselines and members:
 //
 //   - joining: a doc that is not yet a member gets one "transcribe_only" per
-//     page with a hash not yet delivered. It becomes a member when every one
-//     of those is accepted and none was skipped.
+//     page with a hash not yet delivered whose blob mtime is no later than
+//     the join's start (RuleState.JoinStartedAt, the first sweep that saw
+//     the doc joining). A page written after that is new writing: an "edit"
+//     with an empty BeforeHash, so its tasks are extracted even while an old
+//     page (recent, unreadable mtime) holds the join open. It becomes a
+//     member when every event is accepted and none was skipped; the join
+//     start is dropped then, or when the doc leaves.
 //     Joining is for content that existed before the rule watched it: a doc
 //     already seen when the rule last looked (moved in, watch widened, tag
 //     removed, restored from the trash), or any doc at the rule's first
