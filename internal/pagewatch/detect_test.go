@@ -3,7 +3,6 @@ package pagewatch
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"reflect"
 	"regexp"
@@ -31,7 +30,6 @@ type env struct {
 	recent map[string]bool
 	// mtimeErr blob hashes whose mtime cannot be read
 	mtimeErr map[string]bool
-	ids      int
 }
 
 func newEnv(t *testing.T) *env {
@@ -111,11 +109,6 @@ func (e *env) modTime(hash string) (time.Time, error) {
 	return e.now.Add(-time.Hour), nil
 }
 
-func (e *env) newID() string {
-	e.ids++
-	return fmt.Sprintf("id-%d", e.ids)
-}
-
 // snapshot syncs the tablet and snapshots the server tree with pages attached
 func (e *env) snapshot() (*autoorganize.Snapshot, func(*autoorganize.DocSnap) autoorganize.ContentInfo) {
 	e.t.Helper()
@@ -135,7 +128,7 @@ func (e *env) snapshot() (*autoorganize.Snapshot, func(*autoorganize.DocSnap) au
 func (e *env) input(snap *autoorganize.Snapshot, content func(*autoorganize.DocSnap) autoorganize.ContentInfo) Input {
 	return Input{
 		Snap: snap, Config: e.cfg, State: e.state, Content: content,
-		ModTime: e.modTime, Now: e.now, User: uid, NewID: e.newID,
+		ModTime: e.modTime, Now: e.now, User: uid,
 	}
 }
 
@@ -688,16 +681,8 @@ func TestEventHasTraceIDAndPrompt(t *testing.T) {
 	if ev.Prompt != "prompt-r1" || ev.Model != "model-r1" || ev.RuleID != "r1" || !ev.Watched {
 		t.Fatalf("event = %+v", ev)
 	}
-	if !regexp.MustCompile(`^id-\d+$`).MatchString(ev.TraceID) || ev.TraceID == p.Feed[0].TraceID {
+	if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(ev.TraceID) || ev.TraceID == p.Feed[0].TraceID {
 		t.Fatalf("trace ids feed=%q pipeline=%q", p.Feed[0].TraceID, ev.TraceID)
-	}
-
-	// without NewID: UUID4 hex
-	in := e.input(e.snapshot())
-	in.NewID = nil
-	p = Detect(in)
-	if len(p.Feed) != 1 || !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(p.Feed[0].TraceID) {
-		t.Fatalf("default trace id = %+v", p.Feed)
 	}
 }
 
@@ -979,7 +964,7 @@ func TestDocCreatedWhileRuleDisabledIsNewOnReenable(t *testing.T) {
 	wantEvents(t, "re-enabled rule", e.detect().Pipeline, "edit nb/p1 r1")
 }
 
-func TestEmptyTraceIDSkipsEvent(t *testing.T) {
+func TestTraceIDStableAcrossSweeps(t *testing.T) {
 	e := newEnv(t)
 	e.rule("r1", folderWatch(autoorganize.RootID))
 	e.ft.Notebook("nb", "Notes", "")
@@ -987,17 +972,43 @@ func TestEmptyTraceIDSkipsEvent(t *testing.T) {
 	e.sweep()
 	e.page("nb", "p1", "strokes_ab.rm")
 
-	in := e.input(e.snapshot())
-	in.NewID = func() string { return "" }
-	p := Detect(in)
-	wantEvents(t, "feed", p.Feed)
-	wantEvents(t, "pipeline", p.Pipeline)
-	if !hasSkip(p, SkipNote{DocID: "nb", PageID: "p1", Reason: SkipNoTraceID}) {
-		t.Fatalf("skipped = %+v", p.Skipped)
+	first := e.detect() // not accepted: the state stays
+	second := e.detect()
+	if len(first.Feed) != 1 || len(first.Pipeline) != 1 {
+		t.Fatalf("plan %+v", first)
 	}
-	st := p.Advance(map[string]bool{"": true})
-	if st.Feed["nb/p1"] != e.state.Feed["nb/p1"] || ruleState(st, "r1").Baselines["nb/p1"] != ruleState(e.state, "r1").Baselines["nb/p1"] {
-		t.Fatal("a baseline moved without an event")
+	if first.Feed[0].TraceID != second.Feed[0].TraceID || first.Pipeline[0].TraceID != second.Pipeline[0].TraceID {
+		t.Fatalf("ids changed: %q/%q %q/%q", first.Feed[0].TraceID, second.Feed[0].TraceID, first.Pipeline[0].TraceID, second.Pipeline[0].TraceID)
+	}
+}
+
+func TestTraceIDDiffersForDifferentTransitions(t *testing.T) {
+	ab := TraceID("feed", "edit", "d", "p", "A", "B")
+	ba := TraceID("feed", "edit", "d", "p", "B", "A")
+	rule1 := TraceID("rule", "r1", "edit", "d", "p", "A", "B")
+	rule2 := TraceID("rule", "r2", "edit", "d", "p", "A", "B")
+	seen := map[string]bool{}
+	for _, id := range []string{ab, ba, rule1, rule2} {
+		if len(id) != 32 || seen[id] {
+			t.Fatalf("id %q empty-ish or repeated among %v", id, []string{ab, ba, rule1, rule2})
+		}
+		seen[id] = true
+	}
+	if TraceID("a", "bc") == TraceID("ab", "c") {
+		t.Fatal("parts are not separated")
+	}
+
+	// two rules watching one page get different ids for the same change
+	e := newEnv(t)
+	e.rule("r1", folderWatch(autoorganize.RootID))
+	e.rule("r2", docWatch("nb"))
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.sweep()
+	e.page("nb", "p1", "strokes_ab.rm")
+	p := e.detect()
+	if len(p.Pipeline) != 2 || p.Pipeline[0].TraceID == p.Pipeline[1].TraceID || p.Pipeline[0].TraceID == p.Feed[0].TraceID {
+		t.Fatalf("ids %+v", p)
 	}
 }
 

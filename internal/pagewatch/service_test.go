@@ -377,3 +377,62 @@ func TestStartRunsLoopAndSendsHeartbeat(t *testing.T) {
 		t.Fatalf("loop sent %d times", e.sender.count())
 	}
 }
+
+func TestRunNowBusyWhileRunHoldsLock(t *testing.T) {
+	e := newSvcEnv(t)
+	ul := e.svc.loop(uid)
+	ul.runMu.Lock()
+	if _, err := e.svc.RunNow(uid); !errors.Is(err, ErrBusy) {
+		t.Fatalf("err = %v, want ErrBusy", err)
+	}
+	ul.runMu.Unlock()
+	if _, err := e.svc.RunNow(uid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLocalFailureLogsDetectError(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	if err := os.WriteFile(filepath.Join(e.st.UserDataPath(uid), StateFileName), []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.RunNow(uid); err == nil {
+		t.Fatal("no error for a broken state file")
+	}
+	if n := len(lagErrors(hook)); n != 1 {
+		t.Fatalf("%d detect errors, want 1", n)
+	}
+}
+
+func TestHeartbeatFailureCarriesHeartbeatTraceID(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	e.sender.err = errors.New("down")
+	e.run()
+	for _, en := range hook.AllEntries() {
+		if en.Level == log.ErrorLevel && en.Data["stage"] == "deliver" && en.Data["trace_id"] == "heartbeat" {
+			return
+		}
+	}
+	t.Fatalf("no heartbeat error: %v", hook.AllEntries())
+}
+
+func TestShutdownCancelledSendLogsWarnNotError(t *testing.T) {
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+	e := newSvcEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.svc.logSendFailure(ctx, uid, []Event{{TraceID: "t"}}, errors.New("context canceled"))
+	for _, en := range hook.AllEntries() {
+		if en.Level == log.ErrorLevel {
+			t.Fatalf("Error logged on shutdown: %v", en.Message)
+		}
+	}
+	if len(hook.AllEntries()) != 1 {
+		t.Fatalf("entries %v", hook.AllEntries())
+	}
+}

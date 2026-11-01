@@ -57,7 +57,9 @@
 //   - location: the doc's parent chain is broken; left alone likewise.
 //   - pages_not_attached: Snapshot.AttachPages did not run; Detect plans
 //     nothing rather than read missing pages as deletions.
-//   - trace_id: Input.NewID returned ""; the event is not sent.
+//
+// Trace ids are deterministic (TraceID): the same change gets the same id on
+// every sweep until it is accepted.
 //
 // Detect never mutates Input.State; Plan.Advance(accepted) returns a new
 // State. The delivery loop (service.go) owns I/O, Dry mode and sending.

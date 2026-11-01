@@ -173,9 +173,10 @@ func (s *Service) runLoop(ctx context.Context, ul *userLoop) {
 	trigger := TriggerStart
 	for {
 		ul.runMu.Lock()
-		_, err := s.runLocked(ctx, ul, trigger)
+		run, err := s.runLocked(ctx, ul, trigger)
 		ul.runMu.Unlock()
-		if err != nil && !errors.Is(err, ErrSync10) {
+		if err != nil && run == nil && !errors.Is(err, ErrSync10) {
+			// runs that started already logged their failure at Error
 			log.Warn(logPrefix, ul.uid, ": ", err)
 		}
 		wait := s.interval(ul.uid)
@@ -259,14 +260,19 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 	}
 	start := s.Now()
 	run := &RunEntry{At: start.UnixMilli(), Trigger: trigger, Mode: ModeLive}
-	fail := func(err error) (*RunEntry, error) {
-		run.Error = err.Error()
+	fail := func(what string, err error, extra log.Fields) (*RunEntry, error) {
+		run.Error = what + ": " + err.Error()
+		f := log.Fields{"stage": "detect", "user": uid}
+		for k, v := range extra {
+			f[k] = v
+		}
+		log.WithFields(f).Error(logPrefix, run.Error)
 		s.finish(ul, run)
 		return run, err
 	}
 	cfg, err := s.cfgs.LoadConfig(uid)
 	if err != nil {
-		return fail(err)
+		return fail("cannot load config", err, nil)
 	}
 	dry := cfg.Settings.Mode != autoorganize.ModeLive
 	if dry {
@@ -274,11 +280,11 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 	}
 	st, err := s.store.LoadState(uid)
 	if err != nil {
-		return fail(err)
+		return fail("cannot load state", err, nil)
 	}
 	tree, err := s.storage.GetCachedTree(uid)
 	if err != nil {
-		return fail(err)
+		return fail("cannot load tree", err, nil)
 	}
 	blobs := s.storage.BlobStorage(uid)
 	snap := autoorganize.NewSnapshot(tree)
@@ -305,7 +311,7 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 	if sendErr != nil {
 		accepted = nil
 		run.Error = "send failed: " + sendErr.Error()
-		s.logSendFailure(uid, send, sendErr)
+		s.logSendFailure(ctx, uid, send, sendErr)
 	} else {
 		for _, ev := range send {
 			if accepted[ev.TraceID] {
@@ -328,7 +334,15 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 	}
 	ul.pending.Store(pending)
 	if err := s.store.SaveState(uid, next); err != nil {
-		return fail(err)
+		// the events are re-sent next run under the same trace ids
+		ids := make([]string, 0, len(accepted))
+		for _, ev := range send {
+			if accepted[ev.TraceID] {
+				ids = append(ids, ev.TraceID)
+			}
+		}
+		first := ids[:min(len(ids), 5)]
+		return fail("cannot save state", err, log.Fields{"accepted_count": len(ids), "accepted_first": first})
 	}
 	s.finish(ul, run)
 	return run, nil
@@ -355,20 +369,27 @@ func (s *Service) finish(ul *userLoop, run *RunEntry) {
 func sendLog(ev Event) *log.Entry {
 	return log.WithFields(log.Fields{
 		"trace_id": ev.TraceID, "stage": "deliver", "doc_id": ev.DocID, "page_id": ev.PageID, "rule_id": ev.RuleID,
+		"kind": ev.Kind, "before_hash": ev.BeforeHash, "after_hash": ev.AfterHash,
 	})
 }
 
-func (s *Service) logSendFailure(uid string, send []Event, err error) {
+// logSendFailure Error for each failed event (capped); a send cut short by
+// shutdown is only a Warn, the events go again next run
+func (s *Service) logSendFailure(ctx context.Context, uid string, send []Event, err error) {
+	level := log.ErrorLevel
+	if ctx.Err() != nil {
+		level = log.WarnLevel
+	}
 	if len(send) == 0 {
-		log.WithFields(log.Fields{"stage": "deliver", "user": uid}).Error(logPrefix, "heartbeat failed: ", err)
+		log.WithFields(log.Fields{"trace_id": "heartbeat", "stage": "deliver", "user": uid}).Log(level, logPrefix, "heartbeat failed: ", err)
 		return
 	}
 	for i, ev := range send {
 		if i == maxSendErrors {
-			log.WithFields(log.Fields{"stage": "deliver", "user": uid}).Error(logPrefix, "send failed for ", len(send)-i, " more events: ", err)
+			log.WithFields(log.Fields{"stage": "deliver", "user": uid}).Log(level, logPrefix, "send failed for ", len(send)-i, " more events: ", err)
 			return
 		}
-		sendLog(ev).Error(logPrefix, "send failed: ", err)
+		sendLog(ev).Log(level, logPrefix, "send failed: ", err)
 	}
 }
 

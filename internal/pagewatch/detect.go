@@ -1,6 +1,7 @@
 package pagewatch
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
-	"github.com/google/uuid"
 )
 
 // DefaultMinAge a page blob younger than this is skipped (Input.MinAge 0)
@@ -27,8 +27,6 @@ type Input struct {
 	// MinAge 0 means DefaultMinAge
 	MinAge time.Duration
 	User   string
-	// NewID mints trace ids; nil means UUID4 hex
-	NewID func() string
 }
 
 // Plan the events of one sweep. Advance returns the next state given the
@@ -46,9 +44,6 @@ type Plan struct {
 func Detect(in Input) Plan {
 	if in.MinAge == 0 {
 		in.MinAge = DefaultMinAge
-	}
-	if in.NewID == nil {
-		in.NewID = newTraceID
 	}
 	d := &detector{
 		in:       in,
@@ -68,9 +63,13 @@ func Detect(in Input) Plan {
 	return d.plan()
 }
 
-func newTraceID() string {
-	u := uuid.New()
-	return hex.EncodeToString(u[:])
+// TraceID the deterministic trace id of a change: 32 lowercase hex, the first
+// 16 bytes of sha256 over the parts joined by 0x1f. The same unaccepted
+// change gets the same id every sweep, so a re-send (failed save, timeout,
+// shutdown mid-request) is recognised by rm-pages and never duplicated.
+func TraceID(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
+	return hex.EncodeToString(sum[:16])
 }
 
 // docView a document Detect can compare: its content was readable (or it is
@@ -246,16 +245,10 @@ func (d *detector) age(docID string, p autoorganize.PageSnap) (time.Time, bool) 
 
 var errNoModTime = errors.New("no ModTime func")
 
-// event a new event for a page of v; ok false (with a skip note) when NewID
-// gives no trace id, so nothing is sent and no baseline can move
-func (d *detector) event(kind string, v *docView, pageID string, changedAt time.Time) (Event, bool) {
-	id := d.in.NewID()
-	if id == "" {
-		d.skip(SkipNote{DocID: v.snap.ID, PageID: pageID, Reason: SkipNoTraceID})
-		return Event{}, false
-	}
+// event a new event for a page of v; the caller sets the trace id once the
+// hashes are known
+func (d *detector) event(kind string, v *docView, pageID string, changedAt time.Time) Event {
 	return Event{
-		TraceID:   id,
 		Kind:      kind,
 		User:      d.in.User,
 		DocID:     v.snap.ID,
@@ -265,7 +258,7 @@ func (d *detector) event(kind string, v *docView, pageID string, changedAt time.
 		PageID:    pageID,
 		PDFHash:   v.snap.PDFHash,
 		ChangedAt: changedAt,
-	}, true
+	}
 }
 
 // recordSeen the first sweep that saw each doc (R15); docs gone from the
@@ -434,10 +427,8 @@ func (d *detector) feedOpen(v *docView) {
 	if idx >= 0 && idx < len(v.snap.Pages) {
 		page = v.snap.Pages[idx]
 	}
-	ev, ok := d.event(KindOpen, v, page.ID, at)
-	if !ok {
-		return
-	}
+	ev := d.event(KindOpen, v, page.ID, at)
+	ev.TraceID = TraceID("feed", "open", v.snap.ID, at.Format(time.RFC3339Nano))
 	ev.OpenedAt = &at
 	ev.PageIndex, ev.AfterHash = idx, page.Hash
 	d.feedEvs = append(d.feedEvs, ev)
@@ -457,11 +448,9 @@ func (d *detector) feedEdits(v *docView) {
 		if !ok {
 			continue
 		}
-		ev, ok := d.event(KindEdit, v, p.ID, at)
-		if !ok {
-			continue
-		}
+		ev := d.event(KindEdit, v, p.ID, at)
 		ev.PageIndex, ev.BeforeHash, ev.AfterHash = p.Index, prev, p.Hash
+		ev.TraceID = TraceID("feed", "edit", v.snap.ID, p.ID, prev, p.Hash)
 		d.feedEvs = append(d.feedEvs, ev)
 		hash := p.Hash
 		d.onAccept(ev.TraceID, func(s *State) { s.Feed[key] = hash })
@@ -608,15 +597,12 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 		if member || prev != "" {
 			kind = KindEdit
 		}
-		ev, ok := d.pipelineEvent(kind, r, v, p.ID, at)
-		if !ok {
-			complete = false
-			continue
-		}
+		ev := d.pipelineEvent(kind, r, v, p.ID, at)
 		ev.PageIndex, ev.AfterHash = p.Index, p.Hash
 		if kind == KindEdit {
 			ev.BeforeHash = prev
 		}
+		ev.TraceID = TraceID("rule", ruleID, kind, docID, p.ID, ev.BeforeHash, ev.AfterHash)
 		d.pipeEvs = append(d.pipeEvs, ev)
 		hash := p.Hash
 		d.onAccept(ev.TraceID, func(s *State) { s.rule(ruleID).Baselines[key] = hash })
@@ -626,12 +612,11 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 		if current[pageID] {
 			continue
 		}
-		ev, ok := d.pipelineEvent(KindPageDeleted, r, v, pageID, d.in.Now)
-		if !ok {
-			complete = false
-			continue
-		}
+		ev := d.pipelineEvent(KindPageDeleted, r, v, pageID, d.in.Now)
 		ev.PageIndex = -1
+		// the deleted page's baseline stands in for before_hash, so a page
+		// that is re-created and deleted again gets a new id
+		ev.TraceID = TraceID("rule", ruleID, KindPageDeleted, docID, pageID, base.Baselines[pageKey(docID, pageID)], "")
 		d.pipeEvs = append(d.pipeEvs, ev)
 		key := pageKey(docID, pageID)
 		d.onAccept(ev.TraceID, func(s *State) { delete(s.rule(ruleID).Baselines, key) })
@@ -643,11 +628,8 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 }
 
 // pipelineEvent a rule's event; index and hashes are left to the caller
-func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, pageID string, at time.Time) (Event, bool) {
-	ev, ok := d.event(kind, v, pageID, at)
-	if !ok {
-		return ev, false
-	}
+func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, pageID string, at time.Time) Event {
+	ev := d.event(kind, v, pageID, at)
 	ev.Watched = true
 	ev.RuleID = r.ID
 	ev.Prompt = r.Action.Prompt
@@ -659,5 +641,5 @@ func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, 
 		ev.Model = autoorganize.DefaultPipelineModel
 	}
 	ev.PageOrder = append([]string(nil), v.order...)
-	return ev, true
+	return ev
 }
