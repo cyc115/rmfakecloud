@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useHistory, useLocation } from "react-router-dom";
-import { parsePageParam, clampPage, withPageParam } from "./pageParam";
+import { parsePageParam, clampPage, withPageParam, parsePageInput } from "./pageParam";
 import { Button, ButtonGroup, Dropdown } from "react-bootstrap";
 import Navbar from 'react-bootstrap/Navbar';
 import { FaChevronRight, FaChevronLeft, } from "react-icons/fa6";
@@ -60,6 +60,18 @@ export default function FileViewer({ file, onSelect }) {
       history.replace({ search: withPageParam(history.location.search, n) });
     }
   };
+  // the page field: a draft while typing, committed on Enter or blur
+  const [draft, setDraft] = useState(String(page));
+  useEffect(() => { setDraft(String(page)); }, [page]);
+  const commitDraft = () => {
+    const n = parsePageInput(draft, pages);
+    if (n === null || n === page) { setDraft(String(page)); return; }
+    goTo(n);
+  };
+  const onDraftKey = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commitDraft(); e.currentTarget.blur(); }
+    else if (e.key === "Escape") { setDraft(String(page)); e.currentTarget.blur(); }
+  };
   const onPrev = () => goTo(Math.max(page - 1, 1));
   const onNext = () => goTo(Math.min(page + 1, pages));
   const parent = useRef(null);
@@ -115,8 +127,14 @@ export default function FileViewer({ file, onSelect }) {
               <Button size="sm" variant="outline-secondary" aria-label="Previous page" onClick={onPrev}><FaChevronLeft /></Button>
               <Button size="sm" variant="outline-secondary" aria-label="Next page" onClick={onNext}><FaChevronRight /></Button>
             </ButtonGroup>
-            <span style={{ margin: '0 10px' }}>
-              Page: {page} of {pages}
+            <span style={{ margin: '0 10px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              Page:
+              <input type="number" inputMode="numeric" min={1} max={pages} aria-label="Page number"
+                value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onDraftKey} onBlur={commitDraft}
+                onFocus={(e) => e.target.select()}
+                style={{ width: `${String(pages).length + 3}ch`, textAlign: 'center', background: 'transparent',
+                  color: 'inherit', border: '1px solid var(--bs-border-color, #555)', borderRadius: '4px', padding: '1px 2px' }} />
+              of {pages}
             </span>
           </div>
         )}

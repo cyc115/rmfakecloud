@@ -22,3 +22,11 @@ export function withPageParam(search, n) {
   p.set("page", String(n));
   return "?" + p.toString();
 }
+
+// parsePageInput the page typed into the viewer's page field, clamped to
+// 1..numPages; null when the text is not a whole number (the field resets)
+export function parsePageInput(text, numPages) {
+  const t = String(text ?? "").trim();
+  if (!/^\d+$/.test(t)) return null;
+  return clampPage(Number(t), numPages);
+}
