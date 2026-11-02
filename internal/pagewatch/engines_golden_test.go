@@ -34,6 +34,7 @@ const (
 	gOptedOut   = "0a1b2c3d-0000-4000-8000-0000000000a5"
 	gOther      = "0a1b2c3d-0000-4000-8000-0000000000e1"
 	gDoneFolder = "0a1b2c3d-0000-4000-8000-0000000000c1"
+	gHold       = "0a1b2c3d-0000-4000-8000-0000000000b1"
 )
 
 // goldenNow the fixed clock of the golden scenario (newEnv's start)
@@ -71,7 +72,8 @@ func fixed(d *tablet.Doc) *tablet.Doc {
 //	Reading List (f1): Finished (moves, Done to be created), Short (1 page),
 //	  Fresh (not settled), Scratch (notebook: out of scope), Opted out
 //	  (tagged no automation)
-//	root: Journal d1 (p1, p2), Ideas d2 (p1), both watched; Other (not watched)
+//	root: Journal d1 (p1, p2; opened 2 h ago), Ideas d2 (p1), both watched;
+//	  Other (not watched)
 func goldenTree(t *testing.T) *env {
 	t.Helper()
 	e := newEnv(t)
@@ -89,6 +91,10 @@ func goldenTree(t *testing.T) *env {
 	opt.Content["tags"] = []any{map[string]any{"name": autoorganize.NoAutomationTag, "timestamp": now.Add(-48 * time.Hour).UnixMilli()}}
 
 	fixed(e.ft.Notebook(gJournal, "Journal", autoorganize.RootID))
+	// a watched doc with a lastOpened, so the feed's Opened baseline is pinned
+	if err := e.ft.Open(gJournal, 1, now.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	e.page(gJournal, "p1", "strokes_a.rm")
 	e.page(gJournal, "p2", "text_note.rm")
 	fixed(e.ft.Notebook(gIdeas, "Ideas", autoorganize.RootID))
@@ -184,7 +190,7 @@ func TestEnginesGolden(t *testing.T) {
 	fixed(e.ft.Folder(gDoneFolder, "Done", gReading))
 	st := autoorganize.NewState()
 	st.CreatedFolders[gRuleMove] = gDoneFolder
-	st.Holds = []*autoorganize.Hold{{RuleID: gRuleMove, DocID: gFinished, Inputs: p1.Moves[0].Inputs, Source: gReading,
+	st.Holds = []*autoorganize.Hold{{ID: gHold, RuleID: gRuleMove, DocID: gFinished, Inputs: p1.Moves[0].Inputs, Source: gReading,
 		MovedTo: gDoneFolder, CreatedAt: now.Add(-time.Hour).UnixMilli(), Reason: "undo"}}
 	pinned := autoorganize.NewState()
 	if err := json.Unmarshal(goldenFile(t, "sweep-state-v1.json", st), pinned); err != nil {
@@ -194,7 +200,7 @@ func TestEnginesGolden(t *testing.T) {
 	p2 := autoorganize.BuildPlan(autoorganize.PlanInput{Snap: snap, Config: e.cfg, State: pinned, Content: content, Now: now})
 	held := false
 	for _, s := range p2.Skipped {
-		if s.DocID == gFinished && s.Reason == autoorganize.SkipHeld {
+		if s.DocID == gFinished && s.Reason == autoorganize.SkipHeld && s.HoldID == gHold {
 			held = true
 		}
 	}
