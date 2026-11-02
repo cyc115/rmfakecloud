@@ -30,16 +30,20 @@ func TestMergeEvalANDFirstSkip(t *testing.T) {
 	if got.match || got.skip != SkipTimeUnknown || got.skipDetail != "first" {
 		t.Errorf("first skip must win: %+v", got)
 	}
-	if _, ok := got.inputs["t"]; ok || got.detail != "a" {
-		t.Errorf("evaluations after the skip must not be merged: %+v", got)
+	if got.detail != "a" {
+		t.Errorf("the outcome after the skip must not be merged: %+v", got)
 	}
-	// ruling a: a non-match stops the merge, so a later skip cannot outrank it
+	// ruling a′: the inputs are the union of every evaluation (the hold key)
+	if want := map[string]string{"a": "1", "s": "1", "t": "1"}; !reflect.DeepEqual(got.inputs, want) {
+		t.Errorf("inputs %v, want %v", got.inputs, want)
+	}
+	// a non-match fixes the outcome, so a later skip cannot outrank it
 	got = mergeEval(yes, no, first)
 	if got.match || got.skip != "" || got.detail != "a · b" {
-		t.Errorf("a skip after a non-match must not be merged: %+v", got)
+		t.Errorf("a skip after a non-match must not change the outcome: %+v", got)
 	}
-	if _, ok := got.inputs["s"]; ok {
-		t.Errorf("inputs after the non-match merged: %+v", got.inputs)
+	if want := map[string]string{"a": "1", "b": "2", "s": "1"}; !reflect.DeepEqual(got.inputs, want) {
+		t.Errorf("inputs after the non-match: %v, want %v", got.inputs, want)
 	}
 	// one evaluation passes through unchanged (a rule with no conditions)
 	for _, ev := range []evaluation{yes, no, first, {skip: SkipOutOfScope, skipDetail: "x"}} {
@@ -170,9 +174,10 @@ func TestCatalogueComplete(t *testing.T) {
 	}
 }
 
-// TestTriggerNonMatchShortCircuits (ruling a): a trigger that does not match
-// gives the trigger's own evaluation; its conditions are not evaluated, so a
-// condition that would skip (a bad pattern) cannot outrank the non-match
+// TestTriggerNonMatchShortCircuits (ruling a′): a trigger that does not match
+// fixes the outcome (match, skip, detail are the trigger's), so a condition
+// that would skip (a bad pattern) cannot outrank the non-match; the
+// conditions are still evaluated and their inputs kept (the hold key)
 func TestTriggerNonMatchShortCircuits(t *testing.T) {
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	d := &DocSnap{ID: "d", Name: "Paper", LastOpened: ms(now.Add(-2 * 24 * time.Hour)), CreatedTime: ms(now.Add(-50 * 24 * time.Hour))}
@@ -181,14 +186,22 @@ func TestTriggerNonMatchShortCircuits(t *testing.T) {
 	r.Conditions = append(r.Conditions, cond(automation.CondNameMatches, P{Pattern: "/[/"}))
 	alone := notOpenedRule(false, 0)
 	got, want := evalRule(&r, d, ci, nil, now), evalRule(&alone, d, ci, nil, now)
-	if got.match || got.skip != "" || !reflect.DeepEqual(got, want) {
-		t.Fatalf("non-matching trigger: got %+v, want the trigger's evaluation %+v", got, want)
+	if got.match || got.skip != "" || got.detail != want.detail || got.skipDetail != "" {
+		t.Fatalf("non-matching trigger: got %+v, want the trigger's outcome %+v", got, want)
 	}
-	// a condition non-match stops too: the bad pattern after it is not reached
+	if !reflect.DeepEqual(keys(got.inputs), []string{"ageAnchor", "lastOpened", "name"}) {
+		t.Fatalf("inputs %v, want the trigger's and the condition's", got.inputs)
+	}
+	// a condition non-match fixes the outcome too: the bad pattern after it
+	// is no skip, and every input is kept
 	r.Conditions = append([]automation.Condition{cond(automation.CondTagIs, P{Tag: "keep"})}, r.Conditions...)
 	d.LastOpened = ms(now.Add(-40 * 24 * time.Hour))
-	if ev := evalRule(&r, d, ci, nil, now); ev.match || ev.skip != "" || ev.detail != "last opened 40 days ago · tagged “keep”" {
+	ev := evalRule(&r, d, ci, nil, now)
+	if ev.match || ev.skip != "" || ev.detail != "last opened 40 days ago · tagged “keep”" {
 		t.Fatalf("condition non-match then skip: %+v", ev)
+	}
+	if !reflect.DeepEqual(keys(ev.inputs), []string{"ageAnchor", "lastOpened", "name", "tags"}) {
+		t.Fatalf("inputs %v", ev.inputs)
 	}
 	// with every earlier test matching, the bad pattern is a skip, never a guess
 	ci.Tags = []string{"keep"}

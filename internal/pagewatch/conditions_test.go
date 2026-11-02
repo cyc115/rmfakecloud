@@ -427,3 +427,28 @@ func TestPageWatchFailsClosedOnBadConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestBlankKindIsMeansAll (X4): a hand-edited kind_is "" covers every kind;
+// it never makes every doc leave the rule
+func TestBlankKindIsMeansAll(t *testing.T) {
+	e := newEnv(t)
+	r := e.rule("r1", folderWatch(autoorganize.RootID))
+	r.Conditions = []automation.Condition{cond(automation.CondKindIs, automation.Params{Kind: ""})}
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.ft.PDF("pdf", "Paper", "", 3, 0, e.now)
+	e.page("pdf", "p1", "strokes_a.rm")
+	wantEvents(t, "blank kind", e.sweep().Pipeline, "transcribe_only nb/p1 r1", "transcribe_only pdf/p1 r1")
+	for _, c := range []struct {
+		kind, fileType string
+		in             bool
+	}{{"", "notebook", true}, {"", "pdf", true}, {"", "png", true},
+		{automation.KindNotebooks, "pdf", false}, {automation.KindPdfEpub, "epub", true}} {
+		rule := pageRule("x", folderWatch(autoorganize.RootID))
+		rule.Conditions = []automation.Condition{cond(automation.CondKindIs, automation.Params{Kind: c.kind})}
+		in, skip := autoorganize.DocConditionsMatch(&rule, &autoorganize.DocSnap{}, &autoorganize.ContentInfo{FileType: c.fileType}, e.now)
+		if in != c.in || skip != "" {
+			t.Errorf("kind %q, file %q: in %v skip %q, want %v", c.kind, c.fileType, in, skip, c.in)
+		}
+	}
+}

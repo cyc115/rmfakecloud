@@ -43,10 +43,11 @@
 // documents directly inside it. checkDoc runs the guards (trash, unreadable,
 // no automation, pinned unless the trigger or a condition is pinned_is,
 // already in the destination, kind_is), then evalRule: the trigger, then the
-// document conditions in stored order (Rule.DocConditions). The first skip or
-// non-match ends the evaluation (ruling a); match is the AND of all, the hold
-// inputs are the union of the evaluated ones, the detail their sentences
-// joined by " · ".
+// document conditions in stored order (Rule.DocConditions). Every one is
+// evaluated, and the hold inputs are the union of all (ruling a′), so a hold
+// set while the trigger does not match keeps the condition inputs. The
+// outcome (match, skip, detail joined by " · ") stops at the first skip or
+// non-match, so a later skip never outranks an earlier non-match.
 //
 // # Adding a trigger
 //

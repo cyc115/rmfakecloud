@@ -84,16 +84,18 @@ func daysSince(t, now time.Time) float64 {
 	return now.Sub(t).Hours() / 24
 }
 
-// mergeEval combines a trigger and its conditions, in order: match is the AND
-// of all, inputs the union, detail the parts joined with " · ". It stops at
-// the first evaluation that skips or does not match; the evaluations after it
-// are not merged, so a later skip never outranks an earlier non-match.
+// mergeEval combines a trigger and its conditions, in order (ruling a′):
+// inputs are the union over every evaluation, so a hold keeps the condition
+// inputs whatever matched. match is the AND, skip/skipDetail the first skip,
+// detail the sentences joined with " · "; these stop at the first skip or
+// non-match, so a later skip never outranks an earlier non-match.
 func mergeEval(evs ...evaluation) evaluation {
 	if len(evs) == 1 {
 		return evs[0]
 	}
 	out := evaluation{match: true}
 	var parts []string
+	done := false
 	for _, ev := range evs {
 		if ev.inputs != nil {
 			if out.inputs == nil {
@@ -103,28 +105,29 @@ func mergeEval(evs ...evaluation) evaluation {
 				out.inputs[k] = v
 			}
 		}
+		if done {
+			continue
+		}
 		if ev.detail != "" {
 			parts = append(parts, ev.detail)
 		}
 		if ev.skip != "" {
 			out.match = false
 			out.skip, out.skipDetail = ev.skip, ev.skipDetail
-			break
-		}
-		if !ev.match {
+			done = true
+		} else if !ev.match {
 			out.match = false
-			break
+			done = true
 		}
 	}
 	out.detail = strings.Join(parts, " · ")
 	return out
 }
 
-// evalRule evaluates r's trigger, then its document conditions in stored
-// order (Rule.DocConditions; kind_is is checkDoc's guard). It stops at the
-// first skip or non-match (ruling a): a trigger that does not match gives the
-// trigger's own evaluation, and no condition is evaluated. It does not apply
-// the common guards (checkDoc does).
+// evalRule evaluates r's trigger, then every document condition in stored
+// order (Rule.DocConditions; kind_is is checkDoc's guard), and merges them
+// (mergeEval): the inputs of all, the outcome of the first skip or
+// non-match. It does not apply the common guards (checkDoc does).
 func evalRule(r *automation.Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
 	t := &r.When.Trigger
 	eval, ok := evaluators[t.Type]
@@ -134,13 +137,10 @@ func evalRule(r *automation.Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, no
 	tp := t.Params
 	evs := []evaluation{eval(&tp, d, ci, fs, now)}
 	for _, c := range r.DocConditions() {
-		if last := evs[len(evs)-1]; last.skip != "" || !last.match {
-			break
-		}
 		ceval, ok := conditionEvaluators[c.Type]
 		if !ok {
 			evs = append(evs, evaluation{skip: SkipInvalidRule, skipDetail: "unknown condition " + c.Type})
-			break
+			continue
 		}
 		p := c.Params
 		evs = append(evs, ceval(&p, d, ci, fs, now))
@@ -157,7 +157,8 @@ func evalRule(r *automation.Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, no
 // never guessed in or out.
 func DocConditionsMatch(r *automation.Rule, d *DocSnap, ci *ContentInfo, now time.Time) (in bool, skip string) {
 	for _, c := range r.Conditions {
-		if c.Type == automation.CondKindIs {
+		// X4: a blank kind (a hand edit) is all, never "kind must be blank"
+		if c.Type == automation.CondKindIs && c.Kind != "" {
 			if out, _ := evalKind(c.Kind, ci); out {
 				return false, ""
 			}

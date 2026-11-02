@@ -879,3 +879,55 @@ func TestTriggerStartsLoopForNewUser(t *testing.T) {
 		t.Fatal("a loop was started for a sync10 user")
 	}
 }
+
+// TestUndoWhileNotSettledKeepsHold (ruling a′): finished_reading AND tag_is
+// keep moves a doc; Mike opens it (not settled any more) and taps Undo. The
+// hold must carry the condition inputs too, so once the doc settles again the
+// hold still applies: no ClearHolds, no second move.
+func TestUndoWhileNotSettledKeepsHold(t *testing.T) {
+	ft, storage := newHarness(t, uid, true)
+	svc, _, clk := newService(t, storage)
+	now := clk.Now()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	d := ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
+	d.Content["tags"] = []any{"keep"}
+	ft.Sync()
+	r := readRule()
+	r.Conditions = append(r.Conditions, cond(automation.CondTagIs, P{Tag: "keep"}))
+	saveConfig(t, svc, uid, ModeLive, r)
+	if res, err := svc.RunNow(uid); err != nil || res.Run.Moved != 1 {
+		t.Fatalf("first run: %+v %v", res, err)
+	}
+
+	clk.advance(time.Minute)
+	// the tablet syncs the move, then Mike opens the doc in Read
+	if err := ft.Pull(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.Open("d", 4, clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ft.Sync()
+	st, _ := svc.Store().LoadState(uid)
+	if _, err := svc.Undo(uid, st.Moves[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = svc.Store().LoadState(uid)
+	h := st.FindHold("r1", "d")
+	if h == nil || h.Reason != "undo" || h.Inputs["tags"] != "keep" {
+		t.Fatalf("undo hold = %+v, want the tag_is input", h)
+	}
+
+	clk.advance(7 * time.Hour)
+	plan, _, err := svc.Preview(uid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := plan.Rules[0]; rr.Held != 1 || rr.Matches != 0 || len(plan.ClearHolds) != 0 {
+		t.Fatalf("settled again: rule %+v, clear %+v", rr, plan.ClearHolds)
+	}
+	if res, _ := svc.RunNow(uid); res.Run.Moved != 0 || ft.ParentOf("d") != "rr" {
+		t.Fatal("the undone document moved again")
+	}
+}
