@@ -315,10 +315,14 @@ type ContentInfo struct {
 	// PagesError the page list is missing although pageCount > 0: the rest of
 	// the blob is fine (Readable) but PageOrder must not be read as "no pages"
 	PagesError string `json:"pagesError,omitempty"`
+	// Redir page id to the PDF page index it annotates (-1 = an inserted page),
+	// from cPages redir.value (absent -1 once any page has one) or from the
+	// formatVersion 1 redirectionPageMap. Nil when the blob has none.
+	Redir map[string]int `json:"redir,omitempty"`
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 8
+const contentParseVersion = 9
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -397,6 +401,7 @@ func ParseContent(b []byte) ContentInfo {
 		return info
 	}
 	info.PageOrder = order
+	info.Redir = redirMap(raw, order)
 	return info
 }
 
@@ -454,6 +459,51 @@ func pageOrder(raw map[string]any) (out []string, unusable bool, err error) {
 		out = append(out, p.id)
 	}
 	return out, valid == 0, nil
+}
+
+// redirMap page id to PDF page index (see ContentInfo.Redir)
+func redirMap(raw map[string]any, order []string) map[string]int {
+	cp, _ := raw["cPages"].(map[string]any)
+	if items, ok := cp["pages"].([]any); ok {
+		out := map[string]int{}
+		for _, it := range items {
+			p, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			id, _ := p["id"].(string)
+			r, _ := p["redir"].(map[string]any)
+			if id == "" || r == nil || r["value"] == nil {
+				continue
+			}
+			if _, dup := out[id]; !dup {
+				out[id] = intOf(r["value"])
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		for _, id := range order {
+			if _, ok := out[id]; !ok {
+				out[id] = -1
+			}
+		}
+		return out
+	}
+	pages, _ := raw["pages"].([]any)
+	m, _ := raw["redirectionPageMap"].([]any)
+	if len(pages) == 0 || len(m) < len(pages) {
+		return nil
+	}
+	out := map[string]int{}
+	for i, it := range pages {
+		if id, _ := it.(string); id != "" {
+			if _, dup := out[id]; !dup {
+				out[id] = intOf(m[i])
+			}
+		}
+	}
+	return out
 }
 
 // hasPagesList .content carries cPages.pages or a pages array

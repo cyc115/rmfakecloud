@@ -16,6 +16,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/pagewatch"
 	"github.com/ddvk/rmfakecloud/internal/screenshare"
 	"github.com/ddvk/rmfakecloud/internal/storage"
+	storefs "github.com/ddvk/rmfakecloud/internal/storage/fs"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	webui "github.com/ddvk/rmfakecloud/ui"
@@ -47,6 +48,7 @@ type documentHandler interface {
 
 type blobHandler interface {
 	GetCachedTree(uid string) (tree *models.HashTree, err error)
+	BlobStorage(uid string) *storefs.LocalBlobStorage
 	CreateBlobDocument(uid, name, parent string, reader io.Reader) (doc *storage.Document, err error)
 	UpdateBlobDocument(uid, docID, name, parent string) (err error)
 	DeleteBlobDocument(uid, docID string) (err error)
@@ -107,6 +109,7 @@ func New(cfg *config.Config,
 	backend15 := &backend15{
 		blobHandler: blobHandler,
 		h:           h,
+		rmPagesURL:  cfg.RMPagesURL,
 	}
 	backend10 := &backend10{
 		documentHandler: docHandler,
