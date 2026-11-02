@@ -1,0 +1,150 @@
+{
+  "version": 2,
+  "revision": 22,
+  "settings": {
+    "enabled": true,
+    "mode": "live",
+    "intervalMinutes": 30
+  },
+  "rules": [
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000001",
+      "name": "extract tagged pages",
+      "enabled": true,
+      "when": {
+        "subject": "page",
+        "in": [
+          {
+            "id": "",
+            "kind": "folder",
+            "name": "My files"
+          }
+        ],
+        "trigger": {
+          "type": "page_tagged",
+          "tag": "x-extract"
+        }
+      },
+      "conditions": [],
+      "actions": [
+        {
+          "type": "extract_tasks",
+          "prompt": "Live-shape fixture prompt: list the action items.",
+          "model": "example/model-one"
+        }
+      ]
+    },
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000002",
+      "name": "",
+      "enabled": true,
+      "when": {
+        "subject": "page",
+        "in": [
+          {
+            "id": "1b2c3d4e-0000-4000-8000-0000000000d1",
+            "kind": "document",
+            "name": "Sample Notebook"
+          },
+          {
+            "id": "1b2c3d4e-0000-4000-8000-0000000000f3",
+            "kind": "folder",
+            "name": "Sample Folder"
+          }
+        ],
+        "trigger": {
+          "type": "page_changed"
+        }
+      },
+      "conditions": [
+        {
+          "type": "kind_is",
+          "kind": "notebooks"
+        }
+      ],
+      "actions": [
+        {
+          "type": "extract_tasks",
+          "prompt": "Live-shape fixture prompt: transcribe the page.",
+          "model": "example/model-two"
+        }
+      ]
+    },
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000003",
+      "name": "",
+      "enabled": true,
+      "when": {
+        "subject": "document",
+        "in": [
+          {
+            "id": "1b2c3d4e-0000-4000-8000-0000000000f1",
+            "kind": "folder",
+            "name": "Sample Reading A"
+          }
+        ],
+        "trigger": {
+          "type": "finished_reading",
+          "minPages": 2,
+          "settleHours": 6
+        }
+      },
+      "conditions": [
+        {
+          "type": "kind_is",
+          "kind": "pdf_epub"
+        }
+      ],
+      "actions": [
+        {
+          "type": "move",
+          "to": {
+            "id": "",
+            "createIfMissing": {
+              "name": "Read",
+              "parent": "source"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000004",
+      "name": "",
+      "enabled": true,
+      "when": {
+        "subject": "document",
+        "in": [
+          {
+            "id": "1b2c3d4e-0000-4000-8000-0000000000f2",
+            "kind": "folder",
+            "name": "Sample Reading B"
+          }
+        ],
+        "trigger": {
+          "type": "finished_reading",
+          "minPages": 2,
+          "settleHours": 6
+        }
+      },
+      "conditions": [
+        {
+          "type": "kind_is",
+          "kind": "pdf_epub"
+        }
+      ],
+      "actions": [
+        {
+          "type": "move",
+          "to": {
+            "id": "",
+            "createIfMissing": {
+              "name": "Read",
+              "parent": "source"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -199,11 +199,11 @@ func hasSubjects(s *automation.Spec, want ...string) bool {
 }
 
 // evalKind the kind_is guard (v1 scope): skip with the out_of_scope detail
-// when the document is not of kind. Only all covers every document; like v1,
-// any other value ("" included) must equal the document's kind.
+// when the document is not of kind. All and "" (unset, as X4 treats it for
+// pages) cover every document; any other value must equal the document's kind.
 func evalKind(kind string, ci *ContentInfo) (skip bool, detail string) {
 	got := ci.Kind()
-	if kind == automation.KindAll || got == kind {
+	if kind == automation.KindAll || kind == "" || got == kind {
 		return false, ""
 	}
 	what := "notebook"

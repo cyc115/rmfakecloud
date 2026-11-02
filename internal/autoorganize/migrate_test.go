@@ -435,3 +435,59 @@ func TestToV1ReportsInexpressible(t *testing.T) {
 		})
 	}
 }
+
+// TestMigrateV1LiveShape the shapes Mike's live config has (synthetic ids,
+// names and prompt): a named and an unnamed pipeline rule, a hyphenated page
+// tag, the root watch entry, and two move rules with Done-style created
+// destinations. Ids and order are kept, nothing is flagged, the result is valid.
+func TestMigrateV1LiveShape(t *testing.T) {
+	b, err := os.ReadFile("testdata/v1-live-shape.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v1 V1Config
+	if err := json.Unmarshal(b, &v1); err != nil {
+		t.Fatal(err)
+	}
+	got := mustMigrate(t, &v1)
+	if err := got.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(got.Rules) != len(v1.Rules) {
+		t.Fatalf("%d rules, want %d", len(got.Rules), len(v1.Rules))
+	}
+	for i, r := range got.Rules {
+		if r.ID != v1.Rules[i].ID {
+			t.Errorf("rule %d id %s, want %s", i, r.ID, v1.Rules[i].ID)
+		}
+	}
+	if got.Rules[0].Name != "extract tagged pages" || got.Rules[1].Name != "" {
+		t.Errorf("names %q %q", got.Rules[0].Name, got.Rules[1].Name)
+	}
+	if tr := got.Rules[0].When.Trigger; tr.Type != automation.TriggerPageTagged || tr.Params.Tag != "x-extract" {
+		t.Errorf("rule 1 trigger %+v", tr)
+	}
+	for _, i := range []int{2, 3} {
+		if got.Rules[i].IsPage() {
+			t.Errorf("rule %d is a page rule", i)
+		}
+	}
+	// the new golden: generated once with UPDATE_LIVE_SHAPE=1, then asserted
+	out, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const goldPath = "testdata/v2-live-shape.json"
+	if os.Getenv("UPDATE_LIVE_SHAPE") != "" {
+		if err := os.WriteFile(goldPath, append(out, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(goldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded(t, out), decoded(t, want)) {
+		t.Errorf("MigrateV1(v1-live-shape) =\n%s\nwant\n%s", out, want)
+	}
+}

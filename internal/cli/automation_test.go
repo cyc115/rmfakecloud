@@ -268,13 +268,32 @@ func TestRollbackForceKeepsFullV2Copy(t *testing.T) {
 func TestUnknownUserErrors(t *testing.T) {
 	store, _ := setup(t)
 	for _, args := range [][]string{
-		{"migrate", "--dry-run", "--user", "nobody"},
 		{"rollback", "--user", "nobody"},
 		{"rollback", "--user", "nobody", "--force"},
 	} {
 		if code, _, errs := run(store, args...); code != 1 || errs == "" {
 			t.Errorf("%v: exit %d err %q", args, code, errs)
 		}
+	}
+}
+
+// a user with no auto-organize.json has nothing to migrate: a note, exit 0
+// (also when automation.json already exists and the v1 file is gone)
+func TestMigrateDryRunNothingToMigrate(t *testing.T) {
+	store, dir := setup(t)
+	want := "nothing to migrate for nobody: no auto-organize.json\n"
+	if code, out, errs := run(store, "migrate", "--dry-run", "--user", "nobody"); code != 0 || out != "" || errs != want {
+		t.Errorf("unknown user: exit %d out %q err %q", code, out, errs)
+	}
+	if _, err := store.LoadConfig("u"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, autoorganize.V1ConfigFileName)); err != nil {
+		t.Fatal(err)
+	}
+	want = "nothing to migrate for u: no auto-organize.json\n"
+	if code, out, errs := run(store, "migrate", "--dry-run", "--user", "u"); code != 0 || out != "" || errs != want {
+		t.Errorf("v2 only: exit %d out %q err %q", code, out, errs)
 	}
 }
 
@@ -288,7 +307,7 @@ func TestAutomationUsageErrors(t *testing.T) {
 }
 
 func TestRollbackWarnsToStopServer(t *testing.T) {
-	const w = "stop rmfakecloud first (systemctl --user stop rmfakecloud): a running server re-migrates and undoes the rollback"
+	const w = "stop the rmfakecloud server first: a running server re-migrates and undoes the rollback"
 	store, _ := setup(t)
 	if _, _, errs := run(store, "rollback"); !strings.Contains(errs, w) {
 		t.Errorf("usage lacks the warning: %q", errs)
@@ -296,7 +315,7 @@ func TestRollbackWarnsToStopServer(t *testing.T) {
 	if _, _, errs := run(store, "rollback", "--user", "nobody"); !strings.Contains(errs, w) {
 		t.Errorf("no warning before rollback: %q", errs)
 	}
-	if !strings.Contains(Usage(), "stop rmfakecloud first") {
+	if !strings.Contains(Usage(), "stop the rmfakecloud server first") {
 		t.Error("Usage() lacks the warning")
 	}
 }

@@ -1,0 +1,48 @@
+{
+  "revision": 21,
+  "settings": {"enabled": true, "mode": "live", "intervalMinutes": 30},
+  "rules": [
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000001",
+      "name": "extract tagged pages",
+      "enabled": true,
+      "source": {"id": "", "name": "My files"},
+      "scope": "all",
+      "trigger": {"type": "page_tagged", "tag": "x-extract", "settleHours": 6, "minAgeEnabled": true, "minAgeDays": 0, "pinned": true},
+      "destination": {"id": "", "name": "My files"},
+      "action": {"type": "pipeline", "prompt": "Live-shape fixture prompt: list the action items.", "model": "example/model-one"},
+      "watch": [{"id": "", "kind": "folder", "name": "My files"}]
+    },
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000002",
+      "enabled": true,
+      "source": {"id": "", "name": "My files"},
+      "scope": "notebooks",
+      "trigger": {"type": "page_changed", "settleHours": 6, "minAgeEnabled": true, "minAgeDays": 0, "pinned": true},
+      "destination": {"id": "", "name": "My files"},
+      "action": {"type": "pipeline", "prompt": "Live-shape fixture prompt: transcribe the page.", "model": "example/model-two"},
+      "watch": [
+        {"id": "1b2c3d4e-0000-4000-8000-0000000000d1", "kind": "document", "name": "Sample Notebook"},
+        {"id": "1b2c3d4e-0000-4000-8000-0000000000f3", "kind": "folder", "name": "Sample Folder"}
+      ]
+    },
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000003",
+      "enabled": true,
+      "source": {"id": "1b2c3d4e-0000-4000-8000-0000000000f1", "name": "Sample Reading A"},
+      "scope": "pdf_epub",
+      "trigger": {"type": "finished_reading", "minPages": 2, "settleHours": 6, "minAgeEnabled": true, "minAgeDays": 0, "pinned": true},
+      "destination": {"id": "", "createIfMissing": {"name": "Read", "parent": "source"}},
+      "action": {"type": "move"}
+    },
+    {
+      "id": "1b2c3d4e-0000-4000-8000-000000000004",
+      "enabled": true,
+      "source": {"id": "1b2c3d4e-0000-4000-8000-0000000000f2", "name": "Sample Reading B"},
+      "scope": "pdf_epub",
+      "trigger": {"type": "finished_reading", "minPages": 2, "settleHours": 6, "minAgeEnabled": true, "minAgeDays": 0, "pinned": true},
+      "destination": {"id": "", "createIfMissing": {"name": "Read", "parent": "source"}},
+      "action": {"type": "move"}
+    }
+  ]
+}

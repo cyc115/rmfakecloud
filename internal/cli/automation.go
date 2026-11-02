@@ -5,16 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 )
 
-const rollbackWarning = "stop rmfakecloud first (systemctl --user stop rmfakecloud): a running server re-migrates and undoes the rollback"
+const rollbackWarning = "stop the rmfakecloud server first: a running server re-migrates and undoes the rollback"
 
 const automationUsage = `usage:
   automation migrate --dry-run --user <uid>   print the automation.json the migration would write (read-only)
   automation rollback --user <uid> [--force]   write auto-organize.json from automation.json for the old binary
-                                             stop rmfakecloud first (systemctl --user stop rmfakecloud): a running server re-migrates and undoes the rollback
+                                             stop the rmfakecloud server first: a running server re-migrates and undoes the rollback
 `
 
 // runAutomation the "automation" command; returns the exit code (0 ok,
@@ -25,21 +26,21 @@ func runAutomation(args []string, store *autoorganize.Store, stdout, stderr io.W
 		return 2
 	}
 	sub, rest := args[0], args[1:]
-	fs := flag.NewFlagSet("automation "+sub, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	user := fs.String("user", "", "user id")
-	dry := fs.Bool("dry-run", false, "migrate: print only, write nothing")
-	force := fs.Bool("force", false, "rollback: write the expressible rules even if some are left out")
+	fset := flag.NewFlagSet("automation "+sub, flag.ContinueOnError)
+	fset.SetOutput(stderr)
+	user := fset.String("user", "", "user id")
+	dry := fset.Bool("dry-run", false, "migrate: print only, write nothing")
+	force := fset.Bool("force", false, "rollback: write the expressible rules even if some are left out")
 	switch sub {
 	case "migrate", "rollback":
 	default:
 		fmt.Fprintf(stderr, "unknown automation command %q\n%s", sub, automationUsage)
 		return 2
 	}
-	if err := fs.Parse(rest); err != nil {
+	if err := fset.Parse(rest); err != nil {
 		return 2
 	}
-	if *user == "" || fs.NArg() > 0 {
+	if *user == "" || fset.NArg() > 0 {
 		fmt.Fprint(stderr, automationUsage)
 		return 2
 	}
@@ -55,6 +56,10 @@ func runMigrate(uid string, dry bool, store *autoorganize.Store, stdout, stderr 
 		return 2
 	}
 	out, issues, err := store.MigrateDryRunIssues(uid)
+	if errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(stderr, "nothing to migrate for %s: no %s\n", uid, autoorganize.V1ConfigFileName)
+		return 0
+	}
 	if err != nil && !errors.Is(err, autoorganize.ErrAlreadyMigrated) {
 		fmt.Fprintf(stderr, "migrate %s: %v\n", uid, err)
 		return 1

@@ -452,3 +452,72 @@ func TestBlankKindIsMeansAll(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveShapeStateSurvivesMigration (never miss a note): Mike's live rule
+// shapes (../autoorganize/testdata/v1-live-shape.json, synthetic): a
+// hyphenated page tag over the root watch entry, and an unnamed page_changed
+// rule over one document plus one folder. With the state the v1 page watch
+// held, the migrated rules send nothing for unchanged pages, keep the
+// "page_tagged:x extract" state key, and still emit a real change.
+func TestLiveShapeStateSurvivesMigration(t *testing.T) {
+	const (
+		tagRule  = "1b2c3d4e-0000-4000-8000-000000000001"
+		pageRule = "1b2c3d4e-0000-4000-8000-000000000002"
+		wDoc     = "1b2c3d4e-0000-4000-8000-0000000000d1"
+		wFolder  = "1b2c3d4e-0000-4000-8000-0000000000f3"
+	)
+	b, err := os.ReadFile("../autoorganize/testdata/v1-live-shape.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v1 autoorganize.V1Config
+	if err := json.Unmarshal(b, &v1); err != nil {
+		t.Fatal(err)
+	}
+	e := newEnv(t)
+	e.cfg = migrated(t, &v1)
+
+	e.ft.Folder(wFolder, "Sample Folder", "")
+	e.ft.Notebook("in-folder", "In Folder", wFolder)
+	e.page("in-folder", "p1", "strokes_a.rm")
+	e.ft.Notebook(wDoc, "Sample Notebook", "")
+	e.page(wDoc, "p1", "strokes_a.rm")
+	e.ft.Notebook("tagged", "Tagged", "")
+	e.page("tagged", "p1", "strokes_a.rm")
+	e.tag("tagged", "p1", "x-extract", e.now.Add(-48*time.Hour))
+
+	// what the v1 page watch held after delivering every page
+	last := e.now.Add(-15 * time.Minute)
+	tr := newRuleState()
+	tr.Trigger = "page_tagged:x extract"
+	tr.LastActive = last
+	tr.TagWatched["tagged"] = true
+	tr.Baselines["tagged/p1"] = e.pageHash("tagged", "p1")
+	e.state.Rules[tagRule] = tr
+	pr := newRuleState()
+	pr.LastActive = last
+	for _, d := range []string{wDoc, "in-folder"} {
+		pr.Members[d] = true
+		pr.Baselines[d+"/p1"] = e.pageHash(d, "p1")
+		e.state.Seen[d] = last.Add(-time.Hour)
+	}
+	e.state.Rules[pageRule] = pr
+	e.state.Seen["tagged"] = last.Add(-time.Hour)
+
+	if got := e.cfg.Rules[0].When.Trigger; got.Params.Tag != "x-extract" {
+		t.Fatalf("tag %q", got.Params.Tag)
+	}
+	p := e.sweep()
+	wantEvents(t, "after migration", p.Pipeline)
+	if got := ruleState(e.state, tagRule); got.Trigger != tr.Trigger || !reflect.DeepEqual(got.Baselines, tr.Baselines) {
+		t.Fatalf("tag rule state reset: %s", stateJSON(t, e.state))
+	}
+	if got := ruleState(e.state, pageRule); !reflect.DeepEqual(got.Baselines, pr.Baselines) {
+		t.Fatalf("page rule state reset: %s", stateJSON(t, e.state))
+	}
+
+	e.page("tagged", "p1", "strokes_ab.rm")
+	e.page("in-folder", "p1", "strokes_ab.rm")
+	wantEvents(t, "edits", e.sweep().Pipeline,
+		"edit tagged/p1 "+tagRule, "edit in-folder/p1 "+pageRule)
+}
