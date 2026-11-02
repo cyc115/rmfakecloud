@@ -8,13 +8,13 @@ import {
 
 const FOLDERS = [
   { id: "", name: "My files", path: "My files", depth: 0 },
-  { id: "8ba040dd-f104-4473-a029-fa810576cc9d", name: "Research Reports", path: "Research Reports", depth: 1 },
+  { id: "33333333-3333-4333-8333-333333333333", name: "Papers To Read", path: "Papers To Read", depth: 1 },
   { id: "inb", name: "Inbox", path: "Inbox", depth: 1 },
   { id: "arc", name: "Archive", path: "Archive", depth: 1 },
   { id: "art", name: "Articles", path: "Reading / Articles", depth: 2 },
 ];
 const WATCHABLES = [
-  { id: "7ab9dca6-4ab8-464e-b49d-66a14f3ccbf5", kind: "document", name: "inbox", path: "inbox", docType: "notebook" },
+  { id: "44444444-4444-4444-8444-444444444444", kind: "document", name: "inbox", path: "inbox", docType: "notebook" },
   { id: "notes-doc", kind: "document", name: "Notes", path: "Projects / Notes", docType: "notebook" },
   { id: "proj", kind: "folder", name: "Projects", path: "Projects" },
 ];
@@ -23,27 +23,27 @@ const DEFAULTS = { prompt: "DEFAULT", model: "m/default" };
 
 // Mike's live rules (auto-organize.json, 2026-11-01 + the second watched notebook)
 const MIKE_MOVE = {
-  id: "95317999-7cad-44d8-9bfb-ba54153204ea", name: "", enabled: true, scope: "pdf_epub",
-  source: { id: "8ba040dd-f104-4473-a029-fa810576cc9d", name: "Research Reports" },
+  id: "11111111-1111-4111-8111-111111111111", name: "", enabled: true, scope: "pdf_epub",
+  source: { id: "33333333-3333-4333-8333-333333333333", name: "Papers To Read" },
   trigger: { type: "finished_reading", minPages: 2, settleHours: 6, minAgeEnabled: true, minAgeDays: 0, pinned: true },
   destination: { id: "", name: "", createIfMissing: { name: "Read", parent: "source" } },
   action: { type: "move" },
 };
 const MIKE_PIPELINE = {
-  id: "01eded54-34e4-4f4b-bcb0-2ee05d77547d", name: "capture inbox note to vault", enabled: true, scope: "all",
+  id: "22222222-2222-4222-8222-222222222222", name: "capture journal pages", enabled: true, scope: "all",
   source: { id: "", name: "" }, destination: { id: "", name: "" },
   trigger: { type: "page_changed" },
   action: { type: "pipeline", prompt: "Mike's custom extraction prompt", model: "deepseek/deepseek-v4.1-flash" },
   watch: [
-    { id: "7ab9dca6-4ab8-464e-b49d-66a14f3ccbf5", kind: "document", name: "inbox" },
+    { id: "44444444-4444-4444-8444-444444444444", kind: "document", name: "inbox" },
     { id: "notes-doc", kind: "document", name: "Notes" },
   ],
 };
 
 test("Mike's move rule renders as one sentence", () => {
-  assert.equal(sentenceText(MIKE_MOVE, CTX), "IF I finish reading a document in Research Reports THEN move it to Read");
+  assert.equal(sentenceText(MIKE_MOVE, CTX), "IF I finish reading a document in Papers To Read THEN move it to Read");
   // without the live tree the cached names give the same sentence
-  assert.equal(sentenceText(MIKE_MOVE), "IF I finish reading a document in Research Reports THEN move it to Read");
+  assert.equal(sentenceText(MIKE_MOVE), "IF I finish reading a document in Papers To Read THEN move it to Read");
 });
 
 test("Mike's pipeline rule renders as one sentence", () => {
@@ -212,6 +212,6 @@ test("switching triggers and back keeps each trigger's parameters", () => {
 });
 
 test("ruleLabel: its own name, else its sentence", () => {
-  assert.equal(ruleLabel(MIKE_PIPELINE, CTX), "capture inbox note to vault");
-  assert.equal(ruleLabel(MIKE_MOVE, CTX), "IF I finish reading a document in Research Reports THEN move it to Read");
+  assert.equal(ruleLabel(MIKE_PIPELINE, CTX), "capture journal pages");
+  assert.equal(ruleLabel(MIKE_MOVE, CTX), "IF I finish reading a document in Papers To Read THEN move it to Read");
 });

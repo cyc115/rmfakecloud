@@ -162,7 +162,7 @@ LIVE_LIKE = [
         "action": {"type": "move"},
     },
     {  # Mike's pipeline rule: a custom name, two watched documents, a custom prompt
-        "id": "", "name": "capture inbox note to vault", "enabled": True, "scope": "all",
+        "id": "", "name": "capture journal pages", "enabled": True, "scope": "all",
         "source": {"id": "", "name": ""}, "destination": {"id": "", "name": ""},
         "trigger": {"type": "page_changed"},
         "action": {"type": "pipeline", "prompt": "Custom prompt.", "model": "deepseek/deepseek-v4.1-flash"},
@@ -191,7 +191,7 @@ def test_live_like_rules_render_as_sentences(page, api):
         "IF I finish reading a document in Inbox THEN move it to Read",
         "IF I write on a page in E2E Notes or Paper THEN extract tasks to my inbox",
     ])
-    expect(page.locator(".ao-rule").nth(1).locator(".ao-rname")).to_have_text("capture inbox note to vault")
+    expect(page.locator(".ao-rule").nth(1).locator(".ao-rname")).to_have_text("capture journal pages")
     # editing the page rule shows its parts; Cancel leaves it untouched
     sentences.nth(1).click()
     drawer = page.get_by_label("Edit rule")
