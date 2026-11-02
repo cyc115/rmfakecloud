@@ -66,8 +66,29 @@
 //   - leaving (moved out, trashed, tagged, out of scope, gone): no events;
 //     membership and baselines are dropped, so a re-join starts over.
 //
+// A page_tagged rule (detect_tagged.go) watches the same documents (no watch
+// entries = the whole tree) but only their pages that carry Trigger.Tag
+// (.content pageTags, trimmed, case-insensitive):
+//
+//   - newly tagged (no baseline): one "edit" with an empty BeforeHash (the
+//     whole page) when the rule had the doc at an earlier sweep
+//     (RuleState.TagWatched) or the doc is new since the rule last looked.
+//     Otherwise the tag pre-existed the rule's look at the doc (first
+//     activation, moved in, watch widened): "transcribe_only", unless the
+//     blob or the tag's timestamp is newer than that look (RuleState.TagJoinAt,
+//     pinned at first sight so a re-send keeps its kind).
+//   - tagged with a baseline: an "edit" per change against the baseline.
+//   - untagged: no events; its baseline and pin are dropped.
+//   - deleted while delivered: "page_deleted", as above.
+//
+// RuleState.Trigger records what a rule's state was built for ("" =
+// page_changed, else "page_tagged:<tag>"); a rule whose trigger type or tag
+// changed starts afresh, as at its first activation.
+//
 // Every pipeline event carries the doc's PageOrder; a pure reorder emits
-// nothing.
+// nothing. A rule with Action.Tasks false ("just save notes") puts
+// "tasks": false on each of its events; rm-pages saves the note and extracts
+// no tasks. Other events have no "tasks" key.
 //
 // # Skips (the page or doc keeps its old baseline)
 //

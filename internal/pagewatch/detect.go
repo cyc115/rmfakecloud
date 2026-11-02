@@ -365,8 +365,8 @@ func (d *detector) seenAt(docID string) time.Time {
 	return d.in.Now
 }
 
-// pagesOf baseline page ids by doc, sorted
-func pagesOf(baselines map[string]string) map[string][]string {
+// pagesOf the page ids of "doc/page" keys (baselines, pins) by doc, sorted
+func pagesOf[V any](baselines map[string]V) map[string][]string {
 	out := map[string][]string{}
 	for key := range baselines {
 		if i := strings.LastIndex(key, "/"); i > 0 {
@@ -534,10 +534,63 @@ func (d *detector) pipeline() {
 }
 
 func (d *detector) rule(r *autoorganize.Rule) {
-	base := d.base.Rules[r.ID]
-	if base == nil {
-		base = newRuleState()
+	base := d.ruleBase(r)
+	d.missingWatches(r)
+	held := pagesOf(base.Baselines)
+	known := ruleDocs(base)
+	for _, v := range d.docs {
+		switch {
+		case !d.inRule(r, v):
+			if known[v.snap.ID] {
+				d.leave(r.ID, v.snap.ID)
+			}
+		case r.Trigger.Type == autoorganize.TriggerPageTagged:
+			d.taggedDoc(r, base, held[v.snap.ID], v)
+		default:
+			d.ruleDoc(r, base, held[v.snap.ID], v)
+		}
 	}
+	// docs gone from the tree leave too; left-alone docs are still in it
+	for _, doc := range sortedKeys(known) {
+		if _, inTree := d.in.Snap.Docs[doc]; !inTree {
+			d.leave(r.ID, doc)
+		}
+	}
+	ruleID, now := r.ID, d.in.Now
+	d.always(func(s *State) { s.rule(ruleID).LastActive = now })
+}
+
+// ruleBase the rule's state at the start of the sweep. A state built for
+// another trigger (type or tag) is replaced by an empty one: the rule starts
+// afresh, as at its first activation, so nothing it held is read with the
+// wrong meaning (old pages never turn into edits).
+func (d *detector) ruleBase(r *autoorganize.Rule) *RuleState {
+	key := stateTrigger(r)
+	if base := d.base.Rules[r.ID]; base != nil && base.Trigger == key {
+		return base
+	}
+	ruleID := r.ID
+	d.always(func(s *State) {
+		rs := newRuleState()
+		rs.Trigger = key
+		s.Rules[ruleID] = rs
+	})
+	fresh := newRuleState()
+	fresh.Trigger = key
+	return fresh
+}
+
+// stateTrigger what a rule's state is built for (RuleState.Trigger)
+func stateTrigger(r *autoorganize.Rule) string {
+	if r.Trigger.Type == autoorganize.TriggerPageTagged {
+		return autoorganize.TriggerPageTagged + ":" + autoorganize.NormalizePageTag(r.Trigger.Tag)
+	}
+	// page_changed: every state written before page_tagged existed
+	return ""
+}
+
+// missingWatches reports the rule's watch entries gone from the tree or trashed
+func (d *detector) missingWatches(r *autoorganize.Rule) {
 	for _, w := range r.Watch {
 		if w.ID == autoorganize.RootID {
 			continue
@@ -549,36 +602,27 @@ func (d *detector) rule(r *autoorganize.Rule) {
 			d.missing = append(d.missing, MissingWatch{RuleID: r.ID, WatchID: w.ID, Kind: w.Kind, Name: w.Name, InTrash: true})
 		}
 	}
-	held := pagesOf(base.Baselines)
-	known := func(doc string) bool {
-		_, joining := base.JoinStartedAt[doc]
-		return base.Members[doc] || len(held[doc]) > 0 || joining
+}
+
+// ruleDocs every doc the rule's state holds anything for
+func ruleDocs(rs *RuleState) map[string]bool {
+	out := map[string]bool{}
+	for doc := range rs.Members {
+		out[doc] = true
 	}
-	for _, v := range d.docs {
-		if d.inRule(r, v) {
-			d.ruleDoc(r, base, held[v.snap.ID], v)
-		} else if known(v.snap.ID) {
-			d.leave(r.ID, v.snap.ID)
-		}
+	for doc := range rs.JoinStartedAt {
+		out[doc] = true
 	}
-	// docs gone from the tree leave too; left-alone docs are still in it
-	gone := map[string]bool{}
-	for doc := range base.Members {
-		gone[doc] = true
+	for doc := range rs.TagWatched {
+		out[doc] = true
 	}
-	for doc := range held {
-		gone[doc] = true
+	for doc := range pagesOf(rs.Baselines) {
+		out[doc] = true
 	}
-	for doc := range base.JoinStartedAt {
-		gone[doc] = true
+	for doc := range pagesOf(rs.TagJoinAt) {
+		out[doc] = true
 	}
-	for _, doc := range sortedKeys(gone) {
-		if _, inTree := d.in.Snap.Docs[doc]; !inTree {
-			d.leave(r.ID, doc)
-		}
-	}
-	ruleID, now := r.ID, d.in.Now
-	d.always(func(s *State) { s.rule(ruleID).LastActive = now })
+	return out
 }
 
 // leave a doc no longer in the rule: no events; it drops its membership and
@@ -588,9 +632,15 @@ func (d *detector) leave(ruleID, docID string) {
 		rs := s.rule(ruleID)
 		delete(rs.Members, docID)
 		delete(rs.JoinStartedAt, docID)
+		delete(rs.TagWatched, docID)
 		for k := range rs.Baselines {
 			if strings.HasPrefix(k, docID+"/") {
 				delete(rs.Baselines, k)
+			}
+		}
+		for k := range rs.TagJoinAt {
+			if strings.HasPrefix(k, docID+"/") {
+				delete(rs.TagJoinAt, k)
 			}
 		}
 	})
@@ -603,6 +653,10 @@ func (d *detector) inRule(r *autoorganize.Rule, v *docView) bool {
 	}
 	if r.Scope != "" && r.Scope != autoorganize.ScopeAll && v.ci.Kind() != r.Scope {
 		return false
+	}
+	if len(r.Watch) == 0 {
+		// page_tagged: no entries is the whole tree (page_changed needs one)
+		return r.Trigger.Type == autoorganize.TriggerPageTagged
 	}
 	for _, w := range r.Watch {
 		switch w.Kind {
@@ -679,8 +733,7 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 	current := map[string]bool{}
 	for _, p := range v.snap.Pages {
 		current[p.ID] = true
-		key := pageKey(docID, p.ID)
-		prev := base.Baselines[key]
+		prev := base.Baselines[pageKey(docID, p.ID)]
 		if p.Hash == "" || p.Hash == prev {
 			continue
 		}
@@ -696,34 +749,54 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 		if member || prev != "" || at.After(joinStart) {
 			kind = KindEdit
 		}
-		ev := d.pipelineEvent(kind, r, v, p.ID, at)
-		ev.PageIndex, ev.AfterHash = p.Index, p.Hash
-		if kind == KindEdit {
-			ev.BeforeHash = prev
-		}
-		ev.TraceID = TraceID("rule", ruleID, kind, docID, p.ID, ev.BeforeHash, ev.AfterHash)
-		d.pipeEvs = append(d.pipeEvs, ev)
-		hash := p.Hash
-		d.onAccept(ev.TraceID, func(s *State) { s.rule(ruleID).Baselines[key] = hash })
-		traces = append(traces, ev.TraceID)
+		traces = append(traces, d.pageChange(kind, r, v, p, prev, at))
 	}
+	traces = append(traces, d.pagesDeleted(r, base, v, held, current)...)
+	if !member && complete {
+		d.joins = append(d.joins, join{ruleID: ruleID, docID: docID, traces: traces})
+	}
+}
+
+// pageChange an edit (before = prev) or a transcribe_only (no before) of page
+// p; the rule's baseline moves to the page's hash once it is accepted (and a
+// page_tagged pin is dropped). Returns the trace id.
+func (d *detector) pageChange(kind string, r *autoorganize.Rule, v *docView, p autoorganize.PageSnap, prev string, at time.Time) string {
+	ev := d.pipelineEvent(kind, r, v, p.ID, at)
+	ev.PageIndex, ev.AfterHash = p.Index, p.Hash
+	if kind == KindEdit {
+		ev.BeforeHash = prev
+	}
+	ruleID, key, hash := r.ID, pageKey(v.snap.ID, p.ID), p.Hash
+	ev.TraceID = TraceID("rule", ruleID, kind, v.snap.ID, p.ID, ev.BeforeHash, ev.AfterHash)
+	d.pipeEvs = append(d.pipeEvs, ev)
+	d.onAccept(ev.TraceID, func(s *State) {
+		rs := s.rule(ruleID)
+		rs.Baselines[key] = hash
+		delete(rs.TagJoinAt, key)
+	})
+	return ev.TraceID
+}
+
+// pagesDeleted a page_deleted per page the rule's baseline holds (held) that
+// is gone from the doc; the baseline drops it once accepted. Returns the ids.
+func (d *detector) pagesDeleted(r *autoorganize.Rule, base *RuleState, v *docView, held []string, current map[string]bool) []string {
+	var traces []string
+	ruleID, docID := r.ID, v.snap.ID
 	for _, pageID := range held {
 		if current[pageID] {
 			continue
 		}
-		ev := d.pipelineEvent(KindPageDeleted, r, v, pageID, now)
+		key := pageKey(docID, pageID)
+		ev := d.pipelineEvent(KindPageDeleted, r, v, pageID, d.in.Now)
 		ev.PageIndex = -1
 		// the deleted page's baseline stands in for before_hash, so a page
 		// that is re-created and deleted again gets a new id
-		ev.TraceID = TraceID("rule", ruleID, KindPageDeleted, docID, pageID, base.Baselines[pageKey(docID, pageID)], "")
+		ev.TraceID = TraceID("rule", ruleID, KindPageDeleted, docID, pageID, base.Baselines[key], "")
 		d.pipeEvs = append(d.pipeEvs, ev)
-		key := pageKey(docID, pageID)
 		d.onAccept(ev.TraceID, func(s *State) { delete(s.rule(ruleID).Baselines, key) })
 		traces = append(traces, ev.TraceID)
 	}
-	if !member && complete {
-		d.joins = append(d.joins, join{ruleID: ruleID, docID: docID, traces: traces})
-	}
+	return traces
 }
 
 // pipelineEvent a rule's event; index and hashes are left to the caller
@@ -740,5 +813,10 @@ func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, 
 		ev.Model = autoorganize.DefaultPipelineModel
 	}
 	ev.PageOrder = append([]string(nil), v.order...)
+	if !r.Action.ExtractsTasks() {
+		// "just save notes": rm-pages extracts no tasks; the kind is unchanged
+		no := false
+		ev.Tasks = &no
+	}
 	return ev
 }

@@ -51,6 +51,10 @@ type Event struct {
 	RuleID  string `json:"rule_id,omitempty"`
 	Prompt  string `json:"prompt,omitempty"`
 	Model   string `json:"model,omitempty"`
+	// Tasks false on every pipeline event of a "just save notes" rule
+	// (Action.Tasks false): rm-pages saves the note and extracts no tasks.
+	// Absent otherwise, so other payloads are unchanged.
+	Tasks *bool `json:"tasks,omitempty"`
 }
 
 // Skip reasons

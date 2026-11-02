@@ -31,6 +31,18 @@ type RuleState struct {
 	// page whose blob is newer is new writing (an edit), not pre-existing
 	// content. Dropped when the join completes or the doc leaves.
 	JoinStartedAt map[string]time.Time `json:"joinStartedAt,omitempty"`
+	// Trigger what the state was built for: "" for page_changed (every state
+	// written before page_tagged existed), "page_tagged:<tag>" otherwise. A
+	// rule whose trigger no longer matches starts afresh.
+	Trigger string `json:"trigger,omitempty"`
+	// TagWatched page_tagged: docs that were in the rule at an earlier sweep;
+	// a page tagged in one of them since is newly tagged (an edit)
+	TagWatched map[string]bool `json:"tagWatched,omitempty"`
+	// TagJoinAt page_tagged: "doc/page" → the threshold of a page that
+	// already carried the tag when the rule first looked at its doc: it is
+	// transcribe_only unless its blob or its tag is newer. Pinned at first
+	// sight so a re-send keeps its kind; dropped once delivered or untagged.
+	TagJoinAt map[string]time.Time `json:"tagJoinAt,omitempty"`
 }
 
 // NewState an empty state
@@ -39,7 +51,8 @@ func NewState() *State {
 }
 
 func newRuleState() *RuleState {
-	return &RuleState{Baselines: map[string]string{}, Members: map[string]bool{}, JoinStartedAt: map[string]time.Time{}}
+	return &RuleState{Baselines: map[string]string{}, Members: map[string]bool{}, JoinStartedAt: map[string]time.Time{},
+		TagWatched: map[string]bool{}, TagJoinAt: map[string]time.Time{}}
 }
 
 // Clone a deep copy; nil gives an empty state
@@ -62,6 +75,7 @@ func (s *State) Clone() *State {
 		c := newRuleState()
 		if rs != nil {
 			c.LastActive = rs.LastActive
+			c.Trigger = rs.Trigger
 			for k, v := range rs.Baselines {
 				c.Baselines[k] = v
 			}
@@ -70,6 +84,12 @@ func (s *State) Clone() *State {
 			}
 			for k, v := range rs.JoinStartedAt {
 				c.JoinStartedAt[k] = v
+			}
+			for k, v := range rs.TagWatched {
+				c.TagWatched[k] = v
+			}
+			for k, v := range rs.TagJoinAt {
+				c.TagJoinAt[k] = v
 			}
 		}
 		out.Rules[id] = c

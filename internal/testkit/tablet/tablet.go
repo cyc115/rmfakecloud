@@ -303,6 +303,36 @@ func (ft *Tablet) Open(docID string, page int, at time.Time) error {
 	return nil
 }
 
+// TagPage adds a page tag to .content pageTags, as the device writes it
+// ({name, pageId, timestamp in unix ms})
+func (ft *Tablet) TagPage(docID, pageID, tag string, at time.Time) error {
+	d, err := ft.doc(docID)
+	if err != nil {
+		return ft.fail(err)
+	}
+	tags, _ := d.Content["pageTags"].([]any)
+	d.Content["pageTags"] = append(tags, map[string]any{"name": tag, "pageId": pageID, "timestamp": at.UnixMilli()})
+	return nil
+}
+
+// UntagPage removes every pageTags entry of the page with that exact name
+func (ft *Tablet) UntagPage(docID, pageID, tag string) error {
+	d, err := ft.doc(docID)
+	if err != nil {
+		return ft.fail(err)
+	}
+	tags, _ := d.Content["pageTags"].([]any)
+	kept := []any{}
+	for _, t := range tags {
+		if m, ok := t.(map[string]any); ok && m["pageId"] == pageID && m["name"] == tag {
+			continue
+		}
+		kept = append(kept, t)
+	}
+	d.Content["pageTags"] = kept
+	return nil
+}
+
 // Rename sets the visible name
 func (ft *Tablet) Rename(docID, name string) error {
 	d, err := ft.doc(docID)
