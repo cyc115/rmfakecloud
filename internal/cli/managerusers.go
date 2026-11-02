@@ -123,5 +123,6 @@ func Usage() string {
 	listusers	list available users
 	automation migrate --dry-run --user <uid>   print the automation.json the migration would write (read-only)
 	automation rollback --user <uid> [--force]   write auto-organize.json from automation.json for the old binary
+		(stop rmfakecloud first: systemctl --user stop rmfakecloud; a running server re-migrates and undoes the rollback)
 `
 }

@@ -286,3 +286,17 @@ func TestAutomationUsageErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestRollbackWarnsToStopServer(t *testing.T) {
+	const w = "stop rmfakecloud first (systemctl --user stop rmfakecloud): a running server re-migrates and undoes the rollback"
+	store, _ := setup(t)
+	if _, _, errs := run(store, "rollback"); !strings.Contains(errs, w) {
+		t.Errorf("usage lacks the warning: %q", errs)
+	}
+	if _, _, errs := run(store, "rollback", "--user", "nobody"); !strings.Contains(errs, w) {
+		t.Errorf("no warning before rollback: %q", errs)
+	}
+	if !strings.Contains(Usage(), "stop rmfakecloud first") {
+		t.Error("Usage() lacks the warning")
+	}
+}

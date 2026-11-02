@@ -9,9 +9,12 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 )
 
+const rollbackWarning = "stop rmfakecloud first (systemctl --user stop rmfakecloud): a running server re-migrates and undoes the rollback"
+
 const automationUsage = `usage:
   automation migrate --dry-run --user <uid>   print the automation.json the migration would write (read-only)
   automation rollback --user <uid> [--force]   write auto-organize.json from automation.json for the old binary
+                                             stop rmfakecloud first (systemctl --user stop rmfakecloud): a running server re-migrates and undoes the rollback
 `
 
 // runAutomation the "automation" command; returns the exit code (0 ok,
@@ -67,6 +70,7 @@ func runMigrate(uid string, dry bool, store *autoorganize.Store, stdout, stderr 
 }
 
 func runRollback(uid string, force bool, store *autoorganize.Store, stdout, stderr io.Writer) int {
+	fmt.Fprintln(stderr, "warning: "+rollbackWarning)
 	res, err := store.Rollback(uid, force)
 	if errors.Is(err, autoorganize.ErrRollbackIssues) {
 		fmt.Fprintf(stderr, "rollback refused for %s: v1 cannot express these rules, nothing was written (--force writes the rest and keeps the full v2 file):\n", uid)
