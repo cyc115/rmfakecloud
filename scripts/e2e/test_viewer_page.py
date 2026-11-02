@@ -4,6 +4,7 @@ import re
 from playwright.sync_api import expect
 
 from conftest import MULTI_PAGES, find
+from test_autoorganize_ui import assert_healthy
 
 
 def doc_id(api, name):
@@ -24,6 +25,7 @@ def test_page_param_is_clamped(page, api, base_url):
     page.goto(f"{base_url}/documents/{mid}?page=99")
     expect(page.get_by_text(f"Page: {MULTI_PAGES} of {MULTI_PAGES}")).to_be_visible()
     expect(page).to_have_url(re.compile(rf"\?page={MULTI_PAGES}$"))
+    assert_healthy(page)  # no console error (react-pdf "Invalid page")
 
 
 def test_no_param_starts_at_page_one(page, api, base_url):

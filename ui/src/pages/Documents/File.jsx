@@ -35,6 +35,8 @@ export default function FileViewer({ file, onSelect }) {
 
   const [page, setPage] = useState(() => wantedPage.current || 1);
   const [pages, setPages] = useState(1);
+  // Page renders only once numPages is known, so a ?page=99 is clamped first
+  const [loaded, setLoaded] = useState(false);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(100);
   // Desktop fits the page to the pane's height; on phones the page scrolls,
@@ -47,6 +49,7 @@ export default function FileViewer({ file, onSelect }) {
   };
   const onLoadSuccess = (pdf) => {
     setPages(pdf.numPages);
+    setLoaded(true);
     if (wantedPage.current === null) {
       setPage(1);
       return;
@@ -135,11 +138,11 @@ export default function FileViewer({ file, onSelect }) {
       {file && (
         <div ref={parent} style={{height: isMobile ? "auto" : "95%"}}>
 		  <Document file={downloadUrl} onLoadSuccess={onLoadSuccess} options={options}>
-            <Page pageNumber={page}
+            {loaded && <Page pageNumber={page}
               {...(isMobile ? { width: width || undefined } : { height })}
               renderAnnotationLayer={false}
               renderTextLayer={false}
-            />
+            />}
           </Document>
         </div>
       )}

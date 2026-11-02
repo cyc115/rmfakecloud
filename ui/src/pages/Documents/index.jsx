@@ -234,7 +234,7 @@ export default function DocumentList() {
           </Col>
           <Col md={8} className={styles.col}>
             <div className={styles.pane}>
-              {selected && selected.isLeaf && <File file={selected} onSelect={onSelect} />}
+              {selected && selected.isLeaf && <File key={selected.id} file={selected} onSelect={onSelect} />}
               {selected && !selected.isLeaf && <Folder selection={selected} onSelect={onSelect} onUpdate={onUpdate} counter={counter} />}
             </div>
           </Col>
