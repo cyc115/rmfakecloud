@@ -3,7 +3,9 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"os"
 
+	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/model"
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
@@ -99,6 +101,11 @@ func (cli *Cli) Handle(args []string) bool {
 			cli.ListUsers(otherarg)
 		case "glitchtip-test":
 			cli.GlitchtipTest(otherarg)
+		case "automation":
+			store := autoorganize.NewStore(cli.storage.UserDataPath, cli.cfg.AutoOrganizeInterval)
+			if code := runAutomation(otherarg, store, os.Stdout, os.Stderr); code != 0 {
+				os.Exit(code)
+			}
 		case "rmuser":
 		default:
 			log.Warn("unknown command: ", cmd)
@@ -114,5 +121,7 @@ func Usage() string {
 	setuser		create users / reset passwords
 	glitchtip-test	send one test event to GLITCHTIP_DSN, print its id (exit 1 if not accepted)
 	listusers	list available users
+	automation migrate --dry-run --user <uid>   print the automation.json the migration would write (read-only)
+	automation rollback --user <uid> [--force]   write auto-organize.json from automation.json for the old binary
 `
 }

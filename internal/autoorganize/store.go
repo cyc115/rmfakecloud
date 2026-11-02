@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ddvk/rmfakecloud/internal/automation"
 	log "github.com/sirupsen/logrus"
@@ -26,6 +27,14 @@ const (
 
 // ErrStaleRevision a PUT carried a revision that is not the current one
 var ErrStaleRevision = errors.New("config was changed elsewhere (stale revision)")
+
+// ErrAlreadyMigrated automation.json already exists, so the server will not
+// migrate auto-organize.json again; MigrateDryRun still returns the bytes
+var ErrAlreadyMigrated = errors.New(ConfigFileName + " already exists")
+
+// ErrRollbackIssues rollback refused: v2 rules that v1 cannot express would be
+// dropped (RollbackResult.Issues lists them); --force writes the rest
+var ErrRollbackIssues = errors.New("rules v1 cannot express would be dropped; nothing was written")
 
 // Store reads and writes the per-user files. The config is owned by the UI
 // (the engines only read it); the state is owned by the sweeper.
@@ -254,4 +263,102 @@ func writeAtomic(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// MigrateDryRun the indented v2 JSON that migrating auto-organize.json would
+// write. It never writes. When automation.json already exists it still
+// migrates the v1 file and returns ErrAlreadyMigrated alongside the bytes.
+func (s *Store) MigrateDryRun(uid string) ([]byte, error) {
+	b, _, err := s.MigrateDryRunIssues(uid)
+	return b, err
+}
+
+// MigrateDryRunIssues MigrateDryRun plus the move rules the migration would
+// disable (MigrateV1's issues)
+func (s *Store) MigrateDryRunIssues(uid string) ([]byte, []RuleIssue, error) {
+	raw, err := os.ReadFile(s.v1ConfigPath(uid))
+	if err != nil {
+		return nil, nil, err
+	}
+	v1 := &V1Config{}
+	if err := json.Unmarshal(raw, v1); err != nil {
+		return nil, nil, fmt.Errorf("cannot parse %s: %w", V1ConfigFileName, err)
+	}
+	migrated, issues, err := MigrateV1(v1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot migrate %s: %w", V1ConfigFileName, err)
+	}
+	out, err := json.MarshalIndent(migrated, "", "  ")
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := os.Stat(s.configPath(uid)); err == nil {
+		return out, issues, ErrAlreadyMigrated
+	}
+	return out, issues, nil
+}
+
+// RollbackResult what Rollback wrote (or, when refused, would have dropped)
+type RollbackResult struct {
+	V1Path    string
+	RenamedV2 string
+	Issues    []RuleIssue
+}
+
+// Rollback writes auto-organize.json from automation.json for the old binary.
+// Without force, any rule v1 cannot express means nothing is written
+// (ErrRollbackIssues). Otherwise the old auto-organize.json goes to .bak, the
+// new one is written atomically, and automation.json is renamed to
+// automation.json.rolled-back-<unix> (P7), so a later v2 deploy migrates again
+// from the file the old binary edited. It holds the user's config lock.
+func (s *Store) Rollback(uid string, force bool) (RollbackResult, error) {
+	l := s.lockFor(uid)
+	l.Lock()
+	defer l.Unlock()
+
+	res := RollbackResult{V1Path: s.v1ConfigPath(uid)}
+	v2, err := s.readConfig(uid)
+	if err != nil {
+		return res, err
+	}
+	var base *V1Config
+	old, err := os.ReadFile(res.V1Path)
+	switch {
+	case err == nil:
+		b := &V1Config{}
+		if json.Unmarshal(old, b) == nil {
+			base = b
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return res, err
+	}
+	v1, issues := ToV1(v2, base)
+	res.Issues = issues
+	if len(issues) > 0 && !force {
+		return res, ErrRollbackIssues
+	}
+	if err := v1.Validate(); err != nil {
+		return res, fmt.Errorf("rolled-back config is invalid: %w", err)
+	}
+	renamed := fmt.Sprintf("%s.rolled-back-%d", s.configPath(uid), time.Now().Unix())
+	if _, err := os.Lstat(renamed); err == nil {
+		return res, fmt.Errorf("%s already exists; retry in a second", renamed)
+	}
+	out, err := json.MarshalIndent(v1, "", "  ")
+	if err != nil {
+		return res, err
+	}
+	if old != nil {
+		if err := writeAtomic(res.V1Path+backupSuffix, old); err != nil {
+			return res, err
+		}
+	}
+	if err := writeAtomic(res.V1Path, out); err != nil {
+		return res, err
+	}
+	if err := os.Rename(s.configPath(uid), renamed); err != nil {
+		return res, fmt.Errorf("wrote %s but could not rename %s: %w", res.V1Path, ConfigFileName, err)
+	}
+	res.RenamedV2 = renamed
+	return res, nil
 }
