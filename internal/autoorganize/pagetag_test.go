@@ -166,3 +166,17 @@ func TestPageTaggedEvalSkipsNeverMatches(t *testing.T) {
 		t.Errorf("page_tagged under the move planner must skip, got %+v", ev)
 	}
 }
+
+func TestPageTagSpellingsMatch(t *testing.T) {
+	c := &ContentInfo{PageTags: pageTags([]any{
+		map[string]any{"name": "To-Do", "pageId": "p1", "timestamp": float64(1000)},
+	})}
+	for _, tag := range []string{"to do", "to_do", "TO-DO", " to  do "} {
+		if _, ok := c.PageTag("p1", tag); !ok {
+			t.Errorf("rule tag %q does not match page tag To-Do", tag)
+		}
+	}
+	if NormalizePageTag("to_do") != NormalizeTag("to-do") {
+		t.Error("page and document tags normalise differently")
+	}
+}
