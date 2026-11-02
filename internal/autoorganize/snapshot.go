@@ -322,7 +322,7 @@ type ContentInfo struct {
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 9
+const contentParseVersion = 10
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -477,7 +477,7 @@ func redirMap(raw map[string]any, order []string) map[string]int {
 				continue
 			}
 			if _, dup := out[id]; !dup {
-				out[id] = intOf(r["value"])
+				out[id] = redirValue(r["value"])
 			}
 		}
 		if len(out) == 0 {
@@ -499,11 +499,20 @@ func redirMap(raw map[string]any, order []string) map[string]int {
 	for i, it := range pages {
 		if id, _ := it.(string); id != "" {
 			if _, dup := out[id]; !dup {
-				out[id] = intOf(m[i])
+				out[id] = redirValue(m[i])
 			}
 		}
 	}
 	return out
+}
+
+// redirValue a numeric redir; anything else counts as an inserted page (-1)
+func redirValue(v any) int {
+	switch v.(type) {
+	case json.Number, float64:
+		return intOf(v)
+	}
+	return -1
 }
 
 // hasPagesList .content carries cPages.pages or a pages array

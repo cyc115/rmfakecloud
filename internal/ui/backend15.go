@@ -62,15 +62,15 @@ func (b *backend15) Sync(uid string) {
 }
 
 // exportPDF renders through rm-pages when configured, then the old exporter,
-// then the document's raw PDF/EPUB payload.
+// then the document's raw PDF payload.
 func (b *backend15) exportPDF(uid, docid string) (io.ReadCloser, error) {
 	if b.rmPagesURL != "" {
 		r, err := renderDoc(context.Background(), b.rmPagesURL, b.httpClient, b.blobHandler, uid, docid)
 		if err == nil {
 			return r, nil
 		}
-		if errors.Is(err, errUnreadablePages) {
-			log.WithFields(log.Fields{"stage": "render", "doc_id": docid}).Warn("viewer: skip rm-pages: ", err)
+		if errors.Is(err, errUnreadablePages) || errors.Is(err, errBusy) {
+			log.WithFields(log.Fields{"stage": "render", "doc_id": docid}).Warn("viewer: rm-pages not used: ", err)
 		} else {
 			log.WithFields(log.Fields{"stage": "render", "doc_id": docid}).Error("viewer: rm-pages render failed, using the old exporter: ", err)
 		}

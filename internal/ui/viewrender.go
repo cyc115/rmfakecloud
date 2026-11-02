@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -104,24 +105,55 @@ func renderDoc(ctx context.Context, base string, client *http.Client, src render
 		client = &http.Client{}
 	}
 	ctx, cancel := context.WithTimeout(ctx, renderTimeout)
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/api/render/doc", bytes.NewReader(body))
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	hreq.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(hreq)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
+	url := strings.TrimRight(base, "/") + "/api/render/doc"
+	for attempt := 0; ; attempt++ {
+		hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		hreq.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(hreq)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusOK {
+			return &cancelCloser{ReadCloser: resp.Body, cancel: cancel}, nil
+		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 		resp.Body.Close()
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			if attempt == 0 {
+				wait := retryAfter(resp.Header.Get("Retry-After"))
+				select {
+				case <-time.After(wait):
+					continue
+				case <-ctx.Done():
+				}
+			}
+			cancel()
+			return nil, fmt.Errorf("%w: HTTP 503", errBusy)
+		}
 		cancel()
 		return nil, fmt.Errorf("rm-pages answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data[:min(len(data), 200)])))
 	}
-	return &cancelCloser{ReadCloser: resp.Body, cancel: cancel}, nil
+}
+
+// errBusy rm-pages answered 503 twice
+var errBusy = errors.New("rm-pages busy")
+
+// maxRetryWait longest pause before the one retry on 503
+const maxRetryWait = 10 * time.Second
+
+// retryWait pause used for a 503 without a usable Retry-After (tests shorten it)
+var retryWait = time.Second
+
+func retryAfter(h string) time.Duration {
+	if n, err := strconv.Atoi(strings.TrimSpace(h)); err == nil && n >= 0 {
+		return min(time.Duration(n)*time.Second, maxRetryWait)
+	}
+	return retryWait
 }
 
 type cancelCloser struct {
@@ -134,7 +166,8 @@ func (c *cancelCloser) Close() error {
 	return c.ReadCloser.Close()
 }
 
-// rawPayload the doc's own PDF or EPUB blob
+// rawPayload the doc's own PDF blob; an EPUB-only doc has none (react-pdf
+// cannot show an EPUB)
 func rawPayload(src renderSource, uid, docID string) (io.ReadCloser, error) {
 	tree, err := src.GetCachedTree(uid)
 	if err != nil {
@@ -144,12 +177,12 @@ func rawPayload(src renderSource, uid, docID string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, ext := range []string{".pdf", ".epub"} {
+	for _, ext := range []string{".pdf"} {
 		for _, f := range doc.Files {
 			if f.EntryName == docID+ext {
 				return src.BlobStorage(uid).GetReader(f.Hash)
 			}
 		}
 	}
-	return nil, errors.New("document has no PDF or EPUB payload")
+	return nil, errors.New("document has no PDF payload")
 }

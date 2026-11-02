@@ -5,12 +5,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ddvk/rmfakecloud/internal/testkit/tablet"
 	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 )
 
 type stubPages struct {
@@ -229,5 +231,64 @@ func TestExportPDFSendsRedir(t *testing.T) {
 	}
 	if reqs["nb"].Pages[0].Redir != nil {
 		t.Fatal("notebook must not send redir")
+	}
+}
+
+func TestExportPDFRetriesOnceOn503(t *testing.T) {
+	retryWait = time.Millisecond
+	defer func() { retryWait = time.Second }()
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte("%PDF-after-retry"))
+	}))
+	defer srv.Close()
+	b, tab := newViewBackend(t, srv.URL)
+	tab.Notebook("nb", "N", "")
+	tab.SetPage("nb", "p1", []byte("x"))
+	tab.Sync()
+	got, err := export(t, b, "nb")
+	if err != nil || got != "%PDF-after-retry" || calls != 2 {
+		t.Fatalf("got %q, %v, calls %d", got, err, calls)
+	}
+}
+
+func TestExportPDFBusyFallsBackWithoutError(t *testing.T) {
+	retryWait = time.Millisecond
+	defer func() { retryWait = time.Second }()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	hook := logtest.NewGlobal()
+	b, tab := newViewBackend(t, srv.URL)
+	log.SetLevel(log.DebugLevel)
+	d := tab.PDFv1("pd", "Book", "", []string{"a"})
+	d.RM = map[string][]byte{"a": []byte("junk")}
+	tab.Sync()
+	got, err := export(t, b, "pd")
+	if err != nil || got != "%PDF-1.4 pd" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	for _, e := range hook.AllEntries() {
+		if e.Level <= log.ErrorLevel && strings.Contains(e.Message, "rm-pages") {
+			t.Fatalf("503 logged at %v: %s", e.Level, e.Message)
+		}
+	}
+}
+
+func TestRawPayloadOnlyServesPDF(t *testing.T) {
+	stub := newStubPages(t, 500)
+	b, tab := newViewBackend(t, stub.srv.URL)
+	tab.Notebook("nb", "N", "")
+	tab.SetPage("nb", "p1", []byte("junk"))
+	tab.Sync()
+	if _, err := rawPayload(b.blobHandler, "mike", "nb"); err == nil {
+		t.Fatal("notebook has no payload")
 	}
 }

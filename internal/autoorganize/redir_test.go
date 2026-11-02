@@ -39,3 +39,16 @@ func TestParseContentRedirV1(t *testing.T) {
 		}
 	}
 }
+
+func TestParseContentRedirNonNumericIsInserted(t *testing.T) {
+	ci := ParseContent([]byte(`{"fileType":"pdf","pageCount":2,"cPages":{"pages":[
+		{"id":"a","idx":{"value":"aa"},"redir":{"value":"x"}},
+		{"id":"b","idx":{"value":"ab"},"redir":{"value":3}}]}}`))
+	if !reflect.DeepEqual(ci.Redir, map[string]int{"a": -1, "b": 3}) {
+		t.Fatalf("Redir = %v", ci.Redir)
+	}
+	ci = ParseContent([]byte(`{"fileType":"pdf","pageCount":2,"formatVersion":1,"pages":["a","b"],"redirectionPageMap":[null,1]}`))
+	if !reflect.DeepEqual(ci.Redir, map[string]int{"a": -1, "b": 1}) {
+		t.Fatalf("v1 Redir = %v", ci.Redir)
+	}
+}
