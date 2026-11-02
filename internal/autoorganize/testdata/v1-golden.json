@@ -1,0 +1,29 @@
+{
+  "revision": 10,
+  "settings": {"enabled": true, "mode": "live", "intervalMinutes": 60},
+  "rules": [
+    {
+      "id": "0a1b2c3d-0000-4000-8000-000000000001",
+      "enabled": true,
+      "source": {"id": "0a1b2c3d-0000-4000-8000-0000000000f1", "name": "Reading List"},
+      "scope": "pdf_epub",
+      "trigger": {"type": "finished_reading", "minPages": 2, "settleHours": 6, "minAgeEnabled": true, "minAgeDays": 0, "pinned": true},
+      "destination": {"id": "", "createIfMissing": {"name": "Done", "parent": "source"}},
+      "action": {"type": "move"}
+    },
+    {
+      "id": "0a1b2c3d-0000-4000-8000-000000000002",
+      "name": "send journal pages to vault",
+      "enabled": true,
+      "source": {"id": "", "name": "My files"},
+      "scope": "all",
+      "trigger": {"type": "page_changed", "settleHours": 6, "minAgeEnabled": true, "minAgeDays": 0, "pinned": true},
+      "destination": {"id": "", "name": "My files"},
+      "action": {"type": "pipeline", "prompt": "Golden fixture prompt: list the new checkbox lines.", "model": "deepseek/deepseek-v4.1-flash"},
+      "watch": [
+        {"id": "0a1b2c3d-0000-4000-8000-0000000000d1", "kind": "document", "name": "Journal"},
+        {"id": "0a1b2c3d-0000-4000-8000-0000000000d2", "kind": "document", "name": "Ideas"}
+      ]
+    }
+  ]
+}

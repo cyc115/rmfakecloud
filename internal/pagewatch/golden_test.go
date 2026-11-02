@@ -3,6 +3,7 @@ package pagewatch
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 )
@@ -46,5 +47,57 @@ func TestPageChangedTraceIDsGolden(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("trace ids changed:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+// TestPageTaggedTraceIDsGolden pins the trace ids of a page_tagged rule over
+// the whole tree, and its state trigger key: both feed rm-pages dedupe (R17)
+// and the rule's baselines. Captured on f38d168 before rules v2; they must
+// never change.
+func TestPageTaggedTraceIDsGolden(t *testing.T) {
+	e := newEnv(t)
+	e.tagRule("t1", "To-Do")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	got := map[string]string{}
+	collect := func(p Plan) {
+		for _, ev := range p.Feed {
+			got["feed "+ev.Kind+" "+ev.DocID+"/"+ev.PageID] = ev.TraceID
+		}
+		for _, ev := range p.Pipeline {
+			got[ev.Kind+" "+ev.DocID+"/"+ev.PageID] = ev.TraceID
+		}
+	}
+	e.tag("nb", "p1", "To-Do", e.now.Add(-24*time.Hour))
+	p := e.sweep() // tagged before the first sweep: transcribe_only p1
+	wantEvents(t, "sweep 1", p.Pipeline, "transcribe_only nb/p1 t1")
+	collect(p)
+	e.tag("nb", "p2", "To-Do", e.now)
+	p = e.sweep() // tagged after the first sweep: edit p2, empty before
+	wantEvents(t, "sweep 2", p.Pipeline, "edit nb/p2 t1")
+	if p.Pipeline[0].BeforeHash != "" {
+		t.Fatalf("newly tagged page has a before: %+v", p.Pipeline[0])
+	}
+	collect(p)
+	e.page("nb", "p1", "strokes_ab.rm")
+	p = e.sweep() // edited while tagged: edit p1
+	wantEvents(t, "sweep 3", p.Pipeline, "edit nb/p1 t1")
+	collect(p)
+	e.untag("nb", "p2", "To-Do")
+	p = e.sweep() // untagged: no event
+	wantEvents(t, "sweep 4", p.Pipeline)
+	collect(p)
+	want := map[string]string{
+		"transcribe_only nb/p1": "7b01cdd14994aac0c23c6b4dfab22d0b",
+		"edit nb/p2":            "adf9aecad6c562f6f46ae66e5ae20aae",
+		"edit nb/p1":            "4aff3dd25870a5f017857257893adb24",
+		"feed edit nb/p1":       "2e3672f7bc346933a8276eddc48ee922",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("trace ids changed:\n got %#v\nwant %#v", got, want)
+	}
+	if tr := e.state.Rules["t1"].Trigger; tr != "page_tagged:to do" {
+		t.Fatalf("state trigger = %q, want %q", tr, "page_tagged:to do")
 	}
 }

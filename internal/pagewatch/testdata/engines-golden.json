@@ -1,0 +1,460 @@
+{
+  "plan1": {
+    "at": 1793534400000,
+    "scanned": 5,
+    "rules": [
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "number": 1,
+        "name": "",
+        "enabled": true,
+        "sourceId": "0a1b2c3d-0000-4000-8000-0000000000f1",
+        "sourceName": "Reading List",
+        "destId": "",
+        "destName": "Reading List / Done",
+        "destWillCreate": true,
+        "problems": [],
+        "checked": 5,
+        "matches": 1,
+        "notMatching": 2,
+        "optedOut": 1,
+        "held": 0
+      }
+    ],
+    "moves": [
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "ruleNumber": 1,
+        "ruleName": "Reading List → Reading List / Done",
+        "docId": "0a1b2c3d-0000-4000-8000-0000000000a1",
+        "docName": "Finished",
+        "from": "0a1b2c3d-0000-4000-8000-0000000000f1",
+        "fromName": "Reading List",
+        "to": "",
+        "toName": "Reading List / Done",
+        "createFolder": {
+          "name": "Done",
+          "parent": "source"
+        },
+        "detail": "3 pp · last page 3 of 3 (content: 1) · settled 7 h",
+        "inputs": {
+          "lastOpened": "1793509200000",
+          "lastOpenedPage": "2",
+          "pageCount": "3"
+        }
+      }
+    ],
+    "skipped": [
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "ruleNumber": 1,
+        "docId": "0a1b2c3d-0000-4000-8000-0000000000a5",
+        "docName": "Opted out",
+        "folder": "Reading List",
+        "reason": "no_automation",
+        "detail": "tagged “no automation”"
+      },
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "ruleNumber": 1,
+        "docId": "0a1b2c3d-0000-4000-8000-0000000000a4",
+        "docName": "Scratch",
+        "folder": "Reading List",
+        "reason": "out_of_scope",
+        "detail": "notebook, rule applies to PDF \u0026 EPUB"
+      }
+    ]
+  },
+  "plan2": {
+    "at": 1793534400000,
+    "scanned": 5,
+    "rules": [
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "number": 1,
+        "name": "",
+        "enabled": true,
+        "sourceId": "0a1b2c3d-0000-4000-8000-0000000000f1",
+        "sourceName": "Reading List",
+        "destId": "0a1b2c3d-0000-4000-8000-0000000000c1",
+        "destName": "Reading List / Done",
+        "destWillCreate": false,
+        "problems": [],
+        "checked": 5,
+        "matches": 0,
+        "notMatching": 2,
+        "optedOut": 1,
+        "held": 1
+      }
+    ],
+    "moves": [],
+    "skipped": [
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "ruleNumber": 1,
+        "docId": "0a1b2c3d-0000-4000-8000-0000000000a1",
+        "docName": "Finished",
+        "folder": "Reading List",
+        "reason": "held",
+        "detail": "move undone on Nov 1 11:00, inputs unchanged"
+      },
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "ruleNumber": 1,
+        "docId": "0a1b2c3d-0000-4000-8000-0000000000a5",
+        "docName": "Opted out",
+        "folder": "Reading List",
+        "reason": "no_automation",
+        "detail": "tagged “no automation”"
+      },
+      {
+        "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+        "ruleNumber": 1,
+        "docId": "0a1b2c3d-0000-4000-8000-0000000000a4",
+        "docName": "Scratch",
+        "folder": "Reading List",
+        "reason": "out_of_scope",
+        "detail": "notebook, rule applies to PDF \u0026 EPUB"
+      }
+    ]
+  },
+  "sweeps": [
+    {
+      "pipeline": [
+        {
+          "trace_id": "29d965d8ba303610927f22fff458ec81",
+          "kind": "transcribe_only",
+          "page_order": [
+            "p1",
+            "p2"
+          ],
+          "user": "u",
+          "doc_id": "0a1b2c3d-0000-4000-8000-0000000000d1",
+          "doc_name": "Journal",
+          "doc_path": "Journal",
+          "doc_type": "notebook",
+          "page_id": "p1",
+          "page_index": 0,
+          "after_hash": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f",
+          "changed_at": "2026-11-01T11:01:00Z",
+          "watched": true,
+          "rule_id": "0a1b2c3d-0000-4000-8000-000000000002",
+          "prompt": "Golden fixture prompt: list the new checkbox lines.",
+          "model": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "trace_id": "c0ab879fa33c8a31f47937643db3dfd5",
+          "kind": "transcribe_only",
+          "page_order": [
+            "p1",
+            "p2"
+          ],
+          "user": "u",
+          "doc_id": "0a1b2c3d-0000-4000-8000-0000000000d1",
+          "doc_name": "Journal",
+          "doc_path": "Journal",
+          "doc_type": "notebook",
+          "page_id": "p2",
+          "page_index": 1,
+          "after_hash": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "changed_at": "2026-11-01T11:01:00Z",
+          "watched": true,
+          "rule_id": "0a1b2c3d-0000-4000-8000-000000000002",
+          "prompt": "Golden fixture prompt: list the new checkbox lines.",
+          "model": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "trace_id": "78f2c47a4ed132cf11bd9cb09515845c",
+          "kind": "transcribe_only",
+          "page_order": [
+            "p1"
+          ],
+          "user": "u",
+          "doc_id": "0a1b2c3d-0000-4000-8000-0000000000d2",
+          "doc_name": "Ideas",
+          "doc_path": "Ideas",
+          "doc_type": "notebook",
+          "page_id": "p1",
+          "page_index": 0,
+          "after_hash": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+          "changed_at": "2026-11-01T11:01:00Z",
+          "watched": true,
+          "rule_id": "0a1b2c3d-0000-4000-8000-000000000002",
+          "prompt": "Golden fixture prompt: list the new checkbox lines.",
+          "model": "deepseek/deepseek-v4.1-flash"
+        }
+      ],
+      "state": {
+        "feed": {
+          "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f",
+          "0a1b2c3d-0000-4000-8000-0000000000d1/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+          "0a1b2c3d-0000-4000-8000-0000000000e1/p1": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f"
+        },
+        "opened": {},
+        "rules": {
+          "0a1b2c3d-0000-4000-8000-000000000002": {
+            "baselines": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f",
+              "0a1b2c3d-0000-4000-8000-0000000000d1/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a"
+            },
+            "members": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1": true,
+              "0a1b2c3d-0000-4000-8000-0000000000d2": true
+            },
+            "lastActive": "2026-11-01T12:01:00Z"
+          }
+        },
+        "feedInitialised": true,
+        "seen": {
+          "0a1b2c3d-0000-4000-8000-0000000000a1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a3": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a4": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a5": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000e1": "2026-11-01T12:01:00Z"
+        }
+      }
+    },
+    {
+      "pipeline": [
+        {
+          "trace_id": "e2c402c9a0a67e8c63b0560d768e663d",
+          "kind": "edit",
+          "page_order": [
+            "p1",
+            "p2"
+          ],
+          "user": "u",
+          "doc_id": "0a1b2c3d-0000-4000-8000-0000000000d1",
+          "doc_name": "Journal",
+          "doc_path": "Journal",
+          "doc_type": "notebook",
+          "page_id": "p1",
+          "page_index": 0,
+          "before_hash": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f",
+          "after_hash": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+          "changed_at": "2026-11-01T11:02:00Z",
+          "watched": true,
+          "rule_id": "0a1b2c3d-0000-4000-8000-000000000002",
+          "prompt": "Golden fixture prompt: list the new checkbox lines.",
+          "model": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "trace_id": "e5f58f03c1b16af494c302769b3e58ac",
+          "kind": "edit",
+          "page_order": [
+            "p1",
+            "p2"
+          ],
+          "user": "u",
+          "doc_id": "0a1b2c3d-0000-4000-8000-0000000000d2",
+          "doc_name": "Ideas",
+          "doc_path": "Ideas",
+          "doc_type": "notebook",
+          "page_id": "p2",
+          "page_index": 1,
+          "after_hash": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "changed_at": "2026-11-01T11:02:00Z",
+          "watched": true,
+          "rule_id": "0a1b2c3d-0000-4000-8000-000000000002",
+          "prompt": "Golden fixture prompt: list the new checkbox lines.",
+          "model": "deepseek/deepseek-v4.1-flash"
+        }
+      ],
+      "state": {
+        "feed": {
+          "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+          "0a1b2c3d-0000-4000-8000-0000000000d1/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "0a1b2c3d-0000-4000-8000-0000000000e1/p1": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f"
+        },
+        "opened": {},
+        "rules": {
+          "0a1b2c3d-0000-4000-8000-000000000002": {
+            "baselines": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+              "0a1b2c3d-0000-4000-8000-0000000000d1/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa"
+            },
+            "members": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1": true,
+              "0a1b2c3d-0000-4000-8000-0000000000d2": true
+            },
+            "lastActive": "2026-11-01T12:02:00Z"
+          }
+        },
+        "feedInitialised": true,
+        "seen": {
+          "0a1b2c3d-0000-4000-8000-0000000000a1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a3": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a4": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a5": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000e1": "2026-11-01T12:01:00Z"
+        }
+      }
+    },
+    {
+      "pipeline": [
+        {
+          "trace_id": "7ff870d54e1246bdce6a25b62533106d",
+          "kind": "page_deleted",
+          "page_order": [
+            "p1"
+          ],
+          "user": "u",
+          "doc_id": "0a1b2c3d-0000-4000-8000-0000000000d1",
+          "doc_name": "Journal",
+          "doc_path": "Journal",
+          "doc_type": "notebook",
+          "page_id": "p2",
+          "page_index": -1,
+          "changed_at": "2026-11-01T12:03:00Z",
+          "watched": true,
+          "rule_id": "0a1b2c3d-0000-4000-8000-000000000002",
+          "prompt": "Golden fixture prompt: list the new checkbox lines.",
+          "model": "deepseek/deepseek-v4.1-flash"
+        }
+      ],
+      "state": {
+        "feed": {
+          "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "0a1b2c3d-0000-4000-8000-0000000000e1/p1": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f"
+        },
+        "opened": {},
+        "rules": {
+          "0a1b2c3d-0000-4000-8000-000000000002": {
+            "baselines": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa"
+            },
+            "members": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1": true,
+              "0a1b2c3d-0000-4000-8000-0000000000d2": true
+            },
+            "lastActive": "2026-11-01T12:03:00Z"
+          }
+        },
+        "feedInitialised": true,
+        "seen": {
+          "0a1b2c3d-0000-4000-8000-0000000000a1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a3": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a4": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a5": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000e1": "2026-11-01T12:01:00Z"
+        }
+      }
+    },
+    {
+      "pipeline": null,
+      "state": {
+        "feed": {
+          "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "0a1b2c3d-0000-4000-8000-0000000000e1/p1": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f"
+        },
+        "opened": {},
+        "rules": {
+          "0a1b2c3d-0000-4000-8000-000000000002": {
+            "baselines": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa"
+            },
+            "members": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1": true,
+              "0a1b2c3d-0000-4000-8000-0000000000d2": true
+            },
+            "lastActive": "2026-11-01T12:04:00Z"
+          }
+        },
+        "feedInitialised": true,
+        "seen": {
+          "0a1b2c3d-0000-4000-8000-0000000000a1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a3": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a4": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a5": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000e1": "2026-11-01T12:01:00Z"
+        }
+      }
+    },
+    {
+      "pipeline": [
+        {
+          "trace_id": "fe70547f50ce49845b2649e3294b4040",
+          "kind": "edit",
+          "page_order": [
+            "p1",
+            "p2"
+          ],
+          "user": "u",
+          "doc_id": "0a1b2c3d-0000-4000-8000-0000000000d2",
+          "doc_name": "Ideas",
+          "doc_path": "Ideas",
+          "doc_type": "notebook",
+          "page_id": "p1",
+          "page_index": 0,
+          "before_hash": "5a491855d984c61247ce66c25fc79498bd6bf4e4d1a01bcb71ffa3093045156a",
+          "after_hash": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+          "changed_at": "2026-11-01T11:05:00Z",
+          "watched": true,
+          "rule_id": "0a1b2c3d-0000-4000-8000-000000000002",
+          "prompt": "Golden fixture prompt: list the new checkbox lines.",
+          "model": "deepseek/deepseek-v4.1-flash"
+        }
+      ],
+      "state": {
+        "feed": {
+          "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+          "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa",
+          "0a1b2c3d-0000-4000-8000-0000000000e1/p1": "97da0475ecffd5c7fad9ce28b6c0f2cb836b278f404147f11ff7c9c83f8b086f"
+        },
+        "opened": {},
+        "rules": {
+          "0a1b2c3d-0000-4000-8000-000000000002": {
+            "baselines": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p1": "ae34a1e430d79e5cbbee52e994f16f372bf94485105db60421d11de08fdc13f9",
+              "0a1b2c3d-0000-4000-8000-0000000000d2/p2": "3149e7a36e3292761d128214b2c8b64691f969033122676b0bf11e2ba33c30fa"
+            },
+            "members": {
+              "0a1b2c3d-0000-4000-8000-0000000000d1": true,
+              "0a1b2c3d-0000-4000-8000-0000000000d2": true
+            },
+            "lastActive": "2026-11-01T12:05:00Z"
+          }
+        },
+        "feedInitialised": true,
+        "seen": {
+          "0a1b2c3d-0000-4000-8000-0000000000a1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a3": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a4": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000a5": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d1": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000d2": "2026-11-01T12:01:00Z",
+          "0a1b2c3d-0000-4000-8000-0000000000e1": "2026-11-01T12:01:00Z"
+        }
+      }
+    }
+  ]
+}

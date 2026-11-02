@@ -1,0 +1,27 @@
+{
+  "holds": [
+    {
+      "id": "",
+      "ruleId": "0a1b2c3d-0000-4000-8000-000000000001",
+      "docId": "0a1b2c3d-0000-4000-8000-0000000000a1",
+      "inputs": {
+        "lastOpened": "1793509200000",
+        "lastOpenedPage": "2",
+        "pageCount": "3"
+      },
+      "source": "0a1b2c3d-0000-4000-8000-0000000000f1",
+      "movedTo": "0a1b2c3d-0000-4000-8000-0000000000c1",
+      "createdAt": 1793530800000,
+      "reason": "undo"
+    }
+  ],
+  "history": null,
+  "firstSeen": {},
+  "createdFolders": {
+    "0a1b2c3d-0000-4000-8000-000000000001": "0a1b2c3d-0000-4000-8000-0000000000c1"
+  },
+  "contentCache": {},
+  "heldNow": null,
+  "moves": null,
+  "runs": null
+}

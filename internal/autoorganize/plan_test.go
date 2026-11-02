@@ -1,6 +1,7 @@
 package autoorganize
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -678,5 +679,81 @@ func TestLoopWarningsIgnorePipelineRules(t *testing.T) {
 	cfg := &Config{Rules: []Rule{a, pipe}}
 	if got := LoopWarnings(cfg, func(r *Rule) (string, bool) { return r.Destination.ID, true }); len(got) != 0 {
 		t.Fatalf("pipeline rule formed a loop: %v", got)
+	}
+}
+
+// TestFinishedReadingIgnoresMinAgeAndPinned (R-B3): finished_reading carries
+// minAgeEnabled, minAgeDays and pinned from the v1 form, but never reads them;
+// v2 may drop them. A future createdTime does not hold a finished document.
+func TestFinishedReadingIgnoresMinAgeAndPinned(t *testing.T) {
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	m := baseTree()
+	opened := func(page int, h float64) func(md *models.MetadataFile) {
+		return func(md *models.MetadataFile) { md.LastOpenedPage = page; md.LastOpened = hoursAgo(now, h) }
+	}
+	m.doc("done", "Done", "rr", pdfInfo(5), opened(4, 9))
+	m.doc("future", "Future", "rr", pdfInfo(5), func(md *models.MetadataFile) {
+		opened(4, 9)(md)
+		md.CreatedTime = ms(now.Add(48 * time.Hour))
+	})
+	m.doc("midway", "Midway", "rr", pdfInfo(5), opened(2, 9))
+	m.doc("fresh", "Fresh", "rr", pdfInfo(5), opened(4, 1))
+	m.doc("pin", "Pinned", "rr", pdfInfo(5), func(md *models.MetadataFile) { opened(4, 9)(md); md.Pinned = true })
+	m.doc("nb", "Sketchbook", "rr", ContentInfo{FileType: "notebook", PageCount: 5}, opened(4, 9))
+
+	a, b := readRule(), readRule()
+	a.Trigger.MinAgeEnabled, a.Trigger.MinAgeDays, a.Trigger.Pinned = true, 0, true
+	b.Trigger.MinAgeEnabled, b.Trigger.MinAgeDays, b.Trigger.Pinned = false, 99, false
+	pa, pb := m.plan(t, now, nil, a), m.plan(t, now, nil, b)
+	if got := movedIDs(pa); !reflect.DeepEqual(got, []string{"done", "future"}) {
+		t.Fatalf("moved %v, want done and future", got)
+	}
+	if rr := ruleResult(pa, "r1"); len(rr.Problems) != 0 {
+		t.Fatalf("problems %v", rr.Problems)
+	}
+	if !reflect.DeepEqual(pa.Moves, pb.Moves) || !reflect.DeepEqual(pa.Skipped, pb.Skipped) || !reflect.DeepEqual(pa.Rules, pb.Rules) {
+		t.Fatalf("plans differ:\n%+v\n%+v", pa, pb)
+	}
+	for i := range pa.Moves {
+		if !reflect.DeepEqual(pa.Moves[i].Inputs, pb.Moves[i].Inputs) {
+			t.Fatalf("inputs differ: %v, %v", pa.Moves[i].Inputs, pb.Moves[i].Inputs)
+		}
+	}
+	if s := skipOf(pa, "pin"); s == nil || s.Reason != SkipPinned {
+		t.Fatalf("pinned skip = %+v", s)
+	}
+}
+
+// TestNotOpenedMinAgeZeroFutureAnchor pins not_opened_for_days with
+// "at least 0 days old" and a createdTime in the future (tablet clock ahead):
+// the age is negative, so the guard holds the document; without the guard it
+// moves. The hold key (Inputs) is {lastOpened, ageAnchor} either way.
+func TestNotOpenedMinAgeZeroFutureAnchor(t *testing.T) {
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	future := now.Add(48 * time.Hour)
+	m := baseTree()
+	m.doc("future", "Future", "rr", pdfInfo(5), func(md *models.MetadataFile) { md.CreatedTime = ms(future) })
+	inputs := map[string]string{"lastOpened": "", "ageAnchor": ms(future)}
+
+	rule := moveRule("r1", "rr", "read", Trigger{Type: TriggerNotOpened, Days: 1, MinAgeEnabled: true, MinAgeDays: 0})
+	// a hold keyed on exactly these inputs survives the sweep only if the
+	// evaluator's inputs are the same map (sameInputs), match or not
+	st := NewState()
+	st.SetHold(Hold{ID: "h1", RuleID: "r1", DocID: "future", Inputs: inputs, Source: "rr", MovedTo: "read", Reason: "undo"})
+	p := m.plan(t, now, st, rule)
+	if len(p.Moves) != 0 || ruleResult(p, "r1").NotMatching != 1 {
+		t.Fatalf("guard on: moves %+v, rule %+v", p.Moves, ruleResult(p, "r1"))
+	}
+	if len(p.ClearHolds) != 0 {
+		t.Fatalf("guard on: inputs are not %v (hold cleared)", inputs)
+	}
+
+	rule.Trigger.MinAgeEnabled = false
+	p = m.plan(t, now, nil, rule)
+	if got := movedIDs(p); !reflect.DeepEqual(got, []string{"future"}) {
+		t.Fatalf("guard off: moved %v, want future", got)
+	}
+	if got := p.Moves[0].Inputs; !reflect.DeepEqual(got, inputs) {
+		t.Fatalf("guard off: inputs %v, want %v", got, inputs)
 	}
 }
