@@ -1,0 +1,14 @@
+{"version": 2, "revision": 11,
+ "settings": {"enabled": true, "mode": "live", "intervalMinutes": 60},
+ "rules": [
+  {"id": "0a1b2c3d-0000-4000-8000-000000000001", "name": "", "enabled": true,
+   "when": {"subject": "document", "in": [{"id": "0a1b2c3d-0000-4000-8000-0000000000f1", "kind": "folder", "name": "Reading List"}],
+            "trigger": {"type": "finished_reading", "minPages": 2, "settleHours": 6}},
+   "conditions": [{"type": "kind_is", "kind": "pdf_epub"}],
+   "actions": [{"type": "move", "to": {"id": "", "createIfMissing": {"name": "Done", "parent": "source"}}}]},
+  {"id": "0a1b2c3d-0000-4000-8000-000000000002", "name": "send journal pages to vault", "enabled": true,
+   "when": {"subject": "page", "in": [{"id": "0a1b2c3d-0000-4000-8000-0000000000d1", "kind": "document", "name": "Journal"},
+                                      {"id": "0a1b2c3d-0000-4000-8000-0000000000d2", "kind": "document", "name": "Ideas"}],
+            "trigger": {"type": "page_changed"}},
+   "conditions": [],
+   "actions": [{"type": "extract_tasks", "prompt": "Golden fixture prompt: list the new checkbox lines.", "model": "deepseek/deepseek-v4.1-flash"}]}]}

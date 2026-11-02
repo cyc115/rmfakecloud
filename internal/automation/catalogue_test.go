@@ -181,3 +181,18 @@ func TestCatalogueDefaultsAndValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestSpecSubjectsNotShared each spec owns its Subjects slice, so a caller
+// that mutates one cannot change another spec
+func TestSpecSubjectsNotShared(t *testing.T) {
+	owner := map[*string]string{}
+	for name, specs := range map[string]map[string]*Spec{"trigger": Triggers, "condition": Conditions} {
+		for typ, s := range specs {
+			p := &s.Subjects[0]
+			if other, ok := owner[p]; ok {
+				t.Errorf("%s %s shares its Subjects slice with %s", name, typ, other)
+			}
+			owner[p] = name + " " + typ
+		}
+	}
+}

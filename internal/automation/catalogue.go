@@ -83,12 +83,6 @@ type Spec struct {
 	Validate func(*Params) error
 }
 
-var (
-	subjDocument = []string{SubjectDocument}
-	subjPage     = []string{SubjectPage}
-	subjBoth     = []string{SubjectDocument, SubjectPage}
-)
-
 func settleNotNegative(p *Params) error {
 	if p.SettleHours < 0 {
 		return errors.New("settle hours cannot be negative")
@@ -140,7 +134,7 @@ func validPageTag(p *Params) error {
 // Triggers the trigger catalogue, by type
 var Triggers = map[string]*Spec{
 	TriggerFinishedReading: {
-		Subjects:  subjDocument,
+		Subjects:  []string{SubjectDocument},
 		Fields:    []string{"minPages", "settleHours"},
 		PageBased: true,
 		Defaults: func(p *Params) {
@@ -156,7 +150,7 @@ var Triggers = map[string]*Spec{
 		},
 	},
 	TriggerReadProgress: {
-		Subjects:  subjDocument,
+		Subjects:  []string{SubjectDocument},
 		Fields:    []string{"percent", "settleHours"},
 		PageBased: true,
 		Defaults: func(p *Params) {
@@ -172,43 +166,43 @@ var Triggers = map[string]*Spec{
 		},
 	},
 	TriggerNotOpened: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"days"},
 		Defaults: defaultDays(30),
 		Validate: daysAtLeastOne,
 	},
 	TriggerNotModified: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"days"},
 		Defaults: defaultDays(90),
 		Validate: daysAtLeastOne,
 	},
 	TriggerNameMatches: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"pattern"},
 		Validate: validPattern,
 	},
 	TriggerTagIs: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"tag"},
 		Validate: validDocTag,
 	},
 	TriggerAgeSinceCreated: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"days"},
 		Defaults: defaultDays(14),
 		Validate: daysAtLeastOne,
 	},
 	TriggerPinnedIs: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"pinned"},
 	},
 	TriggerPageChanged: {
-		Subjects: subjPage,
+		Subjects: []string{SubjectPage},
 		Fields:   []string{},
 	},
 	TriggerPageTagged: {
-		Subjects: subjPage,
+		Subjects: []string{SubjectPage},
 		Fields:   []string{"tag"},
 		Defaults: trimTag,
 		Validate: validPageTag,
@@ -219,7 +213,7 @@ var Triggers = map[string]*Spec{
 // trigger's name shares its parameters, defaults and validation.
 var Conditions = map[string]*Spec{
 	CondKindIs: {
-		Subjects:      subjBoth,
+		Subjects:      []string{SubjectDocument, SubjectPage},
 		Fields:        []string{"kind"},
 		BeforeTrigger: true,
 		Validate: func(p *Params) error {
@@ -231,26 +225,26 @@ var Conditions = map[string]*Spec{
 		},
 	},
 	CondTagIs: {
-		Subjects:   subjBoth,
+		Subjects:   []string{SubjectDocument, SubjectPage},
 		Fields:     []string{"tag"},
 		Repeatable: true,
 		Validate:   validDocTag,
 	},
 	CondTagIsNot: {
-		Subjects:   subjBoth,
+		Subjects:   []string{SubjectDocument, SubjectPage},
 		Fields:     []string{"tag"},
 		Repeatable: true,
 		Validate:   validDocTag,
 	},
 	CondNotOpened: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"days"},
 		Defaults: defaultDays(30),
 		Validate: daysAtLeastOne,
 	},
 	// CondMinAgeDays has no default: 0 ("at least 0 days old") is meaningful
 	CondMinAgeDays: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"days"},
 		Validate: func(p *Params) error {
 			if p.Days < 0 {
@@ -260,16 +254,16 @@ var Conditions = map[string]*Spec{
 		},
 	},
 	CondNameMatches: {
-		Subjects: subjBoth,
+		Subjects: []string{SubjectDocument, SubjectPage},
 		Fields:   []string{"pattern"},
 		Validate: validPattern,
 	},
 	CondPinnedIs: {
-		Subjects: subjDocument,
+		Subjects: []string{SubjectDocument},
 		Fields:   []string{"pinned"},
 	},
 	CondPageTagIs: {
-		Subjects:   subjPage,
+		Subjects:   []string{SubjectPage},
 		Fields:     []string{"tag"},
 		Repeatable: true,
 		Defaults:   trimTag,

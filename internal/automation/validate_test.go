@@ -1,0 +1,168 @@
+package automation
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+)
+
+const (
+	docID  = "0a1b2c3d-0000-4000-8000-0000000000a1"
+	pageID = "0a1b2c3d-0000-4000-8000-0000000000a2"
+)
+
+// validConfig a valid document rule (index 0) and a valid page rule (index 1)
+func validConfig() *Config {
+	return &Config{
+		Version:  Version,
+		Settings: Settings{Enabled: true, Mode: ModeLive, IntervalMinutes: 60},
+		Rules: []Rule{
+			{
+				ID: docID, Enabled: true,
+				When: When{Subject: SubjectDocument, In: []Place{{ID: "f1", Kind: PlaceFolder}},
+					Trigger: Trigger{Type: TriggerFinishedReading, Params: Params{MinPages: 3, SettleHours: 6}}},
+				Conditions: []Condition{{Type: CondKindIs, Params: Params{Kind: KindPdfEpub}}},
+				Actions:    []Action{{Type: ActionMove, To: &Destination{FolderRef: FolderRef{ID: "f2"}}}},
+			},
+			{
+				ID: pageID, Enabled: true,
+				When: When{Subject: SubjectPage, In: []Place{{ID: "d1", Kind: PlaceDocument}, {ID: RootID, Kind: PlaceFolder}},
+					Trigger: Trigger{Type: TriggerPageChanged}},
+				Conditions: []Condition{},
+				Actions:    []Action{{Type: ActionExtractTasks, Prompt: "p", Model: "m"}},
+			},
+		},
+	}
+}
+
+func TestValidateTable(t *testing.T) {
+	if err := validConfig().Validate(); err != nil {
+		t.Fatalf("base config: %v", err)
+	}
+	const (
+		settings = -1
+		doc      = 0
+		page     = 1
+	)
+	type row struct {
+		name    string
+		rule    int // the rule mutate gets, and the RuleIndex expected
+		mutate  func(*Rule)
+		cfg     func(*Config) // for settings rows
+		wantMsg string
+	}
+	cond := func(typ string, p Params) Condition { return Condition{Type: typ, Params: p} }
+	rows := []row{
+		{"mode", settings, nil, func(c *Config) { c.Settings.Mode = "fast" }, "mode must be live or dry"},
+		{"interval", settings, nil, func(c *Config) { c.Settings.IntervalMinutes = 7 }, "interval must be one of 5, 10, 15, 30, 60 minutes"},
+		{"version", settings, nil, func(c *Config) { c.Version = 1 }, "unsupported automation format version 1; this server reads version 2"},
+		{"duplicate id", page, func(r *Rule) { r.ID = docID }, nil, "duplicate rule id"},
+		{"subject", doc, func(r *Rule) { r.When.Subject = "folder" }, nil, "subject must be document or page"},
+		{"unknown trigger", doc, func(r *Rule) { r.When.Trigger.Type = "opened" }, nil, `unknown trigger "opened"`},
+		{"page trigger on document", doc, func(r *Rule) { r.When.Trigger = Trigger{Type: TriggerPageChanged} }, nil,
+			`trigger "page_changed" works on pages; it needs a page rule`},
+		{"document trigger on page", page, func(r *Rule) { r.When.Trigger = Trigger{Type: TriggerNotOpened, Params: Params{Days: 3}} }, nil,
+			`trigger "not_opened_for_days" works on documents; it needs a document rule`},
+		{"trigger params", doc, func(r *Rule) { r.When.Trigger.MinPages = 0 }, nil, "minimum pages must be at least 1"},
+		{"page trigger params", page, func(r *Rule) { r.When.Trigger = Trigger{Type: TriggerPageTagged, Params: Params{Tag: " "}} }, nil, "tag cannot be empty"},
+		{"document no folder", doc, func(r *Rule) { r.When.In = []Place{} }, nil,
+			"a document rule watches exactly one folder (the documents directly inside it)"},
+		{"document two folders", doc, func(r *Rule) { r.When.In = append(r.When.In, Place{ID: "f3", Kind: PlaceFolder}) }, nil,
+			"a document rule watches exactly one folder (the documents directly inside it)"},
+		{"document watches a document", doc, func(r *Rule) { r.When.In[0].Kind = PlaceDocument }, nil,
+			"a document rule watches exactly one folder (the documents directly inside it)"},
+		{"page_changed no place", page, func(r *Rule) { r.When.In = []Place{} }, nil,
+			"a page rule needs at least one place; send the root folder for anywhere"},
+		{"watched document id", page, func(r *Rule) { r.When.In[0].ID = "" }, nil, "a watched document needs an id"},
+		{"place kind", page, func(r *Rule) { r.When.In[1].Kind = "shelf" }, nil, `unknown place kind "shelf"`},
+		{"watch trash", page, func(r *Rule) { r.When.In[1].ID = "trash" }, nil, "cannot watch the trash"},
+		{"source trash", doc, func(r *Rule) { r.When.In[0].ID = "trash" }, nil, "source cannot be the trash"},
+		{"no action", doc, func(r *Rule) { r.Actions = []Action{} }, nil, MsgOneAction},
+		{"two actions", page, func(r *Rule) { r.Actions = append(r.Actions, Action{Type: ActionSaveNotes}) }, nil, MsgOneAction},
+		{"unknown action", doc, func(r *Rule) { r.Actions[0].Type = "copy" }, nil, `unknown action "copy"`},
+		{"move on page", page, func(r *Rule) { r.Actions = []Action{{Type: ActionMove, To: &Destination{}}} }, nil,
+			"move works on whole documents, so a page rule cannot move; use a document trigger"},
+		{"extract on document", doc, func(r *Rule) { r.Actions = []Action{{Type: ActionExtractTasks}} }, nil,
+			"extract tasks works on pages, which a document rule does not see; use a page trigger"},
+		{"save notes on document", doc, func(r *Rule) { r.Actions = []Action{{Type: ActionSaveNotes}} }, nil,
+			"save notes works on pages, which a document rule does not see; use a page trigger"},
+		{"move no destination", doc, func(r *Rule) { r.Actions[0].To = nil }, nil, "move needs a destination"},
+		{"destination trash", doc, func(r *Rule) { r.Actions[0].To.ID = "trash" }, nil, "destination cannot be the trash"},
+		{"subfolder name", doc, func(r *Rule) { r.Actions[0].To.CreateIfMissing = &CreateIfMissing{Parent: ParentSource} }, nil,
+			"new subfolder needs a name"},
+		{"subfolder trash", doc, func(r *Rule) { r.Actions[0].To.CreateIfMissing = &CreateIfMissing{Name: "Done", Parent: "trash"} }, nil,
+			"new subfolder cannot be created in the trash"},
+		{"destination is source", doc, func(r *Rule) { r.Actions[0].To.ID = "f1" }, nil, "destination is the same as the source"},
+		{"unknown condition", doc, func(r *Rule) { r.Conditions = append(r.Conditions, cond("opened_on", Params{})) }, nil,
+			`unknown condition "opened_on"`},
+		{"document-only condition on page", page, func(r *Rule) { r.Conditions = append(r.Conditions, cond(CondMinAgeDays, Params{})) }, nil,
+			`condition "min_age_days" does not apply to page rules`},
+		{"page-only condition on document", doc, func(r *Rule) { r.Conditions = append(r.Conditions, cond(CondPageTagIs, Params{Tag: "x"})) }, nil,
+			`condition "page_tag_is" does not apply to document rules`},
+		{"condition twice", doc, func(r *Rule) { r.Conditions = append(r.Conditions, cond(CondKindIs, Params{Kind: KindPdfEpub})) }, nil,
+			`condition "kind_is" appears twice`},
+		{"condition params", doc, func(r *Rule) { r.Conditions = append(r.Conditions, cond(CondTagIs, Params{Tag: " "})) }, nil,
+			"tag cannot be empty"},
+		{"condition kind all", page, func(r *Rule) { r.Conditions = append(r.Conditions, cond(CondKindIs, Params{Kind: KindAll})) }, nil,
+			`unknown kind "all"`},
+		{"page-based on notebooks", doc, func(r *Rule) { r.Conditions[0].Kind = KindNotebooks }, nil, "this trigger only applies to PDF & EPUB"},
+		{"page-based without kind", doc, func(r *Rule) { r.Conditions = []Condition{} }, nil, "this trigger only applies to PDF & EPUB"},
+	}
+	for _, rw := range rows {
+		t.Run(rw.name, func(t *testing.T) {
+			c := validConfig()
+			wantID := ""
+			if rw.cfg != nil {
+				rw.cfg(c)
+			}
+			if rw.mutate != nil {
+				rw.mutate(&c.Rules[rw.rule])
+				wantID = c.Rules[rw.rule].ID
+			}
+			err := c.Validate()
+			var ve *ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("got %v, want a *ValidationError", err)
+			}
+			if ve.Message != rw.wantMsg || ve.RuleIndex != rw.rule || ve.RuleID != wantID {
+				t.Errorf("got {%d %q %q}, want {%d %q %q}", ve.RuleIndex, ve.RuleID, ve.Message, rw.rule, wantID, rw.wantMsg)
+			}
+		})
+	}
+}
+
+func TestValidateAccepts(t *testing.T) {
+	cases := map[string]func(*Rule){
+		"page_tagged anywhere": func(r *Rule) {
+			r.When = When{Subject: SubjectPage, In: []Place{}, Trigger: Trigger{Type: TriggerPageTagged, Params: Params{Tag: "todo"}}}
+		},
+		"repeatable conditions": func(r *Rule) {
+			r.Conditions = []Condition{{Type: CondTagIs, Params: Params{Tag: "a"}}, {Type: CondTagIs, Params: Params{Tag: "b"}},
+				{Type: CondPageTagIs, Params: Params{Tag: "x"}}, {Type: CondPageTagIs, Params: Params{Tag: "y"}}}
+		},
+		"save notes": func(r *Rule) { r.Actions[0].Type = ActionSaveNotes },
+	}
+	for name, mutate := range cases {
+		c := validConfig()
+		mutate(&c.Rules[1])
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	c := validConfig()
+	c.Rules[0].Actions[0].To = &Destination{CreateIfMissing: &CreateIfMissing{Name: "Done", Parent: ParentSource}}
+	c.Rules[0].When.In[0].ID = RootID
+	if err := c.Validate(); err != nil {
+		t.Errorf("root source, new subfolder: %v", err)
+	}
+}
+
+func TestValidationErrorJSON(t *testing.T) {
+	b, _ := json.Marshal(&ValidationError{RuleIndex: -1, Message: "m"})
+	if string(b) != `{"ruleIndex":-1,"message":"m"}` {
+		t.Errorf("%s", b)
+	}
+	if e := (&ValidationError{RuleIndex: 2, RuleID: "x", Message: "m"}); e.Error() != "rule 3: m" {
+		t.Errorf("%s", e.Error())
+	}
+}

@@ -15,8 +15,8 @@ import (
 
 // Modes
 const (
-	ModeLive = "live"
-	ModeDry  = "dry"
+	ModeLive = automation.ModeLive
+	ModeDry  = automation.ModeDry
 )
 
 // Scopes, read from the .content fileType (the automation kinds)
@@ -61,29 +61,26 @@ const (
 )
 
 // DefaultPipelineModel the OpenRouter model a pipeline rule uses when it names none
-const DefaultPipelineModel = "deepseek/deepseek-v4.1-flash"
+const DefaultPipelineModel = automation.DefaultPipelineModel
 
 // DefaultPipelinePrompt the extraction intent a pipeline rule carries to rm-pages
-// when it names none. rm-pages adds the fixed output contract on its side.
-const DefaultPipelinePrompt = `Compare the BEFORE and AFTER images of one handwritten notebook page.
-List only the to-do items that are new in AFTER: lines Mike wrote as a checkbox ("- [ ]", "- []", "[ ]", "☐"). Do not turn prose, notes, questions without a checkbox, margin comments or diagrams into tasks. Ignore anything already present in BEFORE.
-Keep each task close to Mike's own words; fix only obvious handwriting misreads and read carefully (e.g. "measure" is not "find out"). Drop the checkbox and labels like "TODO:".
-Skip anything marked "-inbox": on a line, skip that line; on a heading, skip the block under it until the next heading or a clear gap; at the top of the page, skip the whole page. Put skipped items in "skipped".`
+// when it names none (automation.DefaultPipelinePrompt)
+const DefaultPipelinePrompt = automation.DefaultPipelinePrompt
 
 // ParentSource createIfMissing parent meaning "the rule's source folder"
-const ParentSource = "source"
+const ParentSource = automation.ParentSource
 
 // RootID the id of the root folder ("My files"); documents at the root have an empty parent
-const RootID = ""
+const RootID = automation.RootID
 
 // trashID the literal parent of trashed items
 const trashID = "trash"
 
 // AllowedIntervals sweep interval choices, minutes
-var AllowedIntervals = []int{5, 10, 15, 30, 60}
+var AllowedIntervals = automation.AllowedIntervals
 
 // DefaultInterval minutes
-const DefaultInterval = 15
+const DefaultInterval = automation.DefaultInterval
 
 // Settings the per-user sweeper settings
 type Settings struct {
