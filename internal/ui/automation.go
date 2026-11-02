@@ -13,18 +13,24 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const autoOrganizeLogger = "[auto-organize] "
+const autoOrganizeLogger = "[automation] "
 
-func (app *ReactAppWrapper) registerAutoOrganizeRoutes(auth *gin.RouterGroup) {
-	ao := auth.Group("auto-organize")
+// registerAutomationRoutes the rules API (R-B6). The old auto-organize paths
+// answer 410 with a pointer; they are registered first, outside the sync15
+// check, and do no work.
+func (app *ReactAppWrapper) registerAutomationRoutes(auth *gin.RouterGroup) {
+	auth.Any("auto-organize", movedToAutomation)
+	auth.Any("auto-organize/*rest", movedToAutomation)
+
+	ao := auth.Group("automation")
 	ao.Use(app.requireSync15())
-	ao.GET("", app.getAutoOrganize)
-	ao.PUT("", app.putAutoOrganize)
+	ao.GET("", app.getAutomation)
+	ao.PUT("", app.putAutomation)
 	ao.GET("state", app.autoOrganizeState)
 	ao.POST("preview", app.autoOrganizePreview)
 	ao.POST("run-now", app.autoOrganizeRunNow)
 	ao.GET("watchables", app.autoOrganizeWatchables)
-	ao.GET("page-tags", app.autoOrganizePageTags)
+	ao.GET("page-tags", app.automationPageTags)
 	ao.GET("pipeline", app.pipelineStatus)
 	ao.POST("pipeline/run-now", app.pipelineRunNow)
 	ao.GET("log", app.autoOrganizeLog)
@@ -33,7 +39,16 @@ func (app *ReactAppWrapper) registerAutoOrganizeRoutes(auth *gin.RouterGroup) {
 	ao.POST("reapply/:holdId", app.autoOrganizeReapply)
 }
 
-// requireSync15 the auto-organize endpoints refuse sync10 sessions
+// movedToAutomation the old /ui/api/auto-organize* API: 410 and where it went.
+// It reads no body and touches no file, so an old tab's PUT changes nothing.
+func movedToAutomation(c *gin.Context) {
+	c.AbortWithStatusJSON(http.StatusGone, gin.H{
+		"error":    "this API moved to /ui/api/automation",
+		"location": "/ui/api/automation" + c.Param("rest"),
+	})
+}
+
+// requireSync15 the automation endpoints refuse sync10 sessions
 func (app *ReactAppWrapper) requireSync15() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if v, ok := c.Get(backendVersionKey); !ok || v != common.Sync15 {
@@ -41,7 +56,7 @@ func (app *ReactAppWrapper) requireSync15() gin.HandlerFunc {
 			return
 		}
 		if app.organizer == nil {
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, viewmodel.NewErrorResponse("auto-organize is not available"))
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, viewmodel.NewErrorResponse("automation is not available"))
 			return
 		}
 		c.Next()
@@ -66,7 +81,7 @@ func (app *ReactAppWrapper) autoOrganizeError(c *gin.Context, err error) {
 	}
 }
 
-func (app *ReactAppWrapper) getAutoOrganize(c *gin.Context) {
+func (app *ReactAppWrapper) getAutomation(c *gin.Context) {
 	cfg, err := app.organizer.Store().LoadConfig(userID(c))
 	if err != nil {
 		app.autoOrganizeError(c, err)
@@ -75,7 +90,7 @@ func (app *ReactAppWrapper) getAutoOrganize(c *gin.Context) {
 	c.JSON(http.StatusOK, cfg)
 }
 
-func (app *ReactAppWrapper) putAutoOrganize(c *gin.Context) {
+func (app *ReactAppWrapper) putAutomation(c *gin.Context) {
 	uid := userID(c)
 	var cfg automation.Config
 	if err := c.ShouldBindJSON(&cfg); err != nil {
@@ -116,6 +131,8 @@ type previewRequest struct {
 	Rule   *automation.Rule `json:"rule"`
 }
 
+// autoOrganizePreview POST preview: a document rule (or none) answers the
+// sweep's Plan; a page rule answers a PagePreview of what it covers now.
 func (app *ReactAppWrapper) autoOrganizePreview(c *gin.Context) {
 	var req previewRequest
 	if c.Request.ContentLength != 0 {
@@ -124,7 +141,14 @@ func (app *ReactAppWrapper) autoOrganizePreview(c *gin.Context) {
 			return
 		}
 	}
-	plan, _, err := app.organizer.Preview(userID(c), req.Rule)
+	uid := userID(c)
+	if page := app.pageRuleOf(c, uid, &req); c.IsAborted() {
+		return
+	} else if page != nil {
+		app.previewPageRule(c, uid, page)
+		return
+	}
+	plan, _, err := app.organizer.Preview(uid, req.Rule)
 	if err != nil {
 		app.autoOrganizeError(c, err)
 		return
@@ -137,6 +161,47 @@ func (app *ReactAppWrapper) autoOrganizePreview(c *gin.Context) {
 		plan = filterPlan(plan, only)
 	}
 	c.JSON(http.StatusOK, plan)
+}
+
+// pageRuleOf the page rule a preview request names: the draft, or the saved
+// rule with ruleId; nil for a document rule, no rule or an unknown id.
+func (app *ReactAppWrapper) pageRuleOf(c *gin.Context, uid string, req *previewRequest) *automation.Rule {
+	if req.Rule != nil {
+		if !req.Rule.IsPage() {
+			return nil
+		}
+		// the same normalisation the store applies on save
+		tmp := &automation.Config{Rules: []automation.Rule{*req.Rule}}
+		tmp.Normalize()
+		return &tmp.Rules[0]
+	}
+	if req.RuleID == "" {
+		return nil
+	}
+	cfg, err := app.organizer.Store().LoadConfig(uid)
+	if err != nil {
+		app.autoOrganizeError(c, err)
+		return nil
+	}
+	for i := range cfg.Rules {
+		if cfg.Rules[i].ID == req.RuleID && cfg.Rules[i].IsPage() {
+			return &cfg.Rules[i]
+		}
+	}
+	return nil
+}
+
+func (app *ReactAppWrapper) previewPageRule(c *gin.Context, uid string, r *automation.Rule) {
+	if app.blobs == nil {
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, viewmodel.NewErrorResponse("page preview is not available"))
+		return
+	}
+	snap, content, err := pageSnapshot(app.blobs, uid)
+	if err != nil {
+		app.autoOrganizeError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, pagewatch.PreviewRule(snap, content, r))
 }
 
 func filterPlan(p *autoorganize.Plan, ruleID string) *autoorganize.Plan {

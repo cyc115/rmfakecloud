@@ -15,7 +15,7 @@ func TestPageTagsListsDistinctTagsOfLivePages(t *testing.T) {
 	a := newAOAPI(t)
 	tok := a.token("mike", true)
 
-	code, body := a.do("GET", "/ui/api/auto-organize/page-tags", tok, nil)
+	code, body := a.do("GET", "/ui/api/automation/page-tags", tok, nil)
 	if code != http.StatusOK || len(body["tags"].([]any)) != 0 {
 		t.Fatalf("no tags yet: %d %v", code, body)
 	}
@@ -50,7 +50,7 @@ func TestPageTagsListsDistinctTagsOfLivePages(t *testing.T) {
 	must(ft.TagPage("bin", "x1", "trashed", now)) // doc in the Trash
 	must(ft.Sync())
 
-	code, body = a.do("GET", "/ui/api/auto-organize/page-tags", tok, nil)
+	code, body = a.do("GET", "/ui/api/automation/page-tags", tok, nil)
 	if code != http.StatusOK {
 		t.Fatalf("page-tags: %d %v", code, body)
 	}
@@ -88,9 +88,9 @@ func TestPageTagsWithoutBlobStorageIs503(t *testing.T) {
 	router := gin.New()
 	auth := router.Group("/ui/api").Group("")
 	auth.Use(app.authMiddleware())
-	app.registerAutoOrganizeRoutes(auth)
+	app.registerAutomationRoutes(auth)
 	a.router = router
-	if code, body := a.do("GET", "/ui/api/auto-organize/page-tags", a.token("mike", true), nil); code != http.StatusServiceUnavailable {
+	if code, body := a.do("GET", "/ui/api/automation/page-tags", a.token("mike", true), nil); code != http.StatusServiceUnavailable {
 		t.Fatalf("nil blobs: %d %v", code, body)
 	}
 }

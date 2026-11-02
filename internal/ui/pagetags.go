@@ -28,6 +28,19 @@ func cachedTree(src renderSource, uid string) (*models.HashTree, error) {
 	}
 }
 
+// pageSnapshot the user's tree with the pages attached, read-only (a throwaway
+// .content cache). content serves each doc's parsed .content from that cache.
+func pageSnapshot(src renderSource, uid string) (*autoorganize.Snapshot, func(*autoorganize.DocSnap) autoorganize.ContentInfo, error) {
+	tree, err := cachedTree(src, uid)
+	if err != nil {
+		return nil, nil, err
+	}
+	snap := autoorganize.NewSnapshot(tree)
+	cc := autoorganize.NewContentCache(map[string]autoorganize.ContentInfo{}, src.BlobStorage(uid).GetReader)
+	snap.AttachPages(cc.Get)
+	return snap, cc.Get, nil
+}
+
 // PageTagDoc one document whose pages carry a tag
 type PageTagDoc struct {
 	ID string `json:"id"`
@@ -50,24 +63,16 @@ type PageTag struct {
 // as every rule skips them), sorted by name. Read-only: the .content reads
 // use a throwaway cache. A tag on a page no longer in the page list is ignored.
 func listPageTags(src renderSource, uid string) ([]PageTag, error) {
-	tree, err := cachedTree(src, uid)
+	snap, content, err := pageSnapshot(src, uid)
 	if err != nil {
 		return nil, err
 	}
-	snap := autoorganize.NewSnapshot(tree)
-	cc := autoorganize.NewContentCache(map[string]autoorganize.ContentInfo{}, src.BlobStorage(uid).GetReader)
-	infos := map[string]autoorganize.ContentInfo{}
-	snap.AttachPages(func(d *autoorganize.DocSnap) autoorganize.ContentInfo {
-		ci := cc.Get(d)
-		infos[d.ID] = ci
-		return ci
-	})
 	byName := map[string]*PageTag{}
 	for _, d := range snap.Docs {
 		if d.IsFolder() || snap.Locate(d.Parent) != autoorganize.LocAtRoot {
 			continue
 		}
-		ci := infos[d.ID]
+		ci := content(d)
 		if len(ci.PageTags) == 0 || ci.HasNoAutomationTag() {
 			continue
 		}
@@ -119,9 +124,9 @@ func ancestors(snap *autoorganize.Snapshot, parent string) []string {
 	return append(out, autoorganize.RootID)
 }
 
-// autoOrganizePageTags GET page-tags: the tag picker's suggestions and the
+// automationPageTags GET page-tags: the tag picker's suggestions and the
 // page_tagged preview count
-func (app *ReactAppWrapper) autoOrganizePageTags(c *gin.Context) {
+func (app *ReactAppWrapper) automationPageTags(c *gin.Context) {
 	if app.blobs == nil {
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, viewmodel.NewErrorResponse("page tags are not available"))
 		return

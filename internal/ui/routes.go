@@ -91,7 +91,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	auth.GET("integrations/:intid/metadata/*path", app.getMetadataIntegration)
 	auth.GET("integrations/:intid/download/*path", app.downloadThroughIntegration)
 
-	app.registerAutoOrganizeRoutes(auth)
+	app.registerAutomationRoutes(auth)
 
 	ss := auth.Group("screenshare")
 	ss.GET("room", app.screenshareJoinActive)
