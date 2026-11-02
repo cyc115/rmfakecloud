@@ -1,8 +1,13 @@
 // Rule vocabulary for the Automation page. The server is the authority on
 // validation; these helpers build the rule sentences, the editor's card
-// catalogue and sensible defaults. The stored format is today's auto-organize
-// rule: a document trigger + Move is a move rule, a page trigger + Extract
-// tasks / Just save notes is a pipeline rule.
+// catalogue and sensible defaults. The stored format is automation.json v2:
+// {id, name, enabled, when: {subject, in, trigger}, conditions, actions}.
+// A document rule has one folder in `in` and one move action; a page rule
+// has places in `in` and one extract_tasks or save_notes action (R-B2).
+
+import { conditionLock, conditionPhrase, isPdfOnly, makeCondition } from "./conditions.js";
+
+export { conditionLock, isPdfOnly };
 
 export const ROOT_ID = "";
 export const ROOT_NAME = "My files";
@@ -11,9 +16,9 @@ export const NO_AUTOMATION_TAG = "no automation";
 export const PAGE_CHANGED = "page_changed";
 export const PAGE_TAGGED = "page_tagged";
 
-// The IF cards. group "page" triggers make pipeline rules, "document"
-// triggers make move rules. pdfOnly triggers read the page you stopped on,
-// which only PDFs and books report, so their condition is fixed.
+// The IF cards. group is the rule's subject: "page" triggers make page rules,
+// "document" triggers make document rules. pdfOnly triggers read the page you
+// stopped on, which only PDFs and books report, so their kind_is is fixed.
 export const TRIGGER_CARDS = [
   { type: PAGE_CHANGED, group: "page", icon: "✍️", title: "I write on a page", sub: "new or changed handwriting" },
   { type: PAGE_TAGGED, group: "page", icon: "🏷️", title: "I tag a page", sub: "with a page tag you choose" },
@@ -29,28 +34,26 @@ export const TRIGGER_CARDS = [
 
 export const PDF_ONLY_BADGE = "PDFs & books";
 
-// The THEN cards. "for" is the trigger group the action works on.
+// The THEN cards: one per rule (R-B2). "for" is the subject the action works
+// on; "type" is the stored action type.
 export const ACTION_CARDS = [
-  { key: "extract", for: "page", icon: "✅", title: "Extract tasks to my inbox", sub: "+ save the page to its note" },
-  { key: "notes", for: "page", icon: "📝", title: "Just save notes", sub: "transcribe, no tasks" },
-  { key: "move", for: "document", icon: "📂", title: "Move it to…", sub: "works on documents" },
+  { key: "extract", type: "extract_tasks", for: "page", icon: "✅", title: "Extract tasks to my inbox", sub: "+ save the page to its note" },
+  { key: "notes", type: "save_notes", for: "page", icon: "📝", title: "Just save notes", sub: "transcribe, no tasks" },
+  { key: "move", type: "move", for: "document", icon: "📂", title: "Move it to…", sub: "works on documents" },
 ];
 
-// the conditions "+ add a condition" offers: the rule's scope
-export const CONDITIONS = [
-  { scope: "notebooks", label: "only notebooks" },
-  { scope: "pdf_epub", label: "only PDFs & books" },
-];
-
+// the trigger parameters, as the catalogue names them (settleHours only for
+// the reading triggers, P2; min age is a min_age_days condition, P1)
 export const TRIGGER_DEFAULTS = {
   finished_reading: { minPages: 3, settleHours: 6 },
   read_progress: { percent: 80, settleHours: 6 },
-  not_opened_for_days: { days: 30, minAgeEnabled: true, minAgeDays: 7 },
+  not_opened_for_days: { days: 30 },
   not_modified_for_days: { days: 90 },
   name_matches: { pattern: "" },
   tag_is: { tag: "" },
   age_since_created: { days: 14 },
   pinned_is: { pinned: true },
+  page_tagged: { tag: "" },
 };
 
 export const INTERVALS = [5, 10, 15, 30, 60];
@@ -63,25 +66,47 @@ export function isPageTrigger(type) {
   return type === PAGE_CHANGED || type === PAGE_TAGGED;
 }
 
-// isPdfOnly the trigger works on PDFs & books only (scope locked to pdf_epub)
-export function isPdfOnly(type) {
-  return type === "finished_reading" || type === "read_progress";
-}
-
 export function makeTrigger(type) {
-  if (type === PAGE_CHANGED) return { type };
-  if (type === PAGE_TAGGED) return { type, tag: "" };
-  return { type, settleHours: 6, minAgeEnabled: true, pinned: true, ...TRIGGER_DEFAULTS[type] };
+  return { type, ...(TRIGGER_DEFAULTS[type] || {}) };
 }
 
-export function isPipeline(rule) {
-  return !!rule && !!rule.action && rule.action.type === "pipeline";
+export function isPageRule(rule) {
+  return !!rule && !!rule.when && rule.when.subject === "page";
+}
+
+// the rule's one action (R-B2); a rule without one reads as its subject's default
+export function actionOf(rule) {
+  const a = (rule && rule.actions) || [];
+  if (a.length) return a[0];
+  return isPageRule(rule) ? { type: "extract_tasks" } : { type: "move", to: { id: ROOT_ID, name: "" } };
+}
+
+// sourceOf a document rule's one folder (in[0])
+export function sourceOf(rule) {
+  return ((rule && rule.when && rule.when.in) || [])[0] || { id: ROOT_ID, kind: "folder", name: "" };
+}
+
+// moveTo a document rule's destination
+export function moveTo(rule) {
+  return actionOf(rule).to || { id: ROOT_ID, name: "" };
+}
+
+function conditionsOf(rule) {
+  return (rule && rule.conditions) || [];
+}
+
+// kindOf the rule's kind_is kind, "" when it has none (all)
+export function kindOf(rule) {
+  const c = conditionsOf(rule).find((x) => x.type === "kind_is");
+  return c && c.kind !== "all" ? c.kind || "" : "";
 }
 
 // actionKey the THEN card of a rule
 export function actionKey(rule) {
-  if (!isPipeline(rule)) return "move";
-  return rule.action.tasks === false ? "notes" : "extract";
+  const t = actionOf(rule).type;
+  if (t === "save_notes") return "notes";
+  if (t === "extract_tasks") return "extract";
+  return "move";
 }
 
 // actionFit whether an action card fits the trigger, and why not
@@ -94,13 +119,6 @@ export function actionFit(key, triggerType) {
     return { ok: false, reason: "Works on pages: pick “I write on a page” or “I tag a page” to extract tasks or save notes." };
   }
   return { ok: true, reason: "" };
-}
-
-// conditionLock the reason the condition is fixed, or "" when it is free
-export function conditionLock(triggerType) {
-  if (!isPdfOnly(triggerType)) return "";
-  const card = triggerCard(triggerType);
-  return `Fixed: “${card.title}” uses the page you stopped on, which only PDFs & books report.`;
 }
 
 function lastSegment(path) {
@@ -117,33 +135,37 @@ function folderName(ctx, id, cached) {
   return f ? f.name || lastSegment(f.path) : cached || "?";
 }
 
-function watchName(ctx, w) {
+function placeName(ctx, w) {
   if (w.kind === "folder" && w.id === ROOT_ID) return ROOT_NAME;
   const hit = ((ctx && ctx.watchables) || []).find((i) => i.id === w.id && i.kind === w.kind);
   return hit ? hit.name : w.name || w.id;
 }
 
-export function isRootWatch(w) {
+export function isRootPlace(w) {
   return w.kind === "folder" && w.id === ROOT_ID;
+}
+
+function inOf(rule) {
+  return (rule.when && rule.when.in) || [];
 }
 
 // isAnywhere the rule's page places cover the whole tree: no entry, or the
 // root folder among them (a root entry next to others still means anywhere)
 export function isAnywhere(rule) {
-  const watch = rule.watch || [];
-  return watch.length === 0 || watch.some(isRootWatch);
+  const places = inOf(rule);
+  return places.length === 0 || places.some(isRootPlace);
 }
 
 // placesOf the places a page rule names; none when it applies anywhere
 export function placesOf(rule) {
-  return isAnywhere(rule) ? [] : rule.watch;
+  return isAnywhere(rule) ? [] : inOf(rule);
 }
 
-// editableWatch the entries the In picker shows as chips: a lone root entry
+// editableIn the entries the In picker shows as chips: a lone root entry
 // is "anywhere" (no chip), any other list is shown as stored
-export function editableWatch(rule) {
-  const watch = rule.watch || [];
-  return watch.length === 1 && isRootWatch(watch[0]) ? [] : watch;
+export function editableIn(rule) {
+  const places = inOf(rule);
+  return places.length === 1 && isRootPlace(places[0]) ? [] : places;
 }
 
 const tok = (s) => ({ t: "tok", s });
@@ -175,26 +197,33 @@ function triggerParts(t) {
 }
 
 export function destinationName(rule, ctx) {
-  const cm = rule.destination && rule.destination.createIfMissing;
-  if (cm) return cm.name || "…";
-  return folderName(ctx, rule.destination.id, rule.destination.name);
+  const to = moveTo(rule);
+  if (to.createIfMissing) return to.createIfMissing.name || "…";
+  return folderName(ctx, to.id, to.name);
 }
 
 // sentence the one rendering of a rule, shared by the list, the editor
 // summary and the auto-name: an array of parts, each a string or
-// {t: "if" | "then" | "tok", s}. Renders every trigger/action combination.
+// {t: "if" | "then" | "tok", s}. The kind_is part follows the places (not for
+// a PDF-only trigger, whose kind is fixed); every other condition follows as
+// " AND " + its phrase, in stored order.
 export function sentence(rule, ctx) {
-  const t = rule.trigger || {};
+  const t = (rule.when && rule.when.trigger) || {};
   const parts = [{ t: "if", s: "IF" }, ...triggerParts(t)];
-  if (isPageTrigger(t.type)) {
-    const names = placesOf(rule).map((w) => watchName(ctx, w));
+  if (isPageRule(rule)) {
+    const names = placesOf(rule).map((w) => placeName(ctx, w));
     if (names.length) parts.push(" in ", ...orList(names));
     else parts.push(" anywhere");
   } else {
-    parts.push(" in ", tok(folderName(ctx, rule.source.id, rule.source.name)));
+    const src = sourceOf(rule);
+    parts.push(" in ", tok(folderName(ctx, src.id, src.name)));
   }
-  const cond = CONDITIONS.find((c) => c.scope === rule.scope);
-  if (cond && !isPdfOnly(t.type)) parts.push(` (${cond.label})`);
+  const kind = conditionsOf(rule).find((c) => c.type === "kind_is");
+  const kindText = kind ? conditionPhrase(kind) : "";
+  if (kindText && !isPdfOnly(t.type)) parts.push(` (${kindText})`);
+  for (const c of conditionsOf(rule)) {
+    if (c.type !== "kind_is") parts.push(" AND ", tok(conditionPhrase(c)));
+  }
   parts.push(" ", { t: "then", s: "THEN" });
   const key = actionKey(rule);
   if (key === "move") parts.push(tok(`move it to ${destinationName(rule, ctx)}`));
@@ -236,37 +265,48 @@ export function tagSuggestions(tags) {
   return out;
 }
 
-// taggedCount pages carrying tag inside the rule's places and condition, from
-// GET page-tags ({name, docs: [{id, folders, kind, pages}]})
-export function taggedCount(tags, rule) {
-  const want = normalizePageTag(rule.trigger && rule.trigger.tag);
-  const hit = (tags || []).find((x) => x.name === want);
-  if (!want || !hit) return 0;
-  const places = placesOf(rule);
-  return hit.docs.filter((d) => (rule.scope === "all" || !rule.scope || d.kind === rule.scope) &&
-    (places.length === 0 || places.some((w) => (w.kind === "document" ? w.id === d.id : d.folders.includes(w.id)))))
-    .reduce((n, d) => n + d.pages, 0);
-}
-
-export function folderPath(folders, id) {
-  const f = (folders || []).find((x) => x.id === id);
-  return f ? f.path : null;
-}
-
-// destination display: a picked folder, or "Source / Name" for a new subfolder
-export function destinationLabel(rule, folders, resolvedName) {
-  if (resolvedName) return resolvedName;
-  const cm = rule.destination && rule.destination.createIfMissing;
-  if (cm) {
-    const parentId = cm.parent === "source" ? rule.source.id : cm.parent;
-    const parent = folderPath(folders, parentId);
-    return parentId === ROOT_ID || !parent ? cm.name : `${parent} / ${cm.name}`;
+// pageTagsOf the page tags a page must carry, as the server's Rule.PageTags
+// (P4): the page_tagged trigger's tag plus every page_tag_is condition,
+// normalised, deduped and sorted
+export function pageTagsOf(rule) {
+  const set = new Set();
+  const t = (rule.when && rule.when.trigger) || {};
+  if (t.type === PAGE_TAGGED && normalizePageTag(t.tag)) set.add(normalizePageTag(t.tag));
+  for (const c of conditionsOf(rule)) {
+    if (c.type === "page_tag_is" && normalizePageTag(c.tag)) set.add(normalizePageTag(c.tag));
   }
-  return folderPath(folders, rule.destination.id) || rule.destination.name || "?";
+  return [...set].sort();
 }
 
-export function sourceLabel(rule, folders, resolvedName) {
-  return resolvedName || folderPath(folders, rule.source.id) || rule.source.name || "?";
+// the conditions taggedCount can test from GET page-tags
+const COUNTABLE = new Set(["kind_is", "page_tag_is"]);
+
+// taggedCount pages carrying every tag of the rule's page-tag set, inside its
+// places and kind, from GET page-tags ({name, docs: [{id, folders, kind,
+// pages, pageIds?}]}). null when the list cannot say: no tag set, a condition
+// it cannot test (tag_is, tag_is_not, name_matches), or two or more tags
+// without page ids (the overlap of per-document counts is unknown).
+export function taggedCount(tags, rule) {
+  const want = pageTagsOf(rule);
+  if (!want.length || conditionsOf(rule).some((c) => !COUNTABLE.has(c.type))) return null;
+  const lists = want.map((n) => (tags || []).find((x) => x.name === n));
+  if (lists.some((l) => !l)) return 0;
+  const kind = kindOf(rule);
+  const places = placesOf(rule);
+  const inRule = (d) => (!kind || d.kind === kind) &&
+    (places.length === 0 || places.some((w) => (w.kind === "document" ? w.id === d.id : d.folders.includes(w.id))));
+  let n = 0;
+  for (const d of lists[0].docs.filter(inRule)) {
+    if (lists.length === 1) {
+      n += d.pages;
+      continue;
+    }
+    const same = lists.map((l) => l.docs.find((x) => x.id === d.id));
+    if (same.some((x) => !x)) continue;
+    if (same.some((x) => !Array.isArray(x.pageIds))) return null;
+    n += same[0].pageIds.filter((p) => same.every((x) => x.pageIds.includes(p))).length;
+  }
+  return n;
 }
 
 export function newRule(folders) {
@@ -275,112 +315,105 @@ export function newRule(folders) {
     id: "",
     name: "",
     enabled: true,
-    source: { id: first ? first.id : ROOT_ID, name: first ? first.name : "My files" },
-    scope: "pdf_epub",
-    trigger: makeTrigger("finished_reading"),
-    destination: { id: ROOT_ID, name: "" },
-    action: { type: "move" },
+    when: {
+      subject: "document",
+      in: [{ id: first ? first.id : ROOT_ID, kind: "folder", name: first ? first.name : ROOT_NAME }],
+      trigger: makeTrigger("finished_reading"),
+    },
+    conditions: [],
+    actions: [{ type: "move", to: { id: ROOT_ID, name: "" } }],
   };
 }
 
 // defaults: {prompt, model} from GET /pipeline; the UI never hard-codes them.
-// Source and destination are unused by the server for pipeline rules. An
-// empty watch is "anywhere" (forSave sends the root folder entry).
-export function newPipelineRule(defaults) {
+// An empty `in` is "anywhere" (forSave sends the root folder entry).
+export function newPageRule(defaults) {
   return {
     id: "",
     name: "",
     enabled: true,
-    source: { id: ROOT_ID, name: "" },
-    scope: "all",
-    trigger: { type: PAGE_CHANGED },
-    destination: { id: ROOT_ID, name: "" },
-    action: { type: "pipeline", prompt: (defaults && defaults.prompt) || "", model: (defaults && defaults.model) || "" },
-    watch: [],
+    when: { subject: "page", in: [], trigger: { type: PAGE_CHANGED } },
+    conditions: [],
+    actions: [{ type: "extract_tasks", prompt: (defaults && defaults.prompt) || "", model: (defaults && defaults.model) || "" }],
   };
 }
 
-// switchAction the rule after the trigger group changes (page ↔ document). stash holds the last
-// move and pipeline versions of the draft, so switching back restores the
-// edits (prompt, model, watch, source, ...). A move rule never keeps watch.
-// Returns { rule, stash }; inputs are not mutated.
-export function switchAction(rule, type, stash, { defaults, folders } = {}) {
-  const next = { ...(stash || {}) };
-  if (type === "pipeline" && !isPipeline(rule)) {
-    next.move = rule;
-    const p = next.pipeline || newPipelineRule(defaults);
-    return { rule: { ...p, id: rule.id, name: rule.name, enabled: rule.enabled }, stash: next };
-  }
-  if (type === "move" && isPipeline(rule)) {
-    next.pipeline = rule;
-    const m = { ...(next.move || newRule(folders)) };
-    delete m.watch;
-    return { rule: { ...m, id: rule.id, name: rule.name, enabled: rule.enabled }, stash: next };
-  }
-  return { rule, stash: next };
-}
+const withoutKind = (conds) => conds.filter((c) => c.type !== "kind_is");
 
-// chooseTrigger the rule after an IF card is picked: a page trigger makes a
-// pipeline rule, a document trigger a move rule (the other shape is kept in
-// stash, so switching back restores it). A PDF-only trigger locks the
-// condition to PDFs & books; leaving one drops that lock.
+// chooseTrigger the rule after an IF card is picked. A page trigger makes a
+// page rule, a document trigger a document rule; the other subject's draft
+// is kept in stash (stash.page, stash.document), so switching back restores
+// its places, conditions and action (prompt, model, destination, ...). Each
+// trigger type's last parameters are kept in stash.triggers. A PDF-only
+// trigger implies kind_is pdf_epub (forSave adds it), so entering or leaving
+// one drops any kind_is. The first pick of "It sits unopened" adds "at least
+// 7 days old" (Option A's default min age: upload-only documents have never
+// been opened and would match at once); the chip can be removed.
 // Returns { rule, stash }; inputs are not mutated.
-// Each trigger type's last parameters are kept in stash.triggers, so picking
-// a card again restores them (minPages, settle hours, the page tag, ...).
-export function chooseTrigger(rule, type, stash, opts) {
-  const triggers = { ...((stash && stash.triggers) || {}), [rule.trigger.type]: rule.trigger };
-  const sw = switchAction(rule, isPageTrigger(type) ? "pipeline" : "move", { ...(stash || {}), triggers }, opts);
-  let r = sw.rule;
-  const next = { ...sw.stash, triggers: { ...triggers } };
-  if (r.trigger.type !== type) {
-    next.triggers[r.trigger.type] = r.trigger;
-    let scope = r.scope;
-    if (isPdfOnly(type)) scope = "pdf_epub";
-    else if (isPdfOnly(r.trigger.type)) scope = "all";
-    r = { ...r, trigger: next.triggers[type] || makeTrigger(type), scope };
+export function chooseTrigger(rule, type, stash, { defaults, folders } = {}) {
+  const cur = rule.when.trigger;
+  const next = { ...(stash || {}), triggers: { ...((stash && stash.triggers) || {}), [cur.type]: cur } };
+  const subject = isPageTrigger(type) ? "page" : "document";
+  let r = rule;
+  if (rule.when.subject !== subject) {
+    next[rule.when.subject] = rule;
+    const base = next[subject] || (subject === "page" ? newPageRule(defaults) : newRule(folders));
+    r = { ...base, id: rule.id, name: rule.name, enabled: rule.enabled };
+  }
+  if (r.when.trigger.type !== type) {
+    const from = r.when.trigger;
+    if (!next.triggers[from.type]) next.triggers[from.type] = from;
+    let conditions = conditionsOf(r);
+    if (isPdfOnly(type) || isPdfOnly(from.type)) conditions = withoutKind(conditions);
+    if (type === "not_opened_for_days" && !next.triggers[type] && !conditions.some((c) => c.type === "min_age_days")) {
+      conditions = [...conditions, makeCondition("min_age_days")];
+    }
+    r = { ...r, when: { ...r.when, trigger: next.triggers[type] || makeTrigger(type) }, conditions };
+  } else if (isPdfOnly(type)) {
+    r = { ...r, conditions: withoutKind(conditionsOf(r)) };
   }
   return { rule: r, stash: next };
 }
 
 // chooseAction the rule after a THEN card is picked; a card that does not
-// fit the trigger leaves the rule unchanged
+// fit the trigger leaves the rule unchanged. A page rule keeps its prompt and
+// model when switching between extract and notes.
 export function chooseAction(rule, key) {
-  if (!actionFit(key, rule.trigger.type).ok || key === "move") return rule;
-  const action = { ...rule.action };
-  if (key === "notes") action.tasks = false;
-  else delete action.tasks;
-  return { ...rule, action };
+  if (!actionFit(key, rule.when.trigger.type).ok || key === "move") return rule;
+  const card = ACTION_CARDS.find((a) => a.key === key);
+  return { ...rule, actions: [{ ...actionOf(rule), type: card.type }] };
 }
 
-// forSave the rule as sent to the server: a pipeline prompt/model is trimmed
-// (whitespace-only → "" → the server's default); an empty watch becomes the
-// root folder entry ("anywhere", both page triggers), any other watch is sent
-// as it is; tasks true is the default and not stored; a move rule has no
-// watch and no tasks
+// forSave the rule as sent to the server:
+//   - conditions: kind_is all/blank is dropped; a PDF-only trigger gets
+//     kind_is pdf_epub first (once); page tags are trimmed
+//   - page rule: an empty `in` becomes the root folder entry ("anywhere",
+//     both page triggers), any other `in` is sent as it is; the page action's
+//     prompt/model are trimmed (whitespace-only → "" → the server's default)
+//   - exactly one action (R-B2): move carries only `to`
 export function forSave(rule) {
-  const r = { ...rule };
-  if (isPipeline(r)) {
-    const action = { ...r.action, prompt: (r.action.prompt || "").trim(), model: (r.action.model || "").trim() };
-    if (action.tasks !== false) delete action.tasks;
-    r.action = action;
-    if (!(r.watch || []).length) r.watch = [{ id: ROOT_ID, kind: "folder", name: ROOT_NAME }];
-    if (r.trigger.type === PAGE_TAGGED) r.trigger = { ...r.trigger, tag: (r.trigger.tag || "").trim() };
+  const r = JSON.parse(JSON.stringify(rule));
+  const t = r.when.trigger;
+  let conds = conditionsOf(r).filter((c) => !(c.type === "kind_is" && (!c.kind || c.kind === "all")));
+  if (isPdfOnly(t.type)) conds = [{ type: "kind_is", kind: "pdf_epub" }, ...withoutKind(conds)];
+  r.conditions = conds.map((c) => (c.type === "page_tag_is" ? { ...c, tag: (c.tag || "").trim() } : c));
+  const a = actionOf(rule);
+  if (isPageRule(r)) {
+    if (!inOf(r).length) r.when.in = [{ id: ROOT_ID, kind: "folder", name: ROOT_NAME }];
+    if (t.type === PAGE_TAGGED) r.when.trigger = { ...t, tag: (t.tag || "").trim() };
+    r.actions = [{ type: a.type, prompt: (a.prompt || "").trim(), model: (a.model || "").trim() }];
   } else {
-    delete r.watch;
-    if (r.action && "tasks" in r.action) {
-      r.action = { ...r.action };
-      delete r.action.tasks;
-    }
+    r.actions = [{ type: "move", to: JSON.parse(JSON.stringify(a.to || { id: ROOT_ID, name: "" })) }];
   }
   return r;
 }
 
-// missingFor the watch entries of ruleId the page watch reports as gone
+// missingFor the places of ruleId the page watch reports as gone
 export function missingFor(pipeline, ruleId) {
   return ((pipeline && pipeline.missingWatches) || []).filter((m) => m.ruleId === ruleId);
 }
 
-function plural(n, word) {
+export function plural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
@@ -407,21 +440,24 @@ export function runCounts(r) {
 export function exampleRule(folders) {
   const rr = (folders || []).find((f) => f.name.toLowerCase() === "research reports");
   const rule = newRule(folders);
-  if (rr) rule.source = { id: rr.id, name: rr.name };
-  rule.trigger = makeTrigger("finished_reading");
-  rule.destination = { id: "", name: "", createIfMissing: { name: "Read", parent: "source" } };
+  if (rr) rule.when.in = [{ id: rr.id, kind: "folder", name: rr.name }];
+  rule.actions = [{ type: "move", to: { id: "", name: "", createIfMissing: { name: "Read", parent: "source" } } }];
   return rule;
 }
 
-// cache display names next to the UUIDs (the UUID stays the only key)
+// withDisplayNames caches display names next to the UUIDs of a document rule
+// (the UUID stays the only key); page rules keep their names as they are
 export function withDisplayNames(rule, folders) {
   const r = JSON.parse(JSON.stringify(rule));
-  const src = (folders || []).find((f) => f.id === r.source.id);
-  if (src) r.source.name = r.source.id === ROOT_ID ? "My files" : lastSegment(src.path);
-  if (!r.destination.createIfMissing) {
-    const dst = (folders || []).find((f) => f.id === r.destination.id);
-    if (dst) r.destination.name = r.destination.id === ROOT_ID ? "My files" : lastSegment(dst.path);
-  }
+  const name = (id) => {
+    const f = (folders || []).find((x) => x.id === id);
+    if (!f) return null;
+    return id === ROOT_ID ? ROOT_NAME : lastSegment(f.path);
+  };
+  const src = r.when.in[0];
+  if (src && name(src.id) !== null) src.name = name(src.id);
+  const a = (r.actions || [])[0];
+  if (a && a.to && !a.to.createIfMissing && name(a.to.id) !== null) a.to.name = name(a.to.id);
   return r;
 }
 

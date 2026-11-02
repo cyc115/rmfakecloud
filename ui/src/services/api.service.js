@@ -1,4 +1,4 @@
-import constants from "../common/constants";
+import constants from "../common/constants.js";
 import { jwtDecode } from "jwt-decode";
 
 class ApiServices {
@@ -203,9 +203,9 @@ class ApiServices {
     }).then((r) => handleError(r));
   }
 
-  // auto-organize
-  autoOrganize(method, path, body) {
-    return fetch(`${constants.ROOT_URL}/auto-organize${path}`, {
+  // automation (R-B6): every rules call is under /ui/api/automation
+  automation(method, path, body) {
+    return fetch(`${constants.ROOT_URL}/automation${path}`, {
       method,
       headers: this.header(),
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -230,41 +230,42 @@ class ApiServices {
       return data;
     });
   }
-  getAutoOrganize() {
-    return this.autoOrganize("GET", "");
+  getAutomation() {
+    return this.automation("GET", "");
   }
-  saveAutoOrganize(config) {
-    return this.autoOrganize("PUT", "", config);
+  saveAutomation(config) {
+    return this.automation("PUT", "", config);
   }
-  getAutoOrganizeState() {
-    return this.autoOrganize("GET", "/state");
+  getAutomationState() {
+    return this.automation("GET", "/state");
   }
-  previewAutoOrganize(request) {
-    return this.autoOrganize("POST", "/preview", request || {});
+  previewAutomation(request) {
+    return this.automation("POST", "/preview", request || {});
   }
-  runAutoOrganizeNow() {
-    return this.autoOrganize("POST", "/run-now");
+  runAutomationNow() {
+    return this.automation("POST", "/run-now");
   }
-  getAutoOrganizeLog() {
-    return this.autoOrganize("GET", "/log");
+  getAutomationLog() {
+    return this.automation("GET", "/log");
   }
-  undoAutoOrganizeMove(entryId) {
-    return this.autoOrganize("POST", `/undo/${encodeURIComponent(entryId)}`);
+  undoAutomationMove(entryId) {
+    return this.automation("POST", `/undo/${encodeURIComponent(entryId)}`);
+  }
+  reapplyAutomationHold(holdId) {
+    return this.automation("POST", `/reapply/${encodeURIComponent(holdId)}`);
   }
   getWatchables() {
-    return this.autoOrganize("GET", "/watchables");
+    return this.automation("GET", "/watchables");
   }
   getPageTags() {
-    return this.autoOrganize("GET", "/page-tags");
+    return this.automation("GET", "/page-tags");
   }
+  // the page watch status, last runs and the page action defaults
   getPipeline() {
-    return this.autoOrganize("GET", "/pipeline");
+    return this.automation("GET", "/pipeline");
   }
   runPipelineNow() {
-    return this.autoOrganize("POST", "/pipeline/run-now");
-  }
-  reapplyAutoOrganizeHold(holdId) {
-    return this.autoOrganize("POST", `/reapply/${encodeURIComponent(holdId)}`);
+    return this.automation("POST", "/pipeline/run-now");
   }
 }
 

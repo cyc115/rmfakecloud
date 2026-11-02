@@ -2,64 +2,97 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  ACTION_CARDS, TRIGGER_CARDS, actionFit, actionKey, chooseAction, chooseTrigger, conditionLock, makeTrigger,
-  editableWatch, newPipelineRule, newRule, normalizePageTag, ruleLabel, sentence, sentenceText, tagSuggestions, taggedCount,
+  ACTION_CARDS, TRIGGER_CARDS, actionFit, actionKey, chooseAction, chooseTrigger, conditionLock, makeTrigger, triggerCard,
+  editableIn, newPageRule, newRule, normalizePageTag, ruleLabel, sentence, sentenceText, tagSuggestions, taggedCount,
 } from "./rules.js";
 
+// synthetic fixtures only (R-B1)
 const FOLDERS = [
   { id: "", name: "My files", path: "My files", depth: 0 },
-  { id: "33333333-3333-4333-8333-333333333333", name: "Papers To Read", path: "Papers To Read", depth: 1 },
+  { id: "f-reading", name: "Reading List", path: "Reading List", depth: 1 },
+  { id: "f-done", name: "Done", path: "Reading List / Done", depth: 2 },
   { id: "inb", name: "Inbox", path: "Inbox", depth: 1 },
   { id: "arc", name: "Archive", path: "Archive", depth: 1 },
+  { id: "old", name: "Old", path: "Archive / Old", depth: 2 },
   { id: "art", name: "Articles", path: "Reading / Articles", depth: 2 },
 ];
 const WATCHABLES = [
-  { id: "44444444-4444-4444-8444-444444444444", kind: "document", name: "inbox", path: "inbox", docType: "notebook" },
-  { id: "notes-doc", kind: "document", name: "Notes", path: "Projects / Notes", docType: "notebook" },
+  { id: "d-journal", kind: "document", name: "Journal", path: "Journal", docType: "notebook" },
+  { id: "d-ideas", kind: "document", name: "Ideas", path: "Projects / Ideas", docType: "notebook" },
   { id: "proj", kind: "folder", name: "Projects", path: "Projects" },
 ];
 const CTX = { folders: FOLDERS, watchables: WATCHABLES };
 const DEFAULTS = { prompt: "DEFAULT", model: "m/default" };
 
-// Mike's live rules (auto-organize.json, 2026-11-01 + the second watched notebook)
-const MIKE_MOVE = {
-  id: "11111111-1111-4111-8111-111111111111", name: "", enabled: true, scope: "pdf_epub",
-  source: { id: "33333333-3333-4333-8333-333333333333", name: "Papers To Read" },
-  trigger: { type: "finished_reading", minPages: 2, settleHours: 6, minAgeEnabled: true, minAgeDays: 0, pinned: true },
-  destination: { id: "", name: "", createIfMissing: { name: "Read", parent: "source" } },
-  action: { type: "move" },
+const GOLDEN_MOVE = {
+  id: "0a1b2c3d-0000-4000-8000-000000000001", name: "", enabled: true,
+  when: {
+    subject: "document",
+    in: [{ id: "f-reading", kind: "folder", name: "Reading List" }],
+    trigger: { type: "finished_reading", minPages: 2, settleHours: 6 },
+  },
+  conditions: [{ type: "kind_is", kind: "pdf_epub" }],
+  actions: [{ type: "move", to: { id: "f-done", name: "Done" } }],
 };
-const MIKE_PIPELINE = {
-  id: "22222222-2222-4222-8222-222222222222", name: "capture journal pages", enabled: true, scope: "all",
-  source: { id: "", name: "" }, destination: { id: "", name: "" },
-  trigger: { type: "page_changed" },
-  action: { type: "pipeline", prompt: "Mike's custom extraction prompt", model: "deepseek/deepseek-v4.1-flash" },
-  watch: [
-    { id: "44444444-4444-4444-8444-444444444444", kind: "document", name: "inbox" },
-    { id: "notes-doc", kind: "document", name: "Notes" },
-  ],
+const GOLDEN_PAGE = {
+  id: "0a1b2c3d-0000-4000-8000-000000000002", name: "journal pages", enabled: true,
+  when: {
+    subject: "page",
+    in: [{ id: "d-journal", kind: "document", name: "Journal" }, { id: "d-ideas", kind: "document", name: "Ideas" }],
+    trigger: { type: "page_changed" },
+  },
+  conditions: [],
+  actions: [{ type: "extract_tasks", prompt: "A synthetic prompt", model: "m/synthetic" }],
 };
 
-test("Mike's move rule renders as one sentence", () => {
-  assert.equal(sentenceText(MIKE_MOVE, CTX), "IF I finish reading a document in Papers To Read THEN move it to Read");
+test("golden move rule renders", () => {
+  assert.equal(sentenceText(GOLDEN_MOVE, CTX), "IF I finish reading a document in Reading List THEN move it to Done");
   // without the live tree the cached names give the same sentence
-  assert.equal(sentenceText(MIKE_MOVE), "IF I finish reading a document in Papers To Read THEN move it to Read");
+  assert.equal(sentenceText(GOLDEN_MOVE), "IF I finish reading a document in Reading List THEN move it to Done");
 });
 
-test("Mike's pipeline rule renders as one sentence", () => {
-  assert.equal(sentenceText(MIKE_PIPELINE, CTX), "IF I write on a page in inbox or Notes THEN extract tasks to my inbox");
-  assert.equal(sentenceText(MIKE_PIPELINE), "IF I write on a page in inbox or Notes THEN extract tasks to my inbox");
+test("golden page rule renders", () => {
+  assert.equal(sentenceText(GOLDEN_PAGE, CTX), "IF I write on a page in Journal or Ideas THEN extract tasks to my inbox");
+  assert.equal(sentenceText(GOLDEN_PAGE), "IF I write on a page in Journal or Ideas THEN extract tasks to my inbox");
+});
+
+test("multi-condition document sentence", () => {
+  const r = {
+    ...GOLDEN_MOVE,
+    when: { subject: "document", in: [{ id: "arc", kind: "folder", name: "Archive" }], trigger: { type: "not_opened_for_days", days: 30 } },
+    conditions: [{ type: "kind_is", kind: "pdf_epub" }, { type: "min_age_days", days: 7 }, { type: "tag_is", tag: "keep" }],
+    actions: [{ type: "move", to: { id: "old", name: "Old" } }],
+  };
+  assert.equal(sentenceText(r, CTX), "IF a document sits unopened 30 days in Archive (only PDFs & books) AND at least 7 days old AND tagged “keep” THEN move it to Old");
+  // the kind_is part follows the places wherever it is stored
+  const reordered = { ...r, conditions: [r.conditions[1], r.conditions[2], r.conditions[0]] };
+  assert.equal(sentenceText(reordered, CTX), sentenceText(r, CTX));
+});
+
+test("multi-condition page sentence", () => {
+  const r = {
+    ...newPageRule(DEFAULTS),
+    conditions: [{ type: "kind_is", kind: "notebooks" }, { type: "name_matches", pattern: "Journal*" }],
+    actions: [{ type: "save_notes", prompt: "", model: "" }],
+  };
+  assert.equal(sentenceText(r, CTX), "IF I write on a page anywhere (only notebooks) AND named like “Journal*” THEN just save notes");
 });
 
 test("sentence parts mark IF, THEN and the tokens", () => {
-  const parts = sentence(MIKE_PIPELINE, CTX);
+  const parts = sentence(GOLDEN_PAGE, CTX);
   assert.deepEqual(parts[0], { t: "if", s: "IF" });
   assert.ok(parts.some((p) => p.t === "then"));
-  assert.deepEqual(parts.filter((p) => p.t === "tok").map((p) => p.s), ["write on a page", "inbox", "Notes", "extract tasks to my inbox"]);
+  assert.deepEqual(parts.filter((p) => p.t === "tok").map((p) => p.s), ["write on a page", "Journal", "Ideas", "extract tasks to my inbox"]);
 });
 
-function moveRule(trigger, scope = "all", extra = {}) {
-  return { ...newRule(FOLDERS), source: { id: "inb", name: "Inbox" }, destination: { id: "arc", name: "Archive" }, scope, trigger, ...extra };
+function moveRule(trigger, kind = "", extra = {}) {
+  return {
+    ...newRule(FOLDERS),
+    when: { subject: "document", in: [{ id: "inb", kind: "folder", name: "Inbox" }], trigger },
+    conditions: kind ? [{ type: "kind_is", kind }] : [],
+    actions: [{ type: "move", to: { id: "arc", name: "Archive" } }],
+    ...extra,
+  };
 }
 
 test("every document trigger with Move renders", () => {
@@ -80,34 +113,42 @@ test("every document trigger with Move renders", () => {
   assert.deepEqual([...new Set(cases.map((c) => c[0].type))].sort(), docTypes.sort());
 });
 
-test("conditions render, except the fixed PDF-only one", () => {
+test("kind_is renders, except the fixed PDF-only one", () => {
   const nm = { ...makeTrigger("name_matches"), pattern: "WSJ*" };
   assert.equal(sentenceText(moveRule(nm, "notebooks"), CTX), "IF a document named like “WSJ*” is in Inbox (only notebooks) THEN move it to Archive");
   assert.equal(sentenceText(moveRule(nm, "pdf_epub"), CTX), "IF a document named like “WSJ*” is in Inbox (only PDFs & books) THEN move it to Archive");
+  assert.equal(sentenceText(moveRule(nm, "all"), CTX), "IF a document named like “WSJ*” is in Inbox THEN move it to Archive");
   assert.equal(sentenceText(moveRule(makeTrigger("finished_reading"), "pdf_epub"), CTX), "IF I finish reading a document in Inbox THEN move it to Archive");
 });
 
 test("move destinations: nested folder by name, root, new subfolder", () => {
   const t = makeTrigger("finished_reading");
-  assert.equal(sentenceText(moveRule(t, "pdf_epub", { destination: { id: "art", name: "Articles" } }), CTX), "IF I finish reading a document in Inbox THEN move it to Articles");
-  assert.equal(sentenceText(moveRule(t, "pdf_epub", { destination: { id: "", name: "" } }), CTX), "IF I finish reading a document in Inbox THEN move it to My files");
-  assert.equal(sentenceText(moveRule(t, "pdf_epub", { source: { id: "", name: "" } }), CTX), "IF I finish reading a document in My files THEN move it to Archive");
+  const to = (dest) => ({ actions: [{ type: "move", to: dest }] });
+  assert.equal(sentenceText(moveRule(t, "pdf_epub", to({ id: "art", name: "Articles" })), CTX), "IF I finish reading a document in Inbox THEN move it to Articles");
+  assert.equal(sentenceText(moveRule(t, "pdf_epub", to({ id: "", name: "" })), CTX), "IF I finish reading a document in Inbox THEN move it to My files");
+  assert.equal(sentenceText(moveRule(t, "pdf_epub", to({ id: "", name: "", createIfMissing: { name: "Read", parent: "source" } })), CTX),
+    "IF I finish reading a document in Inbox THEN move it to Read");
+  const atRoot = moveRule(t, "pdf_epub", { when: { subject: "document", in: [{ id: "", kind: "folder", name: "" }], trigger: t } });
+  assert.equal(sentenceText(atRoot, CTX), "IF I finish reading a document in My files THEN move it to Archive");
 });
 
 test("page triggers × page actions × places", () => {
-  const base = newPipelineRule(DEFAULTS);
+  const base = newPageRule(DEFAULTS);
+  const withWhen = (r, patch) => ({ ...r, when: { ...r.when, ...patch } });
   assert.equal(sentenceText(base, CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
-  const rootOnly = { ...base, watch: [{ id: "", kind: "folder", name: "My files" }] };
-  assert.equal(sentenceText(rootOnly, CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
-  const tagged = { ...base, trigger: { type: "page_tagged", tag: "todo" }, action: { ...base.action, tasks: false } };
+  assert.equal(sentenceText(withWhen(base, { in: [{ id: "", kind: "folder", name: "My files" }] }), CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
+  const tagged = { ...withWhen(base, { trigger: { type: "page_tagged", tag: "todo" } }), actions: [{ type: "save_notes" }] };
   assert.equal(sentenceText(tagged, CTX), "IF I tag a page “todo” anywhere THEN just save notes");
-  const three = { ...tagged, action: { type: "pipeline" }, watch: [
-    { id: "notes-doc", kind: "document", name: "Notes" }, { id: "proj", kind: "folder", name: "Projects" }, { id: "x", kind: "folder", name: "Old" }] };
-  assert.equal(sentenceText(three, CTX), "IF I tag a page “todo” in Notes, Projects or Old THEN extract tasks to my inbox");
-  const onlyNb = { ...base, scope: "notebooks", watch: [{ id: "proj", kind: "folder" }] };
+  const three = { ...withWhen(tagged, { in: [
+    { id: "d-ideas", kind: "document", name: "Ideas" }, { id: "proj", kind: "folder", name: "Projects" }, { id: "x", kind: "folder", name: "Gone" }] }),
+  actions: [{ type: "extract_tasks" }] };
+  assert.equal(sentenceText(three, CTX), "IF I tag a page “todo” in Ideas, Projects or Gone THEN extract tasks to my inbox");
+  const onlyNb = { ...withWhen(base, { in: [{ id: "proj", kind: "folder" }] }), conditions: [{ type: "kind_is", kind: "notebooks" }] };
   assert.equal(sentenceText(onlyNb, CTX), "IF I write on a page in Projects (only notebooks) THEN extract tasks to my inbox");
-  const noTag = { ...base, trigger: { type: "page_tagged", tag: "" } };
+  const noTag = withWhen(base, { trigger: { type: "page_tagged", tag: "" } });
   assert.equal(sentenceText(noTag, CTX), "IF I tag a page “…” anywhere THEN extract tasks to my inbox");
+  const twoTags = { ...tagged, conditions: [{ type: "page_tag_is", tag: "urgent" }] };
+  assert.equal(sentenceText(twoTags, CTX), "IF I tag a page “todo” anywhere AND on pages tagged “urgent” THEN just save notes");
 });
 
 test("action cards fit only their trigger group, with a reason", () => {
@@ -121,34 +162,38 @@ test("action cards fit only their trigger group, with a reason", () => {
   assert.match(actionFit("move", "page_tagged").reason, /whole documents/);
 });
 
-test("conditionLock explains the PDF-only triggers", () => {
+test("conditionLock explains the PDF-only triggers with the card titles", () => {
   assert.match(conditionLock("finished_reading"), /^Fixed: “I finish reading” .* only PDFs & books/);
   assert.match(conditionLock("read_progress"), /PDFs & books/);
+  for (const c of TRIGGER_CARDS.filter((x) => x.pdfOnly)) assert.ok(conditionLock(c.type).includes(`“${triggerCard(c.type).title}”`), c.type);
   assert.equal(conditionLock("name_matches"), "");
   assert.equal(conditionLock("page_changed"), "");
 });
 
-test("chooseTrigger switches shape, keeps the other shape, locks and unlocks the PDF condition", () => {
+test("chooseTrigger switches subject, keeps the other draft, locks and unlocks the PDF condition", () => {
   const opts = { defaults: DEFAULTS, folders: FOLDERS };
-  let { rule, stash } = chooseTrigger(newPipelineRule(DEFAULTS), "page_tagged", null, opts);
-  assert.equal(rule.action.type, "pipeline");
-  assert.deepEqual(rule.trigger, { type: "page_tagged", tag: "" });
-  rule = { ...rule, trigger: { ...rule.trigger, tag: "todo" }, watch: [{ id: "proj", kind: "folder" }] };
+  let { rule, stash } = chooseTrigger(newPageRule(DEFAULTS), "page_tagged", null, opts);
+  assert.equal(rule.when.subject, "page");
+  assert.deepEqual(rule.when.trigger, { type: "page_tagged", tag: "" });
+  rule = { ...rule, when: { ...rule.when, trigger: { ...rule.when.trigger, tag: "todo" }, in: [{ id: "proj", kind: "folder" }] } };
   ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
-  assert.equal(rule.action.type, "move");
-  assert.equal(rule.scope, "pdf_epub");
-  assert.equal("watch" in rule, false);
-  ({ rule, stash } = chooseTrigger(rule, "name_matches", stash, opts));
-  assert.equal(rule.scope, "all", "leaving a PDF-only trigger drops the lock");
+  assert.equal(rule.when.subject, "document");
+  assert.equal(actionKey(rule), "move");
+  assert.equal(rule.conditions.some((c) => c.type === "kind_is"), false, "the PDF lock is implied, not a chip");
+  assert.equal(rule.when.in.length, 1);
+  ({ rule, stash } = chooseTrigger({ ...rule, conditions: [{ type: "tag_is", tag: "keep" }] }, "name_matches", stash, opts));
+  assert.deepEqual(rule.conditions, [{ type: "tag_is", tag: "keep" }], "leaving a PDF-only trigger keeps the other conditions");
+  ({ rule, stash } = chooseTrigger({ ...rule, conditions: [...rule.conditions, { type: "kind_is", kind: "notebooks" }] }, "read_progress", stash, opts));
+  assert.deepEqual(rule.conditions, [{ type: "tag_is", tag: "keep" }], "entering a PDF-only trigger drops a kind_is");
   ({ rule, stash } = chooseTrigger(rule, "page_tagged", stash, opts));
-  assert.equal(rule.trigger.tag, "todo", "the page draft comes back");
-  assert.deepEqual(rule.watch, [{ id: "proj", kind: "folder" }]);
+  assert.equal(rule.when.trigger.tag, "todo", "the page draft comes back");
+  assert.deepEqual(rule.when.in, [{ id: "proj", kind: "folder" }]);
 });
 
-test("chooseAction toggles tasks on page rules and ignores cards that do not fit", () => {
-  const p = newPipelineRule(DEFAULTS);
+test("chooseAction toggles the page action and ignores cards that do not fit", () => {
+  const p = newPageRule(DEFAULTS);
   const notes = chooseAction(p, "notes");
-  assert.equal(notes.action.tasks, false);
+  assert.deepEqual(notes.actions, [{ type: "save_notes", prompt: "DEFAULT", model: "m/default" }]);
   assert.equal(actionKey(notes), "notes");
   assert.equal(actionKey(chooseAction(notes, "extract")), "extract");
   assert.equal(chooseAction(p, "move"), p);
@@ -157,18 +202,20 @@ test("chooseAction toggles tasks on page rules and ignores cards that do not fit
   assert.equal(actionKey(m), "move");
 });
 
-test("taggedCount counts pages in the rule's places and condition", () => {
+test("taggedCount counts pages in the rule's places and kind", () => {
   const tags = [{ name: "todo", pages: 4, docs: [
-    { id: "notes-doc", folders: ["proj", ""], kind: "notebooks", pages: 2 },
+    { id: "d-ideas", folders: ["proj", ""], kind: "notebooks", pages: 2 },
     { id: "paper", folders: ["inb", ""], kind: "pdf_epub", pages: 1 },
     { id: "deep", folders: ["alpha", "proj", ""], kind: "notebooks", pages: 1 },
   ] }];
-  const r = { ...newPipelineRule(DEFAULTS), trigger: { type: "page_tagged", tag: " TODO " } };
+  const base = newPageRule(DEFAULTS);
+  const r = { ...base, when: { ...base.when, trigger: { type: "page_tagged", tag: " TODO " } } };
+  const inn = (places) => ({ ...r, when: { ...r.when, in: places } });
   assert.equal(taggedCount(tags, r), 4);
-  assert.equal(taggedCount(tags, { ...r, watch: [{ id: "proj", kind: "folder" }] }), 3);
-  assert.equal(taggedCount(tags, { ...r, watch: [{ id: "paper", kind: "document" }] }), 1);
-  assert.equal(taggedCount(tags, { ...r, scope: "notebooks" }), 3);
-  assert.equal(taggedCount(tags, { ...r, trigger: { type: "page_tagged", tag: "other" } }), 0);
+  assert.equal(taggedCount(tags, inn([{ id: "proj", kind: "folder" }])), 3);
+  assert.equal(taggedCount(tags, inn([{ id: "paper", kind: "document" }])), 1);
+  assert.equal(taggedCount(tags, { ...r, conditions: [{ type: "kind_is", kind: "notebooks" }] }), 3);
+  assert.equal(taggedCount(tags, { ...r, when: { ...r.when, trigger: { type: "page_tagged", tag: "other" } } }), 0);
   assert.equal(taggedCount([], r), 0);
 });
 
@@ -176,42 +223,47 @@ test("page tags normalise like document tags; suggestions keep one spelling", ()
   for (const v of ["To-Do", "to_do", "  to   do ", "TO--DO"]) assert.equal(normalizePageTag(v), "to do");
   assert.deepEqual(tagSuggestions([{ name: "to do" }, { name: "To-Do" }, { name: "asset mgmt" }, { name: "" }]), ["to do", "asset mgmt"]);
   const tags = [{ name: "to do", docs: [{ id: "d", folders: [""], kind: "notebooks", pages: 2 }] }];
-  assert.equal(taggedCount(tags, { ...newPipelineRule(DEFAULTS), trigger: { type: "page_tagged", tag: "To_Do" } }), 2);
+  const base = newPageRule(DEFAULTS);
+  assert.equal(taggedCount(tags, { ...base, when: { ...base.when, trigger: { type: "page_tagged", tag: "To_Do" } } }), 2);
 });
 
 test("a root entry among other places renders as anywhere and stays editable as stored", () => {
-  const r = { ...newPipelineRule(DEFAULTS), watch: [{ id: "", kind: "folder", name: "My files" }, { id: "notes-doc", kind: "document", name: "Notes" }] };
+  const base = newPageRule(DEFAULTS);
+  const places = [{ id: "", kind: "folder", name: "My files" }, { id: "d-ideas", kind: "document", name: "Ideas" }];
+  const r = { ...base, when: { ...base.when, in: places } };
   assert.equal(sentenceText(r, CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
-  assert.deepEqual(editableWatch(r), r.watch);
-  assert.deepEqual(editableWatch({ ...r, watch: [{ id: "", kind: "folder" }] }), []);
+  assert.deepEqual(editableIn(r), places);
+  assert.deepEqual(editableIn({ ...r, when: { ...r.when, in: [{ id: "", kind: "folder" }] } }), []);
   const tags = [{ name: "todo", docs: [{ id: "x", folders: ["other", ""], kind: "notebooks", pages: 3 }] }];
-  assert.equal(taggedCount(tags, { ...r, trigger: { type: "page_tagged", tag: "todo" } }), 3);
+  assert.equal(taggedCount(tags, { ...r, when: { ...r.when, trigger: { type: "page_tagged", tag: "todo" } } }), 3);
 });
 
 test("switching triggers and back keeps each trigger's parameters", () => {
   const opts = { defaults: DEFAULTS, folders: FOLDERS };
-  let rule = { ...MIKE_MOVE };
+  let rule = GOLDEN_MOVE;
   let stash = null;
+  const tr = () => rule.when.trigger;
+  const setTr = (patch) => ({ ...rule, when: { ...rule.when, trigger: { ...rule.when.trigger, ...patch } } });
   ({ rule, stash } = chooseTrigger(rule, "read_progress", stash, opts));
-  assert.equal(rule.trigger.percent, 80);
-  rule = { ...rule, trigger: { ...rule.trigger, percent: 55 } };
+  assert.equal(tr().percent, 80);
+  rule = setTr({ percent: 55 });
   ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
-  assert.deepEqual(rule.trigger, MIKE_MOVE.trigger, "minPages 2, settle 6, min age 0 kept");
+  assert.deepEqual(tr(), GOLDEN_MOVE.when.trigger, "minPages 2, settle 6 kept");
   ({ rule, stash } = chooseTrigger(rule, "read_progress", stash, opts));
-  assert.equal(rule.trigger.percent, 55);
+  assert.equal(tr().percent, 55);
   // the page tag survives page_changed and a trip through a document trigger
   ({ rule, stash } = chooseTrigger(rule, "page_tagged", stash, opts));
-  rule = { ...rule, trigger: { ...rule.trigger, tag: "todo" } };
+  rule = setTr({ tag: "todo" });
   ({ rule, stash } = chooseTrigger(rule, "page_changed", stash, opts));
   ({ rule, stash } = chooseTrigger(rule, "page_tagged", stash, opts));
-  assert.equal(rule.trigger.tag, "todo");
+  assert.equal(tr().tag, "todo");
   ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
-  assert.equal(rule.trigger.minPages, 2);
+  assert.equal(tr().minPages, 2);
   ({ rule, stash } = chooseTrigger(rule, "page_tagged", stash, opts));
-  assert.equal(rule.trigger.tag, "todo");
+  assert.equal(tr().tag, "todo");
 });
 
 test("ruleLabel: its own name, else its sentence", () => {
-  assert.equal(ruleLabel(MIKE_PIPELINE, CTX), "capture journal pages");
-  assert.equal(ruleLabel(MIKE_MOVE, CTX), "IF I finish reading a document in Papers To Read THEN move it to Read");
+  assert.equal(ruleLabel(GOLDEN_PAGE, CTX), "journal pages");
+  assert.equal(ruleLabel(GOLDEN_MOVE, CTX), "IF I finish reading a document in Reading List THEN move it to Done");
 });

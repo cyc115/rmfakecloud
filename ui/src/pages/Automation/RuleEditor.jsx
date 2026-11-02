@@ -3,10 +3,11 @@ import apiService from "../../services/api.service";
 import FolderPicker from "./FolderPicker";
 import PlacesPicker from "./PlacesPicker";
 import Sentence from "./Sentence";
+import { KIND_LABELS, conditionFit, conditionPhrase, conditionSpec, conditionsFor, makeCondition } from "./conditions";
 import {
-  ACTION_CARDS, CONDITIONS, NO_AUTOMATION_TAG, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
-  actionFit, actionKey, chooseAction, chooseTrigger, conditionLock, destinationName, forSave, isPageTrigger,
-  editableWatch, normalizePageTag, patternError, placesOf, sentenceText, tagSuggestions, taggedCount,
+  ACTION_CARDS, NO_AUTOMATION_TAG, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
+  actionFit, actionKey, actionOf, chooseAction, chooseTrigger, conditionLock, destinationName, editableIn, forSave, isPageRule,
+  moveTo, normalizePageTag, pageTagsOf, patternError, placesOf, plural, ruleLabel, sentenceText, sourceOf, tagSuggestions, taggedCount,
 } from "./rules";
 
 function num(v) {
@@ -14,46 +15,61 @@ function num(v) {
   return Number.isNaN(n) ? 0 : n;
 }
 
-function plural(n, word) {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
+const isNoAutomation = (tag) => (tag || "").trim().toLowerCase().replace(/[\s_-]+/g, " ") === NO_AUTOMATION_TAG;
+
+// conditionError the inline error for one condition, or null
+function conditionError(c) {
+  switch (c.type) {
+    case "tag_is":
+    case "tag_is_not":
+      if (!(c.tag || "").trim()) return `Enter a tag for “${conditionSpec(c.type).label}”.`;
+      if (isNoAutomation(c.tag)) return "“no automation” documents are always skipped; pick another tag.";
+      return null;
+    // a blank page tag matches nothing, so it blocks saving
+    case "page_tag_is": return normalizePageTag(c.tag) ? null : "Pick or type a page tag for “on pages tagged …”.";
+    case "name_matches": return patternError(c.pattern);
+    case "not_opened_for_days": return c.days < 1 ? "Days must be at least 1." : null;
+    case "min_age_days": return c.days < 0 ? "Minimum age cannot be negative." : null;
+    default: return null;
+  }
 }
 
 // Client side checks shown inline; the server validates again on save.
 function validate(rule, otherRules, folders) {
   const errors = [];
   const warnings = [];
-  const t = rule.trigger;
-  if (isPageTrigger(t.type)) {
-    if (t.type === PAGE_TAGGED && !normalizePageTag(t.tag)) errors.push("Pick or type a page tag.");
+  const add = (e) => e && !errors.includes(e) && errors.push(e);
+  const t = rule.when.trigger;
+  if (isPageRule(rule)) {
+    if (t.type === PAGE_TAGGED && !normalizePageTag(t.tag)) add("Pick or type a page tag.");
+    (rule.conditions || []).forEach((c) => add(conditionError(c)));
     return { errors, warnings };
   }
-  const cm = rule.destination.createIfMissing;
+  const src = sourceOf(rule);
+  const to = moveTo(rule);
+  const cm = to.createIfMissing;
   // the pickers list only folders outside the Trash
   const exists = (id) => (folders || []).some((f) => f.id === id);
-  if (!exists(rule.source.id)) errors.push("The folder in “In” is missing or in the Trash. Pick a folder.");
+  if (!exists(src.id)) add("The folder in “In” is missing or in the Trash. Pick a folder.");
   if (cm) {
-    if (!cm.name.trim()) errors.push("Name the new subfolder.");
-  } else if (!exists(rule.destination.id)) {
-    errors.push("Destination folder missing or in Trash. Pick a folder.");
-  } else if (rule.destination.id === rule.source.id) {
-    errors.push("Destination is the same as the source. Pick a different folder.");
+    if (!cm.name.trim()) add("Name the new subfolder.");
+  } else if (!exists(to.id)) {
+    add("Destination folder missing or in Trash. Pick a folder.");
+  } else if (to.id === src.id) {
+    add("Destination is the same as the source. Pick a different folder.");
   }
-  if (t.type === "name_matches") {
-    const e = patternError(t.pattern);
-    if (e) errors.push(e);
-  }
-  if (t.type === "tag_is" && !t.tag.trim()) errors.push("Enter a tag.");
-  if (t.type === "tag_is" && t.tag.trim().toLowerCase().replace(/[\s_-]+/g, " ") === NO_AUTOMATION_TAG) {
-    errors.push("“no automation” documents are always skipped; pick another tag.");
-  }
-  if (t.type === "finished_reading" && t.minPages < 1) errors.push("Minimum pages must be at least 1.");
-  if (t.type === "read_progress" && (t.percent < 1 || t.percent > 100)) errors.push("Percent must be between 1 and 100.");
+  if (t.type === "name_matches") add(patternError(t.pattern));
+  if (t.type === "tag_is" && !t.tag.trim()) add("Enter a tag.");
+  if (t.type === "tag_is" && isNoAutomation(t.tag)) add("“no automation” documents are always skipped; pick another tag.");
+  if (t.type === "finished_reading" && t.minPages < 1) add("Minimum pages must be at least 1.");
+  if (t.type === "read_progress" && (t.percent < 1 || t.percent > 100)) add("Percent must be between 1 and 100.");
   if (["not_opened_for_days", "not_modified_for_days", "age_since_created"].includes(t.type) && t.days < 1) {
-    errors.push("Days must be at least 1.");
+    add("Days must be at least 1.");
   }
+  (rule.conditions || []).forEach((c) => add(conditionError(c)));
   if (!cm) {
-    const loops = otherRules.filter((o) => o.enabled && o.source.id === rule.destination.id &&
-      !o.destination.createIfMissing && o.destination.id === rule.source.id);
+    const loops = otherRules.filter((o) => o.enabled && sourceOf(o).id === to.id &&
+      !moveTo(o).createIfMissing && moveTo(o).id === src.id);
     if (loops.length) {
       warnings.push(`Loops with rule ${loops.map((o) => o._number).join(", ")}. The 24 h cycle guard limits this to one round trip.`);
     }
@@ -73,14 +89,55 @@ function Card({ card, selected, disabled, onPick, badge }) {
   );
 }
 
+// ConditionChip one condition: its words, its parameter inputs, and ×
+function ConditionChip({ cond, index, focus, onChange, onRemove }) {
+  const phrase = conditionPhrase(cond);
+  const lbl = (field) => `condition ${index + 1} ${field}`;
+  const text = (field, placeholder, list) => (
+    <input type="text" value={cond[field] || ""} placeholder={placeholder} aria-label={lbl(field)} list={list} autoFocus={focus}
+      onChange={(e) => onChange({ [field]: e.target.value })} />
+  );
+  const days = (min) => (
+    <input type="number" min={min} value={cond.days} aria-label={lbl("days")} autoFocus={focus}
+      onChange={(e) => onChange({ days: num(e.target.value) })} />
+  );
+  let body;
+  switch (cond.type) {
+    case "kind_is": body = <span className="n">{phrase.replace(/^only /, "")}</span>; break;
+    case "tag_is": body = <><span className="n">tagged</span>{text("tag", "tag name")}</>; break;
+    case "tag_is_not": body = <><span className="n">not tagged</span>{text("tag", "tag name")}</>; break;
+    case "not_opened_for_days": body = <><span className="n">not opened for</span>{days(1)}<span className="n">days</span></>; break;
+    case "min_age_days": body = <><span className="n">at least</span>{days(0)}<span className="n">days old</span></>; break;
+    case "name_matches": body = <><span className="n">named like</span>{text("pattern", "glob or /regex/")}</>; break;
+    case "page_tag_is": body = <><span className="n">on pages tagged</span>{text("tag", "page tag", "ao-page-tags")}</>; break;
+    case "pinned_is":
+      body = (
+        <select className="ao-inline-sel" value={cond.pinned ? "1" : "0"} aria-label={lbl("pinned")}
+          onChange={(e) => onChange({ pinned: e.target.value === "1" })}>
+          <option value="1">pinned</option>
+          <option value="0">not pinned</option>
+        </select>
+      );
+      break;
+    default: body = <span className="n">{phrase}</span>;
+  }
+  return (
+    <span className={`ao-wchip ${cond.type === "kind_is" ? "" : "ao-cchip"}`}>
+      {body}
+      <button type="button" aria-label={`Remove condition “${phrase}”`} onClick={onRemove}>×</button>
+    </span>
+  );
+}
+
 export default function RuleEditor({ open, initial, isNew, folders, watchables, watchablesError, onRetryWatchables, pipelineDefaults, otherRules, onCancel, onSave, onDelete, onShowPreview }) {
   const [rule, setRule] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState(null);
+  // "Matches now": {moves} for a document rule, {pages, docs} for a page rule
   const [matches, setMatches] = useState(null);
   const [matchesError, setMatchesError] = useState(false);
   const [previewTry, setPreviewTry] = useState(0);
-  // page tags: fetched only while "I tag a page" is picked; null = not loaded
+  // page tags: fetched only while a page tag input is shown; null = not loaded
   const [pageTags, setPageTags] = useState(null);
   const [tagsError, setTagsError] = useState(false);
   const [tagsTry, setTagsTry] = useState(0);
@@ -88,8 +145,10 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   const [renaming, setRenaming] = useState(false);
   const [srcOpen, setSrcOpen] = useState(false);
   const [condOpen, setCondOpen] = useState(false);
+  // the index of the condition just added, whose input takes the focus
+  const [added, setAdded] = useState(-1);
   const lastPlan = useRef(null);
-  // the page and document drafts, kept while the trigger group is switched back and forth
+  // the page and document drafts, kept while the subject is switched back and forth
   const stash = useRef(null);
   const ctx = { folders, watchables };
 
@@ -104,6 +163,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     setRenaming(false);
     setSrcOpen(false);
     setCondOpen(false);
+    setAdded(-1);
     // no name = named by its sentence; saving keeps it "" (the list shows the sentence)
     setAutoName(!initial || !initial.name);
   }, [initial]);
@@ -118,11 +178,12 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   }, [open, onCancel]);
 
   const { errors, warnings } = rule ? validate(rule, otherRules, folders) : { errors: [], warnings: [] };
-  const page = rule ? isPageTrigger(rule.trigger.type) : false;
-  const tagged = !!rule && rule.trigger.type === PAGE_TAGGED;
+  const page = isPageRule(rule);
+  const tagged = !!rule && rule.when.trigger.type === PAGE_TAGGED;
+  const needTags = tagged || (!!rule && (rule.conditions || []).some((c) => c.type === "page_tag_is"));
 
   useEffect(() => {
-    if (!open || !tagged || pageTags !== null) return;
+    if (!open || !needTags || pageTags !== null) return;
     let cancelled = false;
     setTagsError(false);
     apiService.getPageTags()
@@ -131,11 +192,12 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     return () => {
       cancelled = true;
     };
-  }, [open, tagged, pageTags, tagsTry]);
+  }, [open, needTags, pageTags, tagsTry]);
 
-  // live "Matches now" for document rules, debounced against preview with the draft rule
+  // live "Matches now", debounced against preview with the draft rule: a
+  // document rule answers a Plan, a page rule a PagePreview
   useEffect(() => {
-    if (!open || !rule || errors.length || page) {
+    if (!open || !rule || errors.length) {
       setMatches(null);
       setMatchesError(false);
       return;
@@ -143,11 +205,11 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     let cancelled = false;
     const timer = setTimeout(() => {
       setMatchesError(false);
-      apiService.previewAutoOrganize({ rule })
-        .then((plan) => {
+      apiService.previewAutomation({ rule: forSave(rule) })
+        .then((res) => {
           if (cancelled) return;
-          lastPlan.current = plan;
-          setMatches(plan.moves.length);
+          lastPlan.current = res;
+          setMatches(res.subject === "page" ? { pages: res.pages, docs: res.docs.length } : { moves: res.moves.length });
         })
         .catch(() => {
           if (cancelled) return;
@@ -165,10 +227,15 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   if (!rule) return null;
 
   const update = (patch) => setRule((r) => ({ ...r, ...patch }));
-  const updateTrigger = (patch) => setRule((r) => ({ ...r, trigger: { ...r.trigger, ...patch } }));
-  const updateAction = (patch) => setRule((r) => ({ ...r, action: { ...r.action, ...patch } }));
-  const t = rule.trigger;
-  const cm = rule.destination.createIfMissing;
+  const updateWhen = (patch) => setRule((r) => ({ ...r, when: { ...r.when, ...patch } }));
+  const updateTrigger = (patch) => setRule((r) => ({ ...r, when: { ...r.when, trigger: { ...r.when.trigger, ...patch } } }));
+  // one action per rule (R-B2): edits go to actions[0]
+  const updateAction = (patch) => setRule((r) => ({ ...r, actions: [{ ...actionOf(r), ...patch }] }));
+  const setConditions = (fn) => setRule((r) => ({ ...r, conditions: fn(r.conditions || []) }));
+  const t = rule.when.trigger;
+  const conds = rule.conditions || [];
+  const to = moveTo(rule);
+  const cm = to.createIfMissing;
   const key = actionKey(rule);
   const lock = conditionLock(t.type);
   const autoText = sentenceText(rule, ctx);
@@ -177,6 +244,13 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     const next = chooseTrigger(rule, type, stash.current, { defaults: pipelineDefaults, folders });
     stash.current = next.stash;
     setRule(next.rule);
+    setCondOpen(false);
+    setAdded(-1);
+  };
+
+  const addCondition = (c) => {
+    setAdded(conds.length);
+    setConditions((cs) => [...cs, c]);
     setCondOpen(false);
   };
 
@@ -200,23 +274,27 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
       onChange={(e) => updateTrigger({ [field]: num(e.target.value) })} />
   );
   const tagNames = tagSuggestions(pageTags);
-  const srcName = rule.source.id === "" ? ROOT_NAME : ((folders || []).find((f) => f.id === rule.source.id) || {}).path || rule.source.name;
+  const src = sourceOf(rule);
+  const srcName = src.id === "" ? ROOT_NAME : ((folders || []).find((f) => f.id === src.id) || {}).path || src.name;
+  const minAgeFit = conditionFit("min_age_days", rule).ok;
+
+  const tagsStatus = needTags && (tagsError ? (
+    <span className="ao-hint bad" role="status">Couldn&apos;t load your page tags{" "}
+      <button type="button" className="ao-link" onClick={() => setTagsTry((n) => n + 1)}>(retry)</button></span>
+  ) : (
+    <span className="ao-hint">{pageTags === null ? "loading your tags…"
+      : tagNames.length ? `your tags: ${tagNames.slice(0, 4).join(", ")}${tagNames.length > 4 ? ", …" : ""}` : "no page tags on your pages yet"}</span>
+  ));
 
   const params = (
     <>
+      {needTags && <datalist id="ao-page-tags">{tagNames.map((n) => <option key={n} value={n} />)}</datalist>}
       {t.type === PAGE_TAGGED && (
         <div className="ao-frow">
           <span className="ao-lbl">Tag is</span>
           <input type="text" list="ao-page-tags" value={t.tag} placeholder="page tag" aria-label="page tag"
             onChange={(e) => updateTrigger({ tag: e.target.value })} />
-          <datalist id="ao-page-tags">{tagNames.map((n) => <option key={n} value={n} />)}</datalist>
-          {tagsError ? (
-            <span className="ao-hint bad" role="status">Couldn&apos;t load your page tags{" "}
-              <button type="button" className="ao-link" onClick={() => setTagsTry((n) => n + 1)}>(retry)</button></span>
-          ) : (
-            <span className="ao-hint">{pageTags === null ? "loading your tags…"
-              : tagNames.length ? `your tags: ${tagNames.slice(0, 4).join(", ")}${tagNames.length > 4 ? ", …" : ""}` : "no page tags on your pages yet"}</span>
-          )}
+          {tagsStatus}
         </div>
       )}
       {t.type === "finished_reading" && (
@@ -231,11 +309,12 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
       {t.type === "not_opened_for_days" && (
         <div className="ao-frow">
           for {numInput("days", 1)} days
-          <label className="chk">
-            <input type="checkbox" checked={t.minAgeEnabled} onChange={(e) => updateTrigger({ minAgeEnabled: e.target.checked })} />
-            and is at least {numInput("minAgeDays", 0)} days old
-          </label>
-          <span className="ao-hint">Recommended on: upload-only documents have never been opened and would match immediately.</span>
+          {minAgeFit && (
+            <>
+              <button type="button" className="ao-link" onClick={() => addCondition(makeCondition("min_age_days"))}>+ and at least 7 days old</button>
+              <span className="ao-hint">Recommended: upload-only documents have never been opened and would match immediately.</span>
+            </>
+          )}
         </div>
       )}
       {t.type === "not_modified_for_days" && (
@@ -272,7 +351,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
 
   const places = page ? (
     <>
-      <PlacesPicker items={watchables} selected={editableWatch(rule)} onChange={(watch) => update({ watch })} />
+      <PlacesPicker items={watchables} selected={editableIn(rule)} onChange={(places) => updateWhen({ in: places })} />
       {watchablesError && (
         <div className="ao-hint bad" role="status">Couldn&apos;t load your folders and notebooks{" "}
           <button type="button" className="ao-link" onClick={onRetryWatchables}>(retry)</button></div>
@@ -289,64 +368,71 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
         <span className="ao-hint">Document rules work on exactly one folder.</span>
       </div>
       {srcOpen && (
-        <FolderPicker label="source folder" folders={folders} selected={rule.source.id}
+        <FolderPicker label="source folder" folders={folders} selected={src.id}
           onSelect={(f) => {
-            update({ source: { id: f.id, name: f.name } });
+            updateWhen({ in: [{ id: f.id, kind: "folder", name: f.name }] });
             setSrcOpen(false);
           }} />
       )}
     </div>
   );
 
-  const cond = CONDITIONS.find((c) => c.scope === rule.scope);
-  const condition = (
-    <div className="ao-frow ao-cond">
-      {lock ? (
-        <>
+  // the conditions "+ add a condition" offers now; kind_is offers both kinds
+  const offered = conditionsFor(rule.when.subject).filter((type) => conditionFit(type, rule).ok);
+  const choices = offered.flatMap((type) => (type === "kind_is"
+    ? ["notebooks", "pdf_epub"].map((kind) => ({ key: `kind_is:${kind}`, label: KIND_LABELS[kind], make: () => ({ type, kind }) }))
+    : [{ key: type, label: conditionSpec(type).label, make: () => makeCondition(type) }]));
+  const conditions = (
+    <div className="ao-conds">
+      {lock && (
+        <div className="ao-frow ao-cond">
           <span className="ao-chip tag">only PDFs &amp; books</span>
           <span className="ao-hint">{lock}</span>
-        </>
-      ) : cond ? (
-        <>
-          <span className="ao-lbl">Only</span>
-          <span className="ao-wchip">
-            <span className="n">{cond.label.replace(/^only /, "")}</span>
-            <button type="button" aria-label="Remove condition" onClick={() => update({ scope: "all" })}>×</button>
-          </span>
-        </>
-      ) : condOpen ? (
-        <>
+        </div>
+      )}
+      {conds.map((c, i) => (c.type === "kind_is" && (lock || !conditionPhrase(c)) ? null : (
+        <div className="ao-frow ao-cond" key={i}>
+          <span className="ao-lbl">{c.type === "kind_is" ? "Only" : "And"}</span>
+          <ConditionChip cond={c} index={i} focus={i === added}
+            onChange={(patch) => setConditions((cs) => cs.map((x, j) => (j === i ? { ...x, ...patch } : x)))}
+            onRemove={() => {
+              setAdded(-1);
+              setConditions((cs) => cs.filter((_, j) => j !== i));
+            }} />
+          {c.type === "page_tag_is" && !tagged && tagsStatus}
+        </div>
+      )))}
+      {choices.length > 0 && (condOpen ? (
+        <div className="ao-frow ao-cond">
           <span className="ao-lbl">Add</span>
-          {CONDITIONS.map((c) => (
-            <button type="button" key={c.scope} className="ao-btn sm" onClick={() => {
-              update({ scope: c.scope });
-              setCondOpen(false);
-            }}>{c.label}</button>
+          {choices.map((ch) => (
+            <button type="button" key={ch.key} className="ao-btn sm" onClick={() => addCondition(ch.make())}>{ch.label}</button>
           ))}
           <button type="button" className="ao-link" onClick={() => setCondOpen(false)}>cancel</button>
-        </>
+        </div>
       ) : (
-        <>
+        <div className="ao-frow ao-cond">
           <button type="button" className="ao-link" onClick={() => setCondOpen(true)}>+ add a condition</button>
-          <span className="ao-hint">only notebooks · only PDFs &amp; books</span>
-        </>
-      )}
+          <span className="ao-hint">{choices.slice(0, 3).map((ch) => ch.label).join(" · ")}{choices.length > 3 ? " · …" : ""}</span>
+        </div>
+      ))}
     </div>
   );
 
+  const action = actionOf(rule);
   const prompt = (
     <details className="ao-details">
       <summary>Customize what to extract (prompt)</summary>
-      <textarea className="ao-prompt" rows={8} value={rule.action.prompt || ""} aria-label="prompt"
+      <textarea className="ao-prompt" rows={8} value={action.prompt || ""} aria-label="prompt"
         onChange={(e) => updateAction({ prompt: e.target.value })} />
       <div className="ao-prow">
-        <button type="button" className="ao-btn link sm" disabled={rule.action.prompt === (pipelineDefaults && pipelineDefaults.prompt)}
+        <button type="button" className="ao-btn link sm" disabled={action.prompt === (pipelineDefaults && pipelineDefaults.prompt)}
           onClick={() => updateAction({ prompt: (pipelineDefaults && pipelineDefaults.prompt) || "" })}>Reset prompt</button>
         <span className="ao-hint">Edits apply to new pages only.</span>
       </div>
       <div className="ao-frow">
         <span className="ao-lbl">Model</span>
-        <input type="text" className="ao-namef" value={rule.action.model || ""} aria-label="model"
+        <input type="text" className="ao-namef" value={action.model || ""} aria-label="model"
           onChange={(e) => updateAction({ model: e.target.value })} />
       </div>
     </details>
@@ -354,32 +440,41 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
 
   const disabledActions = ACTION_CARDS.filter((a) => !actionFit(a.key, t.type).ok);
 
+  const matchesNow = matchesError ? (
+    <span className="ao-hint bad" role="status">Couldn&apos;t load the preview{" "}
+      <button type="button" className="ao-link" onClick={() => setPreviewTry((n) => n + 1)}>(retry)</button></span>
+  ) : (
+    <span className="n">{matches === null ? "…"
+      : page ? `${plural(matches.pages, "page")} in ${plural(matches.docs, "document")}` : plural(matches.moves, "document")}</span>
+  );
+  const show = (
+    <button className="ao-btn link sm" disabled={matches === null}
+      onClick={() => lastPlan.current && onShowPreview(lastPlan.current, ruleLabel(rule, ctx))}>▸ show</button>
+  );
   let preview;
   if (page) {
-    const n = tagged && normalizePageTag(t.tag) && pageTags !== null ? taggedCount(pageTags, rule) : null;
+    // the page-tag list counts at once; the page preview when it cannot (null)
+    const tags = pageTagsOf(rule);
+    let n = tags.length && pageTags !== null ? taggedCount(pageTags, rule) : null;
+    if (n === null && tags.length && matches) n = matches.pages;
     preview = (
-      <div className="ao-matches">
-        <span className="n">Applies from your next change</span>
+      <>
+        <div className="ao-matches">
+          Matches now: {matchesNow} {show}
+          <span className="ao-hint">Applies from your next change.</span>
+        </div>
         {n !== null && (
-          <span className="ao-hint">
-            {`${plural(n, "page")} ${n === 1 ? "is" : "are"} tagged “${normalizePageTag(t.tag)}” ${placesOf(rule).length ? "there" : ""} now`.replace("  ", " ")}
+          <div className="ao-hint">
+            {`${plural(n, "page")} ${n === 1 ? "is" : "are"} tagged ${tags.map((x) => `“${x}”`).join(" and ")}${placesOf(rule).length ? " there" : ""} now`}
             {n > 0 && (key === "extract" ? " — saved as notes on the next check; tasks come from pages you tag after saving." : " — saved as notes on the next check.")}
-          </span>
+          </div>
         )}
-      </div>
+      </>
     );
   } else {
     preview = (
       <div className="ao-matches">
-        Matches now:{" "}
-        {matchesError ? (
-          <span className="ao-hint bad" role="status">Couldn&apos;t load the preview{" "}
-            <button type="button" className="ao-link" onClick={() => setPreviewTry((n) => n + 1)}>(retry)</button></span>
-        ) : (
-          <span className="n">{matches === null ? "…" : plural(matches, "document")}</span>
-        )}
-        <button className="ao-btn link sm" disabled={matches === null}
-          onClick={() => lastPlan.current && onShowPreview(lastPlan.current)}>▸ show</button>
+        Matches now: {matchesNow} {show}
         <span className="ao-hint">→ {destinationName(rule, ctx)}</span>
       </div>
     );
@@ -412,7 +507,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
               <div className="ao-fill">
                 {params}
                 {places}
-                {condition}
+                {conditions}
                 <div className="ao-fixed">
                   <span className="ao-chip tag">{NO_AUTOMATION_TAG}</span> Documents carrying this tag are always skipped, by every rule.
                 </div>
@@ -439,10 +534,10 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
                 {key === "move" && (
                   <>
                     <div className="ao-frow"><span className="ao-lbl">Move it to</span><b>{destinationName(rule, ctx)}</b></div>
-                    <FolderPicker label="destination folder" folders={folders} selected={cm ? null : rule.destination.id}
-                      onSelect={(f) => update({ destination: { id: f.id, name: f.name } })}
+                    <FolderPicker label="destination folder" folders={folders} selected={cm ? null : to.id}
+                      onSelect={(f) => updateAction({ to: { id: f.id, name: f.name } })}
                       extra={
-                        <li className={`new ${cm ? "sel" : ""}`} onClick={() => update({ destination: { id: "", name: "", createIfMissing: cm || { name: "", parent: "source" } } })}>
+                        <li className={`new ${cm ? "sel" : ""}`} onClick={() => updateAction({ to: { id: "", name: "", createIfMissing: cm || { name: "", parent: "source" } } })}>
                           + New subfolder of source
                         </li>
                       } />
@@ -450,7 +545,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
                       <div className="ao-newname">
                         <span>Named</span>
                         <input type="text" placeholder="e.g. Read" value={cm.name} aria-label="new folder name" autoFocus
-                          onChange={(e) => update({ destination: { id: "", name: "", createIfMissing: { ...cm, name: e.target.value } } })} />
+                          onChange={(e) => updateAction({ to: { id: "", name: "", createIfMissing: { ...cm, name: e.target.value } } })} />
                         <span className="ao-hint">Created on the first live run if no folder of that name exists under {srcName}.</span>
                       </div>
                     )}
@@ -462,7 +557,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
                 {key === "notes" && (
                   <div className="ao-frow"><span className="ao-hint">Transcribes each page into its note in personal/handwritten/. No tasks are extracted.</span></div>
                 )}
-                {isPipelineKey(key) && prompt}
+                {isPageKey(key) && prompt}
               </div>
             </div>
           </div>
@@ -506,6 +601,6 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   );
 }
 
-function isPipelineKey(key) {
+function isPageKey(key) {
   return key === "extract" || key === "notes";
 }

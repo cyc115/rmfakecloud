@@ -5,8 +5,8 @@ import Spinner from "../../components/Spinner";
 import RuleEditor from "./RuleEditor";
 import Sentence from "./Sentence";
 import {
-  INTERVALS, SKIP_CHIP, SKIP_LABELS, exampleRule, fmtAgo, fmtTime, isPipeline, missingFor, newPipelineRule,
-  pendingText, ruleLabel, runCounts, sentenceText, withDisplayNames,
+  INTERVALS, SKIP_CHIP, SKIP_LABELS, exampleRule, fmtAgo, fmtTime, isPageRule, missingFor, newPageRule,
+  pendingText, plural, ruleLabel, runCounts, sentenceText, sourceOf, withDisplayNames,
 } from "./rules";
 import "./Automation.scss";
 
@@ -41,7 +41,7 @@ function headerStatus(settings, status, pipeline, live) {
 // ruleStatus the line under a rule: last run, what it did, errors
 function ruleStatus({ rule, view, moves, pipeline, sweep, missing, sharesSource }) {
   const out = [];
-  if (isPipeline(rule)) {
+  if (isPageRule(rule)) {
     if (!rule.enabled) out.push({ text: "paused" });
     else if (!pipeline || !pipeline.enabled) out.push({ text: "page watch is off on this server" });
     else if (pipeline.lastError) out.push({ cls: "bad", text: `last check failed: ${pipeline.lastError}` });
@@ -50,7 +50,7 @@ function ruleStatus({ rule, view, moves, pipeline, sweep, missing, sharesSource 
       out.push({ text: runCounts(pipeline.lastRun) });
     } else out.push({ text: "not run yet" });
     for (const m of missing) {
-      const w = (rule.watch || []).find((x) => x.id === m.watchId) || {};
+      const w = (rule.when.in || []).find((x) => x.id === m.watchId) || {};
       out.push({ cls: "warn", text: `${w.name || m.name || m.watchId}: ${m.inTrash ? "watched item is in the Trash" : "watched item no longer exists"}` });
     }
     return out;
@@ -141,7 +141,7 @@ function RuleRow({ rule, index, count, ctx, status, busy, onUndo, onToggle, onEd
       <Kebab items={[
         { label: "Edit", onClick: onEdit },
         { label: "Duplicate", onClick: onDuplicate },
-        { label: "Preview this rule", onClick: onPreview, disabled: isPipeline(rule) },
+        { label: "Preview this rule", onClick: onPreview },
         "-",
         { label: "Move up", onClick: () => onMove(-1), disabled: index === 0 },
         { label: "Move down", onClick: () => onMove(1), disabled: index === count - 1 },
@@ -152,10 +152,36 @@ function RuleRow({ rule, index, count, ctx, status, busy, onUndo, onToggle, onEd
   );
 }
 
-function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, busy, labelOf }) {
+// PagePreviewPane what one page rule covers now (P5): its documents and
+// pages. Pending page changes are not shown; nothing here moves or sends.
+function PagePreviewPane({ preview, label }) {
+  return (
+    <>
+      <div className="ao-grp"><b>{label}</b><span className="ao-hint">{plural(preview.pages, "page")} in {plural(preview.docs.length, "document")}</span></div>
+      {preview.docs.map((d) => (
+        <div className="ao-row" key={d.id}>
+          <div><div className="doc">{d.name}</div><div className="d">{d.path}</div></div>
+          <div className="to">{plural(d.pages, "page")}</div>
+        </div>
+      ))}
+      {preview.docs.length === 0 && <div className="ao-empty-pane">No pages match this rule now.</div>}
+      {(preview.missingWatches || []).map((m) => (
+        <div className="ao-grp" key={`${m.kind}:${m.watchId}`}>
+          <span className="ao-hint warn">{m.name || m.watchId}: {m.inTrash ? "watched item is in the Trash" : "watched item no longer exists"}</span>
+        </div>
+      ))}
+      <div className="ao-apply">
+        <span className="ao-hint">Page rules act on new changes at the next page check. This list is what the rule covers now.</span>
+      </div>
+    </>
+  );
+}
+
+function PreviewPane({ plan, planLabel, partial, live, onApply, onPreviewAll, onReapply, busy, labelOf }) {
   if (!plan) {
     return <div className="ao-empty-pane">Press <b>Preview</b> to see what the next check would do. Nothing moves.</div>;
   }
+  if (plan.subject === "page") return <PagePreviewPane preview={plan} label={planLabel} />;
   const skipped = plan.skipped.filter((s) => s.reason !== "claimed");
   const claimed = plan.skipped.filter((s) => s.reason === "claimed");
   const groups = plan.rules.filter((r) => r.enabled || plan.rules.length === 1);
@@ -308,6 +334,8 @@ export default function Automation() {
   const [plan, setPlan] = useState(null);
   // partial: the plan covers one rule or an unsaved draft, not the whole sweep
   const [planPartial, setPlanPartial] = useState(false);
+  // planLabel the rule a page preview is about (a PagePreview names no rule)
+  const [planLabel, setPlanLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [drawer, setDrawer] = useState({ open: false, rule: null, index: -1 });
   const [pipeline, setPipeline] = useState(null);
@@ -333,7 +361,7 @@ export default function Automation() {
   const refresh = useCallback(async () => {
     try {
       const [c, v, l] = await Promise.all([
-        apiService.getAutoOrganize(), apiService.getAutoOrganizeState(), apiService.getAutoOrganizeLog(),
+        apiService.getAutomation(), apiService.getAutomationState(), apiService.getAutomationLog(),
       ]);
       configRef.current = c;
       setConfig(c);
@@ -352,8 +380,8 @@ export default function Automation() {
   useEffect(() => {
     refresh();
     const timer = setInterval(() => {
-      apiService.getAutoOrganizeState().then(setView).catch(() => {});
-      apiService.getAutoOrganizeLog().then(setLog).catch(() => {});
+      apiService.getAutomationState().then(setView).catch(() => {});
+      apiService.getAutomationLog().then(setLog).catch(() => {});
       refreshPipeline();
     }, 30000);
     return () => clearInterval(timer);
@@ -374,10 +402,10 @@ export default function Automation() {
     const run = async () => {
       const cur = configRef.current;
       try {
-        const saved = await apiService.saveAutoOrganize({ ...update(cur), revision: cur.revision });
+        const saved = await apiService.saveAutomation({ ...update(cur), revision: cur.revision });
         configRef.current = saved;
         setConfig(saved);
-        apiService.getAutoOrganizeState().then(setView).catch(() => {});
+        apiService.getAutomationState().then(setView).catch(() => {});
         return saved;
       } catch (e) {
         if (e.status === 409) {
@@ -397,12 +425,14 @@ export default function Automation() {
   // updateRules: (latest rules) => next rules
   const setRules = (updateRules) => saveQuiet((c) => ({ ...c, rules: updateRules(c.rules) }));
 
-  // request: {} for all rules, {ruleId} for one, {rule} for a draft (a disabled rule previews as a draft)
-  const runPreview = async (request) => {
+  // request: {} for all rules, {ruleId} for one, {rule} for a draft (a
+  // disabled document rule previews as a draft); label names a page rule
+  const runPreview = async (request, label) => {
     setBusy(true);
     try {
-      const p = await apiService.previewAutoOrganize(request || {});
+      const p = await apiService.previewAutomation(request || {});
       setPlan(p);
+      setPlanLabel(label || "");
       setPlanPartial(!!(request && (request.ruleId || request.rule)));
       setTab("preview");
       activityRef.current && activityRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -414,13 +444,13 @@ export default function Automation() {
   };
 
   const rules = config.rules;
-  const hasMoveRules = rules.some((r) => r.enabled && !isPipeline(r));
-  const hasPageRules = rules.some((r) => r.enabled && isPipeline(r));
+  const hasMoveRules = rules.some((r) => r.enabled && !isPageRule(r));
+  const hasPageRules = rules.some((r) => r.enabled && isPageRule(r));
 
   // sweep: the document rules; false when the user cancelled the live confirm
   const sweep = async () => {
     if (live) {
-      const p = await apiService.previewAutoOrganize({});
+      const p = await apiService.previewAutomation({});
       if (p.moves.length === 0) {
         toast.info("Nothing to move right now.");
         setPlan(p);
@@ -431,7 +461,7 @@ export default function Automation() {
       // eslint-disable-next-line no-alert
       if (!window.confirm(`This will move ${p.moves.length} document${p.moves.length === 1 ? "" : "s"}. Continue?`)) return false;
     }
-    const res = await apiService.runAutoOrganizeNow();
+    const res = await apiService.runAutomationNow();
     const r = res.run;
     if (r.mode === "LIVE") toast.success(`Documents checked: ${r.moved} moved, ${r.errors} errors`);
     else toast.info(`Dry run: ${r.planned} would move`);
@@ -470,7 +500,7 @@ export default function Automation() {
   const undo = async (m) => {
     setBusy(true);
     try {
-      await apiService.undoAutoOrganizeMove(m.id);
+      await apiService.undoAutomationMove(m.id);
       toast.success(`Moved “${m.docName}” back to ${m.fromName}`);
       await refresh();
     } catch (e) {
@@ -482,7 +512,7 @@ export default function Automation() {
   const reapply = async (holdId) => {
     setBusy(true);
     try {
-      const entry = await apiService.reapplyAutoOrganizeHold(holdId);
+      const entry = await apiService.reapplyAutomationHold(holdId);
       toast.success(`Moved “${entry.docName}” to ${entry.toName}`);
       setPlan(null);
       await refresh();
@@ -499,8 +529,8 @@ export default function Automation() {
   };
   const closeDrawer = () => setDrawer((d) => ({ ...d, open: false }));
   const saveRule = async (rule) => {
-    // page rules keep source and destination as they are (unused by them)
-    const named = isPipeline(rule) ? rule : withDisplayNames(rule, folders);
+    // page rules keep their place names as they are (no folder lookup)
+    const named = isPageRule(rule) ? rule : withDisplayNames(rule, folders);
     const editing = drawer.index >= 0 && named.id;
     try {
       await save((c) => {
@@ -550,9 +580,9 @@ export default function Automation() {
       reorder(fromId, 0, rules[to].id);
     },
   };
-  const sharesSource = (rule) => !isPipeline(rule) && rule.enabled &&
-    rules.filter((r) => r.enabled && !isPipeline(r) && r.source.id === rule.source.id).length > 1;
-  const otherRules = rules.map((r, i) => ({ ...r, _number: i + 1 })).filter((r, i) => i !== drawer.index && !isPipeline(r));
+  const sharesSource = (rule) => !isPageRule(rule) && rule.enabled &&
+    rules.filter((r) => r.enabled && !isPageRule(r) && sourceOf(r).id === sourceOf(rule).id).length > 1;
+  const otherRules = rules.map((r, i) => ({ ...r, _number: i + 1 })).filter((r, i) => i !== drawer.index && !isPageRule(r));
   const example = exampleRule(folders);
   // labelOf a rule's display name in Preview and Moves: its name, else its sentence
   const labelOf = (ruleId, fallback) => {
@@ -569,7 +599,7 @@ export default function Automation() {
               <h1>Automation</h1>
               <span className="ao-spacer" />
               <span className={`ao-status ${pill.cls}`}><span className="dot" />{pill.text}</span>
-              <button className="ao-btn primary" onClick={() => openDrawer(newPipelineRule(pipeline && pipeline.defaults), -1)}>+ New</button>
+              <button className="ao-btn primary" onClick={() => openDrawer(newPageRule(pipeline && pipeline.defaults), -1)}>+ New</button>
             </div>
             <div className="ao-hdr-ctl">
               <label className="ao-sw master" title={config.settings.enabled ? "Automation on" : "Automation off"}>
@@ -633,7 +663,9 @@ export default function Automation() {
                     return next;
                   });
                 }}
-                onPreview={() => runPreview(r.enabled ? { ruleId: r.id } : { rule: r })}
+                onPreview={() => (isPageRule(r)
+                  ? runPreview({ ruleId: r.id }, ruleLabel(r, ctx))
+                  : runPreview(r.enabled ? { ruleId: r.id } : { rule: r }))}
                 onMove={(d) => reorder(r.id, d)}
                 onDelete={() => deleteRule(r.id)} />
             ))}
@@ -651,12 +683,12 @@ export default function Automation() {
               <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
             ))}
             <span className="right">
-              {tab === "preview" && plan && <span className="ao-hint">Preview run {fmtTime(plan.at)} · {plan.scanned} scanned</span>}
+              {tab === "preview" && plan && plan.subject !== "page" && <span className="ao-hint">Preview run {fmtTime(plan.at)} · {plan.scanned} scanned</span>}
               <button className="ao-btn sm" disabled={busy} onClick={() => (tab === "preview" ? runPreview() : refresh())}>Refresh</button>
             </span>
           </div>
           <div className="ao-pane">
-            {tab === "preview" && <PreviewPane plan={plan} partial={planPartial} live={live} busy={busy} onApply={() => runNow(true)} labelOf={labelOf}
+            {tab === "preview" && <PreviewPane plan={plan} planLabel={planLabel} partial={planPartial} live={live} busy={busy} onApply={() => runNow(true)} labelOf={labelOf}
               onPreviewAll={() => runPreview()} onReapply={reapply} />}
             {tab === "moves" && <MovesPane moves={log.moves} busy={busy} onUndo={undo} onReapply={reapply} labelOf={labelOf} />}
             {tab === "runs" && <RunsPane runs={log.runs} />}
@@ -669,8 +701,9 @@ export default function Automation() {
         watchables={watchables} watchablesError={watchablesError} onRetryWatchables={loadWatchables} pipelineDefaults={pipeline && pipeline.defaults}
         otherRules={otherRules} onCancel={closeDrawer} onSave={saveRule}
         onDelete={() => deleteRule(drawer.rule && drawer.rule.id)}
-        onShowPreview={(p) => {
+        onShowPreview={(p, label) => {
           setPlan(p);
+          setPlanLabel(label || "");
           setPlanPartial(true);
           setTab("preview");
           closeDrawer();
