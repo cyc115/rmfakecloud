@@ -7,7 +7,7 @@ import { KIND_LABELS, conditionFit, conditionPhrase, conditionSpec, conditionsFo
 import {
   ACTION_CARDS, NO_AUTOMATION_TAG, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
   actionFit, actionKey, actionOf, chooseAction, chooseTrigger, conditionLock, destinationName, editableIn, forSave, isPageRule,
-  moveTo, normalizePageTag, pageTagsOf, patternError, placesOf, plural, ruleLabel, sentenceText, sourceOf, tagSuggestions, taggedCount,
+  moveTo, normalizePageTag, pageTagsOf, patternError, placesOf, plural, ruleLabel, sentenceText, sourceOf, tagSuggestions, taggedNow,
 } from "./rules";
 
 function num(v) {
@@ -195,7 +195,10 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   }, [open, needTags, pageTags, tagsTry]);
 
   // live "Matches now", debounced against preview with the draft rule: a
-  // document rule answers a Plan, a page rule a PagePreview
+  // document rule answers a Plan, a page rule a PagePreview. Keyed on what
+  // the preview reads: places, trigger and conditions, plus the destination of
+  // a document rule (a page rule's prompt and model never change it)
+  const previewKey = rule ? JSON.stringify([rule.when, rule.conditions, page ? null : moveTo(rule)]) : "";
   useEffect(() => {
     if (!open || !rule || errors.length) {
       setMatches(null);
@@ -222,7 +225,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, JSON.stringify(rule), errors.length, previewTry]);
+  }, [open, previewKey, errors.length, previewTry]);
 
   if (!rule) return null;
 
@@ -455,8 +458,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   if (page) {
     // the page-tag list counts at once; the page preview when it cannot (null)
     const tags = pageTagsOf(rule);
-    let n = tags.length && pageTags !== null ? taggedCount(pageTags, rule) : null;
-    if (n === null && tags.length && matches) n = matches.pages;
+    const n = taggedNow(pageTags, rule, matches);
     preview = (
       <>
         <div className="ao-matches">

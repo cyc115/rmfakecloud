@@ -281,32 +281,32 @@ export function pageTagsOf(rule) {
 // the conditions taggedCount can test from GET page-tags
 const COUNTABLE = new Set(["kind_is", "page_tag_is"]);
 
-// taggedCount pages carrying every tag of the rule's page-tag set, inside its
-// places and kind, from GET page-tags ({name, docs: [{id, folders, kind,
-// pages, pageIds?}]}). null when the list cannot say: no tag set, a condition
-// it cannot test (tag_is, tag_is_not, name_matches), or two or more tags
-// without page ids (the overlap of per-document counts is unknown).
+// taggedCount pages carrying the rule's one page tag, inside its places and
+// kind, from GET page-tags ({name, docs: [{id, folders, kind, pages}]}).
+// null when the list cannot say: no tag set, two or more tags (it has
+// per-document counts only, so the overlap is unknown), or a condition it
+// cannot test (tag_is, tag_is_not, name_matches).
 export function taggedCount(tags, rule) {
   const want = pageTagsOf(rule);
-  if (!want.length || conditionsOf(rule).some((c) => !COUNTABLE.has(c.type))) return null;
-  const lists = want.map((n) => (tags || []).find((x) => x.name === n));
-  if (lists.some((l) => !l)) return 0;
+  if (want.length !== 1 || conditionsOf(rule).some((c) => !COUNTABLE.has(c.type))) return null;
+  const hit = (tags || []).find((x) => x.name === want[0]);
+  if (!hit) return 0;
   const kind = kindOf(rule);
   const places = placesOf(rule);
-  const inRule = (d) => (!kind || d.kind === kind) &&
-    (places.length === 0 || places.some((w) => (w.kind === "document" ? w.id === d.id : d.folders.includes(w.id))));
-  let n = 0;
-  for (const d of lists[0].docs.filter(inRule)) {
-    if (lists.length === 1) {
-      n += d.pages;
-      continue;
-    }
-    const same = lists.map((l) => l.docs.find((x) => x.id === d.id));
-    if (same.some((x) => !x)) continue;
-    if (same.some((x) => !Array.isArray(x.pageIds))) return null;
-    n += same[0].pageIds.filter((p) => same.every((x) => x.pageIds.includes(p))).length;
-  }
-  return n;
+  return hit.docs.filter((d) => (!kind || d.kind === kind) &&
+    (places.length === 0 || places.some((w) => (w.kind === "document" ? w.id === d.id : d.folders.includes(w.id)))))
+    .reduce((n, d) => n + d.pages, 0);
+}
+
+// taggedNow the editor's "N pages are tagged … now" count: taggedCount from
+// the page-tag list (null while it is not loaded), else the PagePreview's
+// pages (preview: {pages} or null); null when the rule has no page tag or
+// neither source can say
+export function taggedNow(tags, rule, preview) {
+  if (!pageTagsOf(rule).length) return null;
+  const n = tags ? taggedCount(tags, rule) : null;
+  if (n !== null) return n;
+  return preview && typeof preview.pages === "number" ? preview.pages : null;
 }
 
 export function newRule(folders) {
@@ -339,6 +339,7 @@ export function newPageRule(defaults) {
 }
 
 const withoutKind = (conds) => conds.filter((c) => c.type !== "kind_is");
+const NOT_OPENED = "not_opened_for_days";
 
 // chooseTrigger the rule after an IF card is picked. A page trigger makes a
 // page rule, a document trigger a document rule; the other subject's draft
@@ -348,7 +349,11 @@ const withoutKind = (conds) => conds.filter((c) => c.type !== "kind_is");
 // trigger implies kind_is pdf_epub (forSave adds it), so entering or leaving
 // one drops any kind_is. The first pick of "It sits unopened" adds "at least
 // 7 days old" (Option A's default min age: upload-only documents have never
-// been opened and would match at once); the chip can be removed.
+// been opened and would match at once). That chip is the user's to keep or
+// remove: leaving "It sits unopened" drops it only while it is untouched (the
+// same object, days 7; stash.minAge tracks it), since a reading rule has no
+// min age (P1). Picking "It sits unopened" again then adds it again; a chip
+// the user removed stays removed.
 // Returns { rule, stash }; inputs are not mutated.
 export function chooseTrigger(rule, type, stash, { defaults, folders } = {}) {
   const cur = rule.when.trigger;
@@ -365,8 +370,18 @@ export function chooseTrigger(rule, type, stash, { defaults, folders } = {}) {
     if (!next.triggers[from.type]) next.triggers[from.type] = from;
     let conditions = conditionsOf(r);
     if (isPdfOnly(type) || isPdfOnly(from.type)) conditions = withoutKind(conditions);
-    if (type === "not_opened_for_days" && !next.triggers[type] && !conditions.some((c) => c.type === "min_age_days")) {
-      conditions = [...conditions, makeCondition("min_age_days")];
+    if (from.type === NOT_OPENED && next.minAge && typeof next.minAge === "object") {
+      const auto = next.minAge;
+      if (!conditions.includes(auto)) next.minAge = "removed";
+      else if (auto.days === 7) {
+        conditions = conditions.filter((c) => c !== auto);
+        next.minAge = "dropped";
+      }
+    }
+    if (type === NOT_OPENED && (!next.triggers[type] || next.minAge === "dropped") &&
+      !conditions.some((c) => c.type === "min_age_days")) {
+      next.minAge = makeCondition("min_age_days");
+      conditions = [...conditions, next.minAge];
     }
     r = { ...r, when: { ...r.when, trigger: next.triggers[type] || makeTrigger(type) }, conditions };
   } else if (isPdfOnly(type)) {

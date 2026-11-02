@@ -2,8 +2,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  actionKey, chooseTrigger, forSave, isPageRule, missingFor, newPageRule, newRule, pendingText, runCounts, taggedCount, withDisplayNames,
+  actionKey, chooseTrigger, forSave, isPageRule, missingFor, newPageRule, newRule, pendingText, runCounts, taggedCount, taggedNow, withDisplayNames,
 } from "./rules.js";
+import { readFileSync } from "node:fs";
 
 const FOLDERS = [{ id: "", name: "My files", path: "My files" }, { id: "f1", name: "Work", path: "Work" }, { id: "f2", name: "Done", path: "Work / Done" }];
 const DEFAULTS = { prompt: "DEFAULT", model: "m/default" };
@@ -113,27 +114,74 @@ test("the min age default is added once: a removed chip stays removed", () => {
   assert.deepEqual(rule.conditions, []);
 });
 
-test("taggedCount: trigger tag a and a page_tag_is b count only pages carrying both", () => {
+test("leaving “It sits unopened” drops the untouched auto min age (P1), and it comes back with it", () => {
+  const opts = { defaults: DEFAULTS, folders: FOLDERS };
+  let { rule, stash } = chooseTrigger(newRule(FOLDERS), "not_opened_for_days", null, opts);
+  ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
+  assert.deepEqual(rule.conditions, [], "a reading rule has no min age");
+  ({ rule, stash } = chooseTrigger(rule, "not_opened_for_days", stash, opts));
+  assert.deepEqual(rule.conditions, [{ type: "min_age_days", days: 7 }]);
+  // through a page trigger and back to a document trigger: still dropped
+  ({ rule, stash } = chooseTrigger(rule, "page_changed", stash, opts));
+  ({ rule, stash } = chooseTrigger(rule, "age_since_created", stash, opts));
+  assert.deepEqual(rule.conditions, []);
+});
+
+test("a min age the user edited or added is kept when leaving “It sits unopened”", () => {
+  const opts = { defaults: DEFAULTS, folders: FOLDERS };
+  let { rule, stash } = chooseTrigger(newRule(FOLDERS), "not_opened_for_days", null, opts);
+  rule = { ...rule, conditions: rule.conditions.map((c) => ({ ...c, days: 3 })) };
+  ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
+  assert.deepEqual(rule.conditions, [{ type: "min_age_days", days: 3 }], "edited");
+  // a stored rule's min age (not added by chooseTrigger) is the user's, even at 7 days
+  const stored = { ...newRule(FOLDERS), when: { ...newRule(FOLDERS).when, trigger: { type: "not_opened_for_days", days: 30 } },
+    conditions: [{ type: "min_age_days", days: 7 }] };
+  ({ rule } = chooseTrigger(stored, "finished_reading", null, opts));
+  assert.deepEqual(rule.conditions, [{ type: "min_age_days", days: 7 }], "stored");
+  // removed, then added back by hand at 7 days: the user's
+  ({ rule, stash } = chooseTrigger(newRule(FOLDERS), "not_opened_for_days", null, opts));
+  rule = { ...rule, conditions: [] };
+  rule = { ...rule, conditions: [{ type: "min_age_days", days: 7 }] };
+  ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
+  assert.deepEqual(rule.conditions, [{ type: "min_age_days", days: 7 }], "re-added by hand");
+});
+
+test("taggedCount: two page tags give null (per-document counts cannot say which pages carry both)", () => {
   const tags = [
-    { name: "a", docs: [
-      { id: "d1", folders: [""], kind: "notebooks", pages: 3, pageIds: ["p1", "p2", "p3"] },
-      { id: "d2", folders: [""], kind: "notebooks", pages: 1, pageIds: ["q1"] },
-    ] },
-    { name: "b", docs: [
-      { id: "d1", folders: [""], kind: "notebooks", pages: 2, pageIds: ["p2", "p9"] },
-      { id: "d3", folders: [""], kind: "notebooks", pages: 4, pageIds: ["r1", "r2", "r3", "r4"] },
-    ] },
+    { name: "a", docs: [{ id: "d1", folders: [""], kind: "notebooks", pages: 3 }, { id: "d2", folders: [""], kind: "notebooks", pages: 1 }] },
+    { name: "b", docs: [{ id: "d1", folders: [""], kind: "notebooks", pages: 2 }, { id: "d3", folders: [""], kind: "notebooks", pages: 4 }] },
   ];
   const r = page({ when: { trigger: { type: "page_tagged", tag: "a" } }, conditions: [{ type: "page_tag_is", tag: "B" }] });
-  assert.equal(taggedCount(tags, r), 1, "only d1's p2 carries both");
-  // page_changed with page_tag_is runs the tagged path too (P4)
+  assert.equal(taggedCount(tags, r), null);
+  // page_changed with one page_tag_is runs the tagged path too (P4): one tag counts
   assert.equal(taggedCount(tags, page({ conditions: [{ type: "page_tag_is", tag: "b" }] })), 6);
-  // without page ids the overlap is unknown: no number rather than a wrong one
-  const counts = tags.map((t) => ({ ...t, docs: t.docs.map(({ pageIds, ...d }) => d) }));
-  assert.equal(taggedCount(counts, r), null);
+  // the trigger tag repeated as a condition is still one tag
+  assert.equal(taggedCount(tags, { ...r, conditions: [{ type: "page_tag_is", tag: "A" }] }), 4);
   // a condition the page-tag list cannot test leaves the count unknown
-  assert.equal(taggedCount(tags, { ...r, conditions: [...r.conditions, { type: "name_matches", pattern: "J*" }] }), null);
+  const one = page({ when: { trigger: { type: "page_tagged", tag: "a" } } });
+  assert.equal(taggedCount(tags, { ...one, conditions: [{ type: "name_matches", pattern: "J*" }] }), null);
   assert.equal(taggedCount(tags, page()), null, "no tag set: nothing to count");
+});
+
+test("taggedNow: the page-tag list when it can count, else the PagePreview's pages", () => {
+  const tags = [{ name: "a", docs: [{ id: "d1", folders: [""], kind: "notebooks", pages: 3 }] }];
+  const one = page({ when: { trigger: { type: "page_tagged", tag: "a" } } });
+  const two = { ...one, conditions: [{ type: "page_tag_is", tag: "b" }] };
+  assert.equal(taggedNow(tags, one, { pages: 9, docs: 1 }), 3, "the list counts one tag at once");
+  assert.equal(taggedNow(tags, two, { pages: 2, docs: 1 }), 2, "two tags: the preview counts");
+  assert.equal(taggedNow(tags, two, null), null, "two tags, preview not back yet");
+  assert.equal(taggedNow(null, one, { pages: 5, docs: 2 }), 5, "list not loaded: the preview counts");
+  assert.equal(taggedNow(tags, page(), { pages: 7, docs: 1 }), null, "no page tag: no tagged line");
+});
+
+test("forSave round-trips the migrated golden rules (v2-golden.json)", () => {
+  const golden = JSON.parse(readFileSync(new URL("../../../../internal/autoorganize/testdata/v2-golden.json", import.meta.url), "utf8"));
+  assert.ok(golden.rules.length >= 2);
+  for (const r of golden.rules) assert.deepEqual(forSave(r), r, r.id);
+  // by design: a page_tagged rule with an empty in is sent with the root entry
+  const pageRule = golden.rules.find((r) => r.when.subject === "page");
+  const tagged = { ...pageRule, when: { ...pageRule.when, in: [], trigger: { type: "page_tagged", tag: "todo" } } };
+  assert.deepEqual(forSave(tagged), { ...tagged, when: { ...tagged.when, in: ROOT_IN } });
 });
 
 test("withDisplayNames caches the source and destination names", () => {
