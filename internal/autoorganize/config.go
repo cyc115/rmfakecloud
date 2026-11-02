@@ -37,6 +37,8 @@ const (
 	TriggerPinnedIs        = "pinned_is"
 	// TriggerPageChanged belongs to pipeline rules only; the move planner never evaluates it
 	TriggerPageChanged = "page_changed"
+	// TriggerPageTagged belongs to pipeline rules only: pages carrying Trigger.Tag
+	TriggerPageTagged = "page_tagged"
 )
 
 // Actions
@@ -119,7 +121,7 @@ type Trigger struct {
 	MinAgeDays    int  `json:"minAgeDays"`
 	// name_matches: glob, or /regex/
 	Pattern string `json:"pattern,omitempty"`
-	// tag_is
+	// tag_is (a document tag), page_tagged (a page tag)
 	Tag string `json:"tag,omitempty"`
 	// pinned_is
 	Pinned bool `json:"pinned"`
@@ -151,11 +153,19 @@ type WatchRef struct {
 	Name string `json:"name,omitempty"`
 }
 
-// Action of a rule; Prompt and Model are used by the pipeline action only
+// Action of a rule; Prompt, Model and Tasks are used by the pipeline action only
 type Action struct {
 	Type   string `json:"type"`
 	Prompt string `json:"prompt,omitempty"`
 	Model  string `json:"model,omitempty"`
+	// Tasks false: "just save notes", rm-pages extracts no tasks from the
+	// rule's pages. nil means true; Normalize stores true as nil.
+	Tasks *bool `json:"tasks,omitempty"`
+}
+
+// ExtractsTasks the pipeline extracts tasks for this action (Tasks nil or true)
+func (a *Action) ExtractsTasks() bool {
+	return a.Tasks == nil || *a.Tasks
 }
 
 // Rule a single organisation rule
@@ -234,6 +244,10 @@ func (c *Config) Normalize() {
 		if r.Action.Type == "" {
 			r.Action.Type = ActionMove
 		}
+		if r.Action.Tasks != nil && *r.Action.Tasks {
+			// true is the default: keep the stored rule as it was before Tasks
+			r.Action.Tasks = nil
+		}
 		if r.Scope == "" {
 			r.Scope = ScopePdfEpub
 			if r.IsPipeline() {
@@ -304,6 +318,9 @@ func (c *Config) Validate() error {
 func (r *Rule) Validate() error {
 	switch r.Action.Type {
 	case ActionMove:
+		if !r.Action.ExtractsTasks() {
+			return errors.New("tasks applies to pipeline rules only")
+		}
 	case ActionPipeline:
 		return r.validatePipeline()
 	default:
@@ -348,19 +365,26 @@ func (r *Rule) Validate() error {
 	return nil
 }
 
-// validatePipeline the pipeline action: page_changed trigger and a non-empty
-// watch list; source and destination are not used
+// validatePipeline the pipeline action: a page trigger (page_changed or
+// page_tagged) and valid watch entries. page_changed needs at least one entry;
+// for page_tagged none means the whole tree. Source and destination are not used.
 func (r *Rule) validatePipeline() error {
 	switch r.Scope {
 	case ScopePdfEpub, ScopeNotebooks, ScopeAll:
 	default:
 		return fmt.Errorf("unknown scope %q", r.Scope)
 	}
-	if r.Trigger.Type != TriggerPageChanged {
-		return fmt.Errorf("a pipeline rule needs the %s trigger", TriggerPageChanged)
-	}
-	if len(r.Watch) == 0 {
-		return errors.New("a pipeline rule needs at least one watch entry")
+	switch r.Trigger.Type {
+	case TriggerPageChanged:
+		if len(r.Watch) == 0 {
+			return errors.New("a pipeline rule needs at least one watch entry")
+		}
+	case TriggerPageTagged:
+		if err := triggerDefs[TriggerPageTagged].Validate(&r.Trigger); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("a pipeline rule needs the %s or %s trigger", TriggerPageChanged, TriggerPageTagged)
 	}
 	for _, w := range r.Watch {
 		switch w.Kind {

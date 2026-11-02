@@ -3,6 +3,7 @@ package autoorganize
 import (
 	"errors"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -124,10 +125,22 @@ var triggerDefs = map[string]*triggerDef{
 	TriggerPinnedIs: {
 		Eval: evalPinnedIs,
 	},
-	// page_changed is evaluated by internal/pagewatch, never by the move planner
+	// page_changed and page_tagged are evaluated by internal/pagewatch, never
+	// by the move planner
 	TriggerPageChanged: {
 		PipelineOnly: true,
 		Eval:         evalNotAMoveTrigger,
+	},
+	TriggerPageTagged: {
+		PipelineOnly: true,
+		Defaults:     func(t *Trigger) { t.Tag = strings.TrimSpace(t.Tag) },
+		Validate: func(t *Trigger) error {
+			if NormalizePageTag(t.Tag) == "" {
+				return errors.New("tag cannot be empty")
+			}
+			return nil
+		},
+		Eval: evalNotAMoveTrigger,
 	},
 }
 

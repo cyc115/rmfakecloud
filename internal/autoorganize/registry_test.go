@@ -8,7 +8,7 @@ import (
 
 func TestRegistryCoversEveryTriggerType(t *testing.T) {
 	want := []string{TriggerAgeSinceCreated, TriggerFinishedReading, TriggerNameMatches, TriggerNotModified,
-		TriggerNotOpened, TriggerPageChanged, TriggerPinnedIs, TriggerReadProgress, TriggerTagIs}
+		TriggerNotOpened, TriggerPageChanged, TriggerPageTagged, TriggerPinnedIs, TriggerReadProgress, TriggerTagIs}
 	got := TriggerTypes()
 	if len(got) != len(want) {
 		t.Fatalf("TriggerTypes = %v, want %v", got, want)

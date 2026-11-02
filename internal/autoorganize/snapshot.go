@@ -10,6 +10,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
@@ -319,10 +320,14 @@ type ContentInfo struct {
 	// from cPages redir.value (absent -1 once any page has one) or from the
 	// formatVersion 1 redirectionPageMap. Nil when the blob has none.
 	Redir map[string]int `json:"redir,omitempty"`
+	// PageTags page id → its tags (NormalizePageTag) → when the tag was
+	// applied, unix ms from the tablet's clock (0 = not given), from pageTags
+	PageTags map[string]map[string]int64 `json:"pageTags,omitempty"`
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-const contentParseVersion = 10
+// (11: pageTags)
+const contentParseVersion = 11
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -348,6 +353,50 @@ func (c *ContentInfo) HasTag(tag string) bool {
 		}
 	}
 	return false
+}
+
+// PageTag when the page carries tag (NormalizePageTag on both sides); ok
+// false when it does not. at is zero when the blob gives no timestamp.
+func (c *ContentInfo) PageTag(pageID, tag string) (at time.Time, ok bool) {
+	want := NormalizePageTag(tag)
+	ms, ok := c.PageTags[pageID][want]
+	if !ok || want == "" {
+		return time.Time{}, false
+	}
+	if ms > 0 {
+		at = time.UnixMilli(ms)
+	}
+	return at, true
+}
+
+// NormalizePageTag a page tag as matched: trimmed and lowercased
+func NormalizePageTag(tag string) string {
+	return strings.ToLower(strings.TrimSpace(tag))
+}
+
+// pageTags the .content pageTags list, [{name, pageId, timestamp}]; entries
+// without a name or page id are dropped, a repeated tag keeps its latest time
+func pageTags(v any) map[string]map[string]int64 {
+	items, _ := v.([]any)
+	var out map[string]map[string]int64
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		name, _ := m["name"].(string)
+		page, _ := m["pageId"].(string)
+		if name = NormalizePageTag(name); name == "" || page == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]map[string]int64{}
+		}
+		if out[page] == nil {
+			out[page] = map[string]int64{}
+		}
+		if ms := int64Of(m["timestamp"]); ms >= out[page][name] {
+			out[page][name] = ms
+		}
+	}
+	return out
 }
 
 // Kind "pdf_epub", "notebooks" or "other", from fileType
@@ -390,6 +439,7 @@ func ParseContent(b []byte) ContentInfo {
 			}
 		}
 	}
+	info.PageTags = pageTags(raw["pageTags"])
 	order, unusable, err := pageOrder(raw)
 	if err == nil && len(order) == 0 && info.PageCount > 0 && (!hasPagesList(raw) || unusable) {
 		// a page count with no list would read as "every page deleted"; the
@@ -571,16 +621,20 @@ func deletedFlag(v any) bool {
 }
 
 func intOf(v any) int {
+	return int(int64Of(v))
+}
+
+func int64Of(v any) int64 {
 	switch n := v.(type) {
 	case json.Number:
 		if i, err := n.Int64(); err == nil {
-			return int(i)
+			return i
 		}
 		if f, err := n.Float64(); err == nil {
-			return int(f)
+			return int64(f)
 		}
 	case float64:
-		return int(n)
+		return int64(n)
 	}
 	return 0
 }

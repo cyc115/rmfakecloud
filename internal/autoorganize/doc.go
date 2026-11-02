@@ -52,14 +52,16 @@
 // invisible to the planner. Where an action lives:
 //
 //   - config.go: the Action* constant, any Action/Rule fields (pipeline adds
-//     Action.Prompt, Action.Model and Rule.Watch), the Normalize defaults and
-//     the per-action branch at the top of Rule.Validate. Move validates source,
-//     destination and trigger; pipeline (validatePipeline) requires the
-//     page_changed trigger and at least one valid, non-trash Watch entry, and
-//     uses neither Source nor Destination.
+//     Action.Prompt, Action.Model, Action.Tasks and Rule.Watch), the Normalize
+//     defaults and the per-action branch at the top of Rule.Validate. Move
+//     validates source, destination and trigger; pipeline (validatePipeline)
+//     requires a page trigger — page_changed with at least one Watch entry, or
+//     page_tagged with a tag (no Watch entry = the whole tree) — valid,
+//     non-trash Watch entries, and uses neither Source nor Destination.
 //   - registry.go: a trigger that belongs to one action sets PipelineOnly, so
-//     the other action rejects it (page_changed is rejected on move rules). Its
-//     Eval must still be non-nil; page_changed uses evalNotAMoveTrigger, a skip.
+//     the other action rejects it (page_changed and page_tagged are rejected
+//     on move rules). Its Eval must still be non-nil; both use
+//     evalNotAMoveTrigger, a skip.
 //   - plan.go: BuildPlan and LoopWarnings (config.go) consider move rules only.
 //     A new action that must not claim documents is skipped at the top of the
 //     BuildPlan loop (as IsPipeline rules are); rule numbers keep the config

@@ -167,7 +167,7 @@ func evalAgeSinceCreated(t *Trigger, d *DocSnap, _ *ContentInfo, fs *FirstSeen, 
 }
 
 // evalNotAMoveTrigger the Eval of triggers the move planner does not own
-// (page_changed): a skip, never a match and never nil
+// (page_changed, page_tagged): a skip, never a match and never nil
 func evalNotAMoveTrigger(t *Trigger, _ *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
 	return evaluation{skip: SkipOutOfScope, skipDetail: t.Type + " is evaluated by the page watch, not the move planner"}
 }
