@@ -50,12 +50,12 @@ def test_create_pipeline_rule_with_folder_and_document(page, api):
     fits_viewport(page)
     save_rule(page, drawer)
     expect(page.locator(".ao-rule .ao-sentence")).to_have_text(want)
-    rules = api.get("/ui/api/auto-organize").json()["rules"]
+    rules = api.get("/ui/api/automation").json()["rules"]
     assert len(rules) == 1
     r = rules[0]
-    assert r["action"]["type"] == "pipeline" and r["trigger"]["type"] == "page_changed"
-    assert sorted((w["kind"], w["name"]) for w in r["watch"]) == [("document", "E2E Notes"), ("folder", "Inbox")]
-    assert "tasks" not in r["action"]
+    assert [a["type"] for a in r["actions"]] == ["extract_tasks"] and r["when"]["trigger"]["type"] == "page_changed"
+    assert r["when"]["subject"] == "page" and r["conditions"] == []
+    assert sorted((w["kind"], w["name"]) for w in r["when"]["in"]) == [("document", "E2E Notes"), ("folder", "Inbox")]
     assert r.get("name", "") == ""  # auto-named (omitted when empty): the list shows the sentence
     fits_viewport(page)
     assert_healthy(page)
@@ -71,13 +71,13 @@ def test_empty_in_means_anywhere(page, api):
     expect(drawer.get_by_role("button", name="Save", exact=True)).to_be_enabled()
     save_rule(page, drawer)
     expect(page.locator(".ao-rule .ao-sentence")).to_have_text("IF I write on a page anywhere THEN extract tasks to my inbox")
-    (r,) = api.get("/ui/api/auto-organize").json()["rules"]
-    assert r["watch"] == ROOT, r["watch"]
+    (r,) = api.get("/ui/api/automation").json()["rules"]
+    assert r["when"]["in"] == ROOT, r["when"]["in"]
     assert_healthy(page)
 
 
 def test_prompt_is_prefilled_and_editable(page, api):
-    defaults = api.get("/ui/api/auto-organize/pipeline").json()["defaults"]
+    defaults = api.get("/ui/api/automation/pipeline").json()["defaults"]
     assert "BEFORE" in defaults["prompt"] and defaults["model"]
     open_page(page)
     drawer = start_pipeline_rule(page)
@@ -95,18 +95,18 @@ def test_prompt_is_prefilled_and_editable(page, api):
     open_prompt(drawer)
     expect(drawer.get_by_label("prompt")).to_have_value("Only list tasks for Alice.")
     expect(drawer.get_by_label("model")).to_have_value("some/model")
-    r = api.get("/ui/api/auto-organize").json()["rules"][0]
-    assert r["action"]["prompt"] == "Only list tasks for Alice."
+    r = api.get("/ui/api/automation").json()["rules"][0]
+    assert r["actions"][0]["prompt"] == "Only list tasks for Alice."
     assert_healthy(page)
 
 
 def test_run_now_checks_pages(page, api):
-    if not api.get("/ui/api/auto-organize/pipeline").json()["enabled"]:
+    if not api.get("/ui/api/automation/pipeline").json()["enabled"]:
         pytest.skip("page watch is off: run.sh without E2E_STUB_RMPAGES=0")
     open_page(page)
     drawer = start_pipeline_rule(page)
     save_rule(page, drawer)
-    before = len(api.get("/ui/api/auto-organize/pipeline").json()["runs"])
+    before = len(api.get("/ui/api/automation/pipeline").json()["runs"])
     page.get_by_role("button", name="Run now").click()
     expect(page.get_by_text("Pages checked:")).to_be_visible()
     # the header and the rule's status line show the run; the history lists it
@@ -114,29 +114,28 @@ def test_run_now_checks_pages(page, api):
     expect(page.locator(".ao-rule .ao-meta")).to_contain_text("ran just now")
     page.get_by_role("tab", name="Page checks").click()
     expect(page.locator(".ao-prun").filter(has_text="run now").first).to_be_visible()
-    assert len(api.get("/ui/api/auto-organize/pipeline").json()["runs"]) == before + 1
+    assert len(api.get("/ui/api/automation/pipeline").json()["runs"]) == before + 1
     assert "pipeline" not in page.inner_text("body").lower()
     fits_viewport(page)
     assert_healthy(page)
 
 
 def test_rule_watching_a_deleted_folder_warns(page, api):
-    if not api.get("/ui/api/auto-organize/pipeline").json()["enabled"]:
+    if not api.get("/ui/api/automation/pipeline").json()["enabled"]:
         pytest.skip("page watch is off: run.sh without E2E_STUB_RMPAGES=0")
     gone = "99999999-9999-4999-8999-999999999999"  # not in the tree
-    cfg = api.get("/ui/api/auto-organize").json()
+    cfg = api.get("/ui/api/automation").json()
     cfg["rules"] = [{
-        "id": "", "name": "", "enabled": True, "scope": "all",
-        "source": {"id": "", "name": ""}, "destination": {"id": "", "name": ""},
-        "trigger": {"type": "page_changed"},
-        "action": {"type": "pipeline", "prompt": "", "model": ""},
-        "watch": [{"id": gone, "kind": "folder", "name": "Old projects"}],
+        "id": "", "name": "", "enabled": True,
+        "when": {"subject": "page", "trigger": {"type": "page_changed"},
+                 "in": [{"id": gone, "kind": "folder", "name": "Old projects"}]},
+        "conditions": [], "actions": [{"type": "extract_tasks"}],
     }]
-    r = api.put("/ui/api/auto-organize", data=cfg)
+    r = api.put("/ui/api/automation", data=cfg)
     assert r.ok, r.text()
-    run = api.post("/ui/api/auto-organize/pipeline/run-now")
+    run = api.post("/ui/api/automation/pipeline/run-now")
     assert run.ok, run.text()
-    missing = api.get("/ui/api/auto-organize/pipeline").json()["missingWatches"]
+    missing = api.get("/ui/api/automation/pipeline").json()["missingWatches"]
     assert [m["watchId"] for m in missing] == [gone], missing
     open_page(page)
     rule = page.locator(".ao-rule")
@@ -151,6 +150,6 @@ def test_move_rules_still_work(page, api):
     drawer = add_rule(page)
     save_rule(page, drawer)
     expect(page.locator(".ao-rule .ao-sentence")).to_contain_text("named like “Paper*”")
-    rules = api.get("/ui/api/auto-organize").json()["rules"]
-    assert rules[0]["action"]["type"] == "move"
+    rules = api.get("/ui/api/automation").json()["rules"]
+    assert [a["type"] for a in rules[0]["actions"]] == ["move"] and rules[0]["when"]["subject"] == "document"
     assert_healthy(page)

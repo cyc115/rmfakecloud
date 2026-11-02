@@ -112,10 +112,10 @@ def rmseed(*args):
 
 def run_pipeline(page, api):
     """Click the header's Run now (only page rules exist: it checks pages); returns the run entry."""
-    before = len(api.get("/ui/api/auto-organize/pipeline").json()["runs"])
+    before = len(api.get("/ui/api/automation/pipeline").json()["runs"])
     page.locator(".ao-hdr").get_by_role("button", name="Run now").click()
-    wait_for(lambda: len(api.get("/ui/api/auto-organize/pipeline").json()["runs"]) > before, 60, "the run", 1)
-    run = api.get("/ui/api/auto-organize/pipeline").json()["lastRun"]
+    wait_for(lambda: len(api.get("/ui/api/automation/pipeline").json()["runs"]) > before, 60, "the run", 1)
+    run = api.get("/ui/api/automation/pipeline").json()["lastRun"]
     assert run["trigger"] == "run now" and run["mode"] == "live" and not run.get("error"), run
     return run
 
@@ -137,7 +137,7 @@ def desktop(browser, base_url):
 
 def test_page_change_to_vault_note_and_staged_task(desktop, tmp_path):
     page, api = desktop
-    pipe = api.get("/ui/api/auto-organize/pipeline").json()
+    pipe = api.get("/ui/api/automation/pipeline").json()
     assert pipe["enabled"], "page watch is off: RM_PAGES_URL did not reach the container"
 
     # p1 as seeded is 3 synthetic strokes: unreadable, so its transcription would be blank
@@ -153,12 +153,12 @@ def test_page_change_to_vault_note_and_staged_task(desktop, tmp_path):
     open_prompt(drawer)
     expect(drawer.get_by_label("prompt")).to_have_value(pipe["defaults"]["prompt"])
     save_rule(page, drawer)
-    cfg = api.get("/ui/api/auto-organize").json()
+    cfg = api.get("/ui/api/automation").json()
     assert cfg["settings"]["enabled"] and cfg["settings"]["mode"] == "live"
     (rule,) = cfg["rules"]
-    assert rule["action"]["type"] == "pipeline"
-    assert [(w["kind"], w["name"]) for w in rule["watch"]] == [("folder", "Projects")]
-    assert rule["action"]["prompt"] == pipe["defaults"]["prompt"]
+    assert [a["type"] for a in rule["actions"]] == ["extract_tasks"]
+    assert [(w["kind"], w["name"]) for w in rule["when"]["in"]] == [("folder", "Projects")]
+    assert rule["actions"][0]["prompt"] == pipe["defaults"]["prompt"]
 
     # 2. first run: E2E Notes joins the rule, p1 goes as transcribe_only
     first = run_pipeline(page, api)

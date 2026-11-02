@@ -12,7 +12,7 @@ Playwright (Chromium) from this machine, then removes the container, data dir an
   `E2E_BASE_URL=http://10.0.0.11:3099 uv run --with pytest --with playwright python -m pytest scripts/e2e`.
 - `RM_PAGES_URL` and `PAGEWATCH_MIN_AGE` pass through to the container when set.
 - If Chromium is missing: `uv run --with playwright playwright install chromium`.
-- Every logged-in context (`page`, `phone_page`, `api`) starts with Auto-organize rules reset (dry mode, no rules).
+- Every logged-in context (`page`, `phone_page`, `api`) starts with Automation rules reset (dry mode, no rules).
 - A default run starts a stub rm-pages (page watch on, nothing processed) for the pipeline UI tests
   (`E2E_STUB_RMPAGES` defaults to 1). `E2E_STUB_RMPAGES=0` opts out; so does setting `RM_PAGES_URL`
   without `E2E_STUB_RMPAGES`.

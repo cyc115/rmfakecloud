@@ -104,11 +104,11 @@ def seed_pdf(browser, base_url):
 
 
 def _reset_rules(api):
-    cfg = api.get("/ui/api/auto-organize").json()
+    cfg = api.get("/ui/api/automation").json()
     cfg["rules"] = []
     cfg["settings"]["mode"] = "dry"
     cfg["settings"]["enabled"] = True
-    r = api.put("/ui/api/auto-organize", data=cfg)
+    r = api.put("/ui/api/automation", data=cfg)
     assert r.ok, r.text()
 
 

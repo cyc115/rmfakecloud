@@ -66,10 +66,11 @@ def test_page_tagged_just_save_notes(page, api):
     fits_viewport(page)
     save_rule(page, drawer)
     expect(page.locator(".ao-rule .ao-sentence")).to_have_text("IF I tag a page “todo” anywhere THEN just save notes")
-    (r,) = api.get("/ui/api/auto-organize").json()["rules"]
-    assert r["trigger"]["type"] == "page_tagged" and r["trigger"]["tag"] == "todo", r
-    assert r["action"]["type"] == "pipeline" and r["action"]["tasks"] is False, r
-    assert r["watch"] == ROOT, r["watch"]
+    (r,) = api.get("/ui/api/automation").json()["rules"]
+    assert r["when"]["subject"] == "page", r
+    assert r["when"]["trigger"]["type"] == "page_tagged" and r["when"]["trigger"]["tag"] == "todo", r
+    assert [a["type"] for a in r["actions"]] == ["save_notes"], r
+    assert r["when"]["in"] == ROOT, r["when"]["in"]
     assert_healthy(page)
 
 
@@ -90,12 +91,17 @@ def test_invalid_actions_are_disabled_with_the_reason(page):
     assert_healthy(page)
 
 
-def test_pdf_only_condition_is_explained_and_other_conditions_can_be_added(page, api):
+def test_pdf_only_kind_is_is_locked_and_other_conditions_can_be_added(page, api):
     open_page(page)
     drawer = new_rule(page)
     card(drawer, "I finish reading").click()
     expect(drawer.get_by_text("Fixed: “I finish reading” uses the page you stopped on, which only PDFs & books report.")).to_be_visible()
-    expect(drawer.get_by_role("button", name="+ add a condition")).to_have_count(0)
+    # only kind_is is locked: the other conditions are still offered
+    drawer.get_by_role("button", name="+ add a condition").click()
+    expect(drawer.get_by_role("button", name="only notebooks")).to_have_count(0)
+    expect(drawer.get_by_role("button", name="only PDFs & books")).to_have_count(0)
+    expect(drawer.get_by_role("button", name="named like …")).to_have_count(1)
+    drawer.get_by_role("button", name="cancel", exact=True).click()
     card(drawer, "Its name matches").click()
     drawer.get_by_role("button", name="+ add a condition").click()
     drawer.get_by_role("button", name="only notebooks").click()
@@ -107,8 +113,9 @@ def test_pdf_only_condition_is_explained_and_other_conditions_can_be_added(page,
     drawer.get_by_role("button", name="Remove condition").click()
     expect(drawer.get_by_text("Matches now:")).to_contain_text("1 document")
     save_rule(page, drawer)
-    (r,) = api.get("/ui/api/auto-organize").json()["rules"]
-    assert r["scope"] == "all" and r["action"]["type"] == "move" and "watch" not in r, r
+    (r,) = api.get("/ui/api/automation").json()["rules"]
+    assert r["when"]["subject"] == "document" and [a["type"] for a in r["actions"]] == ["move"], r
+    assert r["conditions"] == [], r  # kind_is was removed; the pattern is the trigger
     assert_healthy(page)
 
 
@@ -130,13 +137,13 @@ def test_save_reload_edit_rename_delete(page, api):
     save_rule(page, drawer)
     expect(rule.locator(".ao-rname")).to_have_text("file the big one")
     expect(rule.locator(".ao-sentence")).to_have_text("IF a document named like “Multi*” is in Inbox THEN move it to Archive")
-    (r,) = api.get("/ui/api/auto-organize").json()["rules"]
-    assert r["name"] == "file the big one" and r["trigger"]["pattern"] == "Multi*", r
+    (r,) = api.get("/ui/api/automation").json()["rules"]
+    assert r["name"] == "file the big one" and r["when"]["trigger"]["pattern"] == "Multi*", r
     rule.locator(".ao-sentence").click()
     page.once("dialog", lambda d: d.accept())
     page.get_by_label("Edit rule").get_by_role("button", name="Delete", exact=True).click()
     expect(page.get_by_text("No automations yet")).to_be_visible()
-    assert api.get("/ui/api/auto-organize").json()["rules"] == []
+    assert api.get("/ui/api/automation").json()["rules"] == []
     assert_healthy(page)
 
 
@@ -147,28 +154,36 @@ def test_server_error_is_shown_inline(page, api):
     drawer.get_by_role("button", name="Save", exact=True).click()
     expect(drawer.get_by_role("alert")).to_contain_text("invalid regular expression")
     expect(drawer).to_be_visible()
-    assert api.get("/ui/api/auto-organize").json()["rules"] == []
+    assert api.get("/ui/api/automation").json()["rules"] == []
     # the browser logs the 400 response itself; nothing else may be logged
     page.console_errors[:] = [e for e in page.console_errors if "status of 400" not in e]
     assert_healthy(page)
 
 
+INBOX = {"id": "11111111-1111-4111-8111-111111111111", "kind": "folder", "name": "Inbox"}
 LIVE_LIKE = [
-    {  # Mike's move rule, on the seeded folders
-        "id": "", "name": "", "enabled": True, "scope": "pdf_epub",
-        "source": {"id": "11111111-1111-4111-8111-111111111111", "name": "Inbox"},
-        "trigger": {"type": "finished_reading", "minPages": 2, "settleHours": 6, "minAgeEnabled": True, "minAgeDays": 0, "pinned": True},
-        "destination": {"id": "", "name": "", "createIfMissing": {"name": "Read", "parent": "source"}},
-        "action": {"type": "move"},
+    {  # Mike's move rule, on the seeded folders (no min_age_days: the plan's ruling P1)
+        "id": "", "name": "", "enabled": True,
+        "when": {"subject": "document", "in": [INBOX],
+                 "trigger": {"type": "finished_reading", "minPages": 2, "settleHours": 6}},
+        "conditions": [{"type": "kind_is", "kind": "pdf_epub"}],
+        "actions": [{"type": "move", "to": {"id": "", "name": "", "createIfMissing": {"name": "Read", "parent": "source"}}}],
     },
-    {  # Mike's pipeline rule: a custom name, two watched documents, a custom prompt
-        "id": "", "name": "capture journal pages", "enabled": True, "scope": "all",
-        "source": {"id": "", "name": ""}, "destination": {"id": "", "name": ""},
-        "trigger": {"type": "page_changed"},
-        "action": {"type": "pipeline", "prompt": "Custom prompt.", "model": "deepseek/deepseek-v4.1-flash"},
-        "watch": [{"id": "55555555-5555-4555-8555-555555555555", "kind": "document", "name": "E2E Notes"}],
+    {  # Mike's page rule: a custom name, two watched documents, a custom prompt
+        "id": "", "name": "capture journal pages", "enabled": True,
+        "when": {"subject": "page", "trigger": {"type": "page_changed"},
+                 "in": [{"id": "55555555-5555-4555-8555-555555555555", "kind": "document", "name": "E2E Notes"}]},
+        "conditions": [],
+        "actions": [{"type": "extract_tasks", "prompt": "Custom prompt.", "model": "deepseek/deepseek-v4.1-flash"}],
     },
 ]
+
+
+def put_rules(api, rules):
+    cfg = api.get("/ui/api/automation").json()
+    cfg["rules"] = rules
+    r = api.put("/ui/api/automation", data=cfg)
+    assert r.ok, r.text()
 
 
 def put_live_like(api):
@@ -176,11 +191,9 @@ def put_live_like(api):
     docs = api.get("/ui/api/documents").json()["Entries"]
     paper = find(docs, "Paper")
     rules = [dict(r) for r in LIVE_LIKE]
-    rules[1] = {**rules[1], "watch": rules[1]["watch"] + [{"id": paper["id"], "kind": "document", "name": "Paper"}]}
-    cfg = api.get("/ui/api/auto-organize").json()
-    cfg["rules"] = rules
-    r = api.put("/ui/api/auto-organize", data=cfg)
-    assert r.ok, r.text()
+    page_when = rules[1]["when"]
+    rules[1] = {**rules[1], "when": {**page_when, "in": page_when["in"] + [{"id": paper["id"], "kind": "document", "name": "Paper"}]}}
+    put_rules(api, rules)
 
 
 def test_live_like_rules_render_as_sentences(page, api):
@@ -221,19 +234,19 @@ def test_screenshots(page, api, request):
     os.makedirs(out, exist_ok=True)
     kind = "phone" if page.viewport_size["width"] < 500 else "desktop"
     put_live_like(api)
-    cfg = api.get("/ui/api/auto-organize").json()
+    cfg = api.get("/ui/api/automation").json()
     cfg["rules"].append({
-        "id": "", "name": "", "enabled": True, "scope": "all",
-        "source": {"id": "", "name": ""}, "destination": {"id": "", "name": ""},
-        "trigger": {"type": "page_tagged", "tag": "todo"}, "action": {"type": "pipeline", "tasks": False}, "watch": [],
+        "id": "", "name": "", "enabled": True,
+        "when": {"subject": "page", "in": [{"id": "", "kind": "folder", "name": "My files"}], "trigger": {"type": "page_tagged", "tag": "todo"}},
+        "conditions": [], "actions": [{"type": "save_notes"}],
     })
     cfg["rules"].append({
-        "id": "", "name": "", "enabled": False, "scope": "all",
-        "source": {"id": "11111111-1111-4111-8111-111111111111", "name": "Inbox"},
-        "trigger": {"type": "not_opened_for_days", "days": 30, "minAgeEnabled": True, "minAgeDays": 7},
-        "destination": {"id": "22222222-2222-4222-8222-222222222222", "name": "Archive"}, "action": {"type": "move"},
+        "id": "", "name": "", "enabled": False,
+        "when": {"subject": "document", "in": [INBOX], "trigger": {"type": "not_opened_for_days", "days": 30}},
+        "conditions": [{"type": "min_age_days", "days": 7}],
+        "actions": [{"type": "move", "to": {"id": "22222222-2222-4222-8222-222222222222", "name": "Archive"}}],
     })
-    assert api.put("/ui/api/auto-organize", data=cfg).ok
+    assert api.put("/ui/api/automation", data=cfg).ok
     open_page(page)
     page.get_by_role("button", name="Run now").click()
     expect(page.get_by_text("Dry run:")).to_be_visible()
@@ -254,14 +267,14 @@ def test_screenshots(page, api, request):
 
 def test_no_edit_save_keeps_the_stored_rule(page, api):
     put_live_like(api)
-    before = api.get("/ui/api/auto-organize").json()["rules"]
+    before = api.get("/ui/api/automation").json()["rules"]
     open_page(page)
     for i in range(2):
         page.locator(".ao-rule .ao-sentence").nth(i).click()
         save_rule(page, page.get_by_label("Edit rule"))
-    after = api.get("/ui/api/auto-organize").json()["rules"]
+    after = api.get("/ui/api/automation").json()["rules"]
     for b, a in zip(before, after):
-        for k in ("name", "source", "destination", "trigger", "watch", "scope", "action"):
+        for k in ("name", "when", "conditions", "actions"):
             assert a.get(k) == b.get(k), (k, b.get(k), a.get(k))
     assert after[0].get("name", "") == ""  # auto-named stays "" (omitted), shown as its sentence
     assert_healthy(page)
@@ -270,7 +283,7 @@ def test_no_edit_save_keeps_the_stored_rule(page, api):
 def test_page_tags_load_only_for_page_tagged_and_failures_offer_retry(page):
     calls = []
     page.on("request", lambda r: calls.append(r.url) if "/page-tags" in r.url else None)
-    page.route("**/auto-organize/page-tags", lambda route: route.abort())
+    page.route("**/automation/page-tags", lambda route: route.abort())
     open_page(page)
     drawer = start_pipeline_rule(page)
     card(drawer, "Its name matches").click()
@@ -278,7 +291,7 @@ def test_page_tags_load_only_for_page_tagged_and_failures_offer_retry(page):
     assert calls == [], "page tags fetched without page_tagged"
     card(drawer, "I tag a page").click()
     expect(drawer.get_by_text("Couldn't load your page tags")).to_be_visible()
-    page.unroute("**/auto-organize/page-tags")
+    page.unroute("**/automation/page-tags")
     drawer.get_by_role("button", name="(retry)").click()
     expect(drawer.get_by_text("your tags: todo")).to_be_visible()
     page.console_errors[:] = [e for e in page.console_errors if "ERR_FAILED" not in e]
@@ -286,11 +299,11 @@ def test_page_tags_load_only_for_page_tagged_and_failures_offer_retry(page):
 
 
 def test_watchables_failure_offers_retry(page):
-    page.route("**/auto-organize/watchables", lambda route: route.abort())
+    page.route("**/automation/watchables", lambda route: route.abort())
     open_page(page)
     drawer = start_pipeline_rule(page)
     expect(drawer.get_by_text("Couldn't load your folders and notebooks")).to_be_visible()
-    page.unroute("**/auto-organize/watchables")
+    page.unroute("**/automation/watchables")
     drawer.get_by_role("button", name="(retry)").click()
     expect(drawer.get_by_text("Couldn't load your folders and notebooks")).to_have_count(0)
     watch(drawer, "Inbox")
@@ -303,19 +316,19 @@ def test_watchables_failure_offers_retry(page):
 
 
 def test_apply_runs_moves_only_and_undo_from_the_status_line(page, api):
-    if not api.get("/ui/api/auto-organize/pipeline").json()["enabled"]:
+    if not api.get("/ui/api/automation/pipeline").json()["enabled"]:
         pytest.skip("page watch is off: run.sh without E2E_STUB_RMPAGES=0")
     open_page(page)
     save_rule(page, start_pipeline_rule(page))  # a page rule: Apply must not check pages
     save_rule(page, add_rule(page))
     page.locator(".ao-seg label", has_text="Live").click()
     expect(page.locator(".ao-seg label.on")).to_have_text("Live")
-    runs = len(api.get("/ui/api/auto-organize/pipeline").json()["runs"])
+    runs = len(api.get("/ui/api/automation/pipeline").json()["runs"])
     page.get_by_role("button", name="Preview", exact=True).click()
     page.once("dialog", lambda d: d.accept())
     page.get_by_role("button", name="Apply this move").click()
     expect(page.get_by_text("Documents checked: 1 moved")).to_be_visible()
-    assert len(api.get("/ui/api/auto-organize/pipeline").json()["runs"]) == runs
+    assert len(api.get("/ui/api/automation/pipeline").json()["runs"]) == runs
     move_rule = page.locator(".ao-rule").nth(1)
     expect(move_rule.locator(".ao-meta")).to_contain_text("moved Paper")
     move_rule.get_by_role("button", name="undo").click()
