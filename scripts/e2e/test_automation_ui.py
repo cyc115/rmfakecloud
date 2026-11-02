@@ -250,3 +250,76 @@ def test_screenshots(page, api, request):
     unroll(page)
     page.screenshot(path=f"{out}/editor-{kind}.png", full_page=True)
     assert_healthy(page)
+
+
+def test_no_edit_save_keeps_the_stored_rule(page, api):
+    put_live_like(api)
+    before = api.get("/ui/api/auto-organize").json()["rules"]
+    open_page(page)
+    for i in range(2):
+        page.locator(".ao-rule .ao-sentence").nth(i).click()
+        save_rule(page, page.get_by_label("Edit rule"))
+    after = api.get("/ui/api/auto-organize").json()["rules"]
+    for b, a in zip(before, after):
+        for k in ("name", "source", "destination", "trigger", "watch", "scope", "action"):
+            assert a.get(k) == b.get(k), (k, b.get(k), a.get(k))
+    assert after[0].get("name", "") == ""  # auto-named stays "" (omitted), shown as its sentence
+    assert_healthy(page)
+
+
+def test_page_tags_load_only_for_page_tagged_and_failures_offer_retry(page):
+    calls = []
+    page.on("request", lambda r: calls.append(r.url) if "/page-tags" in r.url else None)
+    page.route("**/auto-organize/page-tags", lambda route: route.abort())
+    open_page(page)
+    drawer = start_pipeline_rule(page)
+    card(drawer, "Its name matches").click()
+    page.wait_for_timeout(300)
+    assert calls == [], "page tags fetched without page_tagged"
+    card(drawer, "I tag a page").click()
+    expect(drawer.get_by_text("Couldn't load your page tags")).to_be_visible()
+    page.unroute("**/auto-organize/page-tags")
+    drawer.get_by_role("button", name="(retry)").click()
+    expect(drawer.get_by_text("your tags: todo")).to_be_visible()
+    page.console_errors[:] = [e for e in page.console_errors if "ERR_FAILED" not in e]
+    assert_healthy(page)
+
+
+def test_watchables_failure_offers_retry(page):
+    page.route("**/auto-organize/watchables", lambda route: route.abort())
+    open_page(page)
+    drawer = start_pipeline_rule(page)
+    expect(drawer.get_by_text("Couldn't load your folders and notebooks")).to_be_visible()
+    page.unroute("**/auto-organize/watchables")
+    drawer.get_by_role("button", name="(retry)").click()
+    expect(drawer.get_by_text("Couldn't load your folders and notebooks")).to_have_count(0)
+    watch(drawer, "Inbox")
+    expect(drawer.get_by_role("button", name="Stop watching Inbox")).to_be_visible()
+    if page.viewport_size["width"] < 500:
+        box = drawer.get_by_role("button", name="Stop watching Inbox").bounding_box()
+        assert box["width"] >= 32 and box["height"] >= 32, box
+    page.console_errors[:] = [e for e in page.console_errors if "ERR_FAILED" not in e]
+    assert_healthy(page)
+
+
+def test_apply_runs_moves_only_and_undo_from_the_status_line(page, api):
+    if not api.get("/ui/api/auto-organize/pipeline").json()["enabled"]:
+        pytest.skip("page watch is off: run.sh without E2E_STUB_RMPAGES=0")
+    open_page(page)
+    save_rule(page, start_pipeline_rule(page))  # a page rule: Apply must not check pages
+    save_rule(page, add_rule(page))
+    page.locator(".ao-seg label", has_text="Live").click()
+    expect(page.locator(".ao-seg label.on")).to_have_text("Live")
+    runs = len(api.get("/ui/api/auto-organize/pipeline").json()["runs"])
+    page.get_by_role("button", name="Preview", exact=True).click()
+    page.once("dialog", lambda d: d.accept())
+    page.get_by_role("button", name="Apply this move").click()
+    expect(page.get_by_text("Documents checked: 1 moved")).to_be_visible()
+    assert len(api.get("/ui/api/auto-organize/pipeline").json()["runs"]) == runs
+    move_rule = page.locator(".ao-rule").nth(1)
+    expect(move_rule.locator(".ao-meta")).to_contain_text("moved Paper")
+    move_rule.get_by_role("button", name="undo").click()
+    expect(page.get_by_text("back to Inbox")).to_be_visible()
+    from test_autoorganize_ui import inbox_docs
+    assert "Paper" in inbox_docs(api)
+    assert_healthy(page)

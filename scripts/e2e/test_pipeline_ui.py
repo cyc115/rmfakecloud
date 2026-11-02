@@ -56,7 +56,7 @@ def test_create_pipeline_rule_with_folder_and_document(page, api):
     assert r["action"]["type"] == "pipeline" and r["trigger"]["type"] == "page_changed"
     assert sorted((w["kind"], w["name"]) for w in r["watch"]) == [("document", "E2E Notes"), ("folder", "Inbox")]
     assert "tasks" not in r["action"]
-    assert r["name"] == want  # auto-named from the sentence
+    assert r.get("name", "") == ""  # auto-named (omitted when empty): the list shows the sentence
     fits_viewport(page)
     assert_healthy(page)
 

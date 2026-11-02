@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ACTION_CARDS, TRIGGER_CARDS, actionFit, actionKey, chooseAction, chooseTrigger, conditionLock, makeTrigger,
-  newPipelineRule, newRule, normalizePageTag, sentence, sentenceText, tagSuggestions, taggedCount,
+  editableWatch, newPipelineRule, newRule, normalizePageTag, ruleLabel, sentence, sentenceText, tagSuggestions, taggedCount,
 } from "./rules.js";
 
 const FOLDERS = [
@@ -68,7 +68,7 @@ test("every document trigger with Move renders", () => {
     [{ ...makeTrigger("read_progress"), percent: 80 }, "IF I've read 80% of a document in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("not_opened_for_days"), days: 30 }, "IF a document sits unopened 30 days in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("not_modified_for_days"), days: 90 }, "IF a document sits unchanged 90 days in Inbox THEN move it to Archive"],
-    [{ ...makeTrigger("age_since_created"), days: 14 }, "IF a document arrived 14 days ago in Inbox THEN move it to Archive"],
+    [{ ...makeTrigger("age_since_created"), days: 14 }, "IF a document arrived at least 14 days ago in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("tag_is"), tag: "receipts" }, "IF I tag a document “receipts” in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("name_matches"), pattern: "WSJ*" }, "IF a document named like “WSJ*” is in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("pinned_is"), pinned: true }, "IF a document is pinned in Inbox THEN move it to Archive"],
@@ -177,4 +177,41 @@ test("page tags normalise like document tags; suggestions keep one spelling", ()
   assert.deepEqual(tagSuggestions([{ name: "to do" }, { name: "To-Do" }, { name: "asset mgmt" }, { name: "" }]), ["to do", "asset mgmt"]);
   const tags = [{ name: "to do", docs: [{ id: "d", folders: [""], kind: "notebooks", pages: 2 }] }];
   assert.equal(taggedCount(tags, { ...newPipelineRule(DEFAULTS), trigger: { type: "page_tagged", tag: "To_Do" } }), 2);
+});
+
+test("a root entry among other places renders as anywhere and stays editable as stored", () => {
+  const r = { ...newPipelineRule(DEFAULTS), watch: [{ id: "", kind: "folder", name: "My files" }, { id: "notes-doc", kind: "document", name: "Notes" }] };
+  assert.equal(sentenceText(r, CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
+  assert.deepEqual(editableWatch(r), r.watch);
+  assert.deepEqual(editableWatch({ ...r, watch: [{ id: "", kind: "folder" }] }), []);
+  const tags = [{ name: "todo", docs: [{ id: "x", folders: ["other", ""], kind: "notebooks", pages: 3 }] }];
+  assert.equal(taggedCount(tags, { ...r, trigger: { type: "page_tagged", tag: "todo" } }), 3);
+});
+
+test("switching triggers and back keeps each trigger's parameters", () => {
+  const opts = { defaults: DEFAULTS, folders: FOLDERS };
+  let rule = { ...MIKE_MOVE };
+  let stash = null;
+  ({ rule, stash } = chooseTrigger(rule, "read_progress", stash, opts));
+  assert.equal(rule.trigger.percent, 80);
+  rule = { ...rule, trigger: { ...rule.trigger, percent: 55 } };
+  ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
+  assert.deepEqual(rule.trigger, MIKE_MOVE.trigger, "minPages 2, settle 6, min age 0 kept");
+  ({ rule, stash } = chooseTrigger(rule, "read_progress", stash, opts));
+  assert.equal(rule.trigger.percent, 55);
+  // the page tag survives page_changed and a trip through a document trigger
+  ({ rule, stash } = chooseTrigger(rule, "page_tagged", stash, opts));
+  rule = { ...rule, trigger: { ...rule.trigger, tag: "todo" } };
+  ({ rule, stash } = chooseTrigger(rule, "page_changed", stash, opts));
+  ({ rule, stash } = chooseTrigger(rule, "page_tagged", stash, opts));
+  assert.equal(rule.trigger.tag, "todo");
+  ({ rule, stash } = chooseTrigger(rule, "finished_reading", stash, opts));
+  assert.equal(rule.trigger.minPages, 2);
+  ({ rule, stash } = chooseTrigger(rule, "page_tagged", stash, opts));
+  assert.equal(rule.trigger.tag, "todo");
+});
+
+test("ruleLabel: its own name, else its sentence", () => {
+  assert.equal(ruleLabel(MIKE_PIPELINE, CTX), "capture inbox note to vault");
+  assert.equal(ruleLabel(MIKE_MOVE, CTX), "IF I finish reading a document in Research Reports THEN move it to Read");
 });

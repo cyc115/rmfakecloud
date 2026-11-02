@@ -56,8 +56,11 @@ test("forSave: anywhere is the root folder entry for both page triggers", () => 
   const pt = forSave({ ...newPipelineRule(DEFAULTS), trigger: { type: "page_tagged", tag: " todo " }, watch: [] });
   assert.deepEqual(pt.watch, root);
   assert.equal(pt.trigger.tag, "todo");
-  const some = forSave({ ...newPipelineRule(DEFAULTS), watch: [{ id: "", kind: "folder" }, { id: "d1", kind: "document", name: "Notes" }] });
-  assert.deepEqual(some.watch, [{ id: "d1", kind: "document", name: "Notes" }]);
+  // a root entry next to others is kept as stored (it still means anywhere)
+  const mixed = [{ id: "", kind: "folder" }, { id: "d1", kind: "document", name: "Notes" }];
+  assert.deepEqual(forSave({ ...newPipelineRule(DEFAULTS), watch: mixed }).watch, mixed);
+  const some = [{ id: "d1", kind: "document", name: "Notes" }];
+  assert.deepEqual(forSave({ ...newPipelineRule(DEFAULTS), watch: some }).watch, some);
 });
 
 test("forSave: tasks false is kept, true is dropped, never on a move rule", () => {

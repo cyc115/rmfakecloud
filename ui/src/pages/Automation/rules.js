@@ -123,10 +123,27 @@ function watchName(ctx, w) {
   return hit ? hit.name : w.name || w.id;
 }
 
-// placesOf the watch entries that name a place; the root folder entry
-// (whole tree) reads as "anywhere"
+export function isRootWatch(w) {
+  return w.kind === "folder" && w.id === ROOT_ID;
+}
+
+// isAnywhere the rule's page places cover the whole tree: no entry, or the
+// root folder among them (a root entry next to others still means anywhere)
+export function isAnywhere(rule) {
+  const watch = rule.watch || [];
+  return watch.length === 0 || watch.some(isRootWatch);
+}
+
+// placesOf the places a page rule names; none when it applies anywhere
 export function placesOf(rule) {
-  return (rule.watch || []).filter((w) => !(w.kind === "folder" && w.id === ROOT_ID));
+  return isAnywhere(rule) ? [] : rule.watch;
+}
+
+// editableWatch the entries the In picker shows as chips: a lone root entry
+// is "anywhere" (no chip), any other list is shown as stored
+export function editableWatch(rule) {
+  const watch = rule.watch || [];
+  return watch.length === 1 && isRootWatch(watch[0]) ? [] : watch;
 }
 
 const tok = (s) => ({ t: "tok", s });
@@ -149,7 +166,7 @@ function triggerParts(t) {
     case "read_progress": return ["I've ", tok(`read ${t.percent}%`), " of a document"];
     case "not_opened_for_days": return ["a document ", tok(`sits unopened ${t.days} days`)];
     case "not_modified_for_days": return ["a document ", tok(`sits unchanged ${t.days} days`)];
-    case "age_since_created": return ["a document ", tok(`arrived ${t.days} days ago`)];
+    case "age_since_created": return ["a document ", tok(`arrived at least ${t.days} days ago`)];
     case "tag_is": return ["I ", tok(`tag a document ${q(t.tag)}`)];
     case "name_matches": return ["a document ", tok(`named like ${q(t.pattern)}`), " is"];
     case "pinned_is": return ["a document ", tok(t.pinned ? "is pinned" : "is unpinned")];
@@ -186,10 +203,16 @@ export function sentence(rule, ctx) {
   return parts;
 }
 
-// sentenceText the sentence as plain text (the auto-name)
+// sentenceText the sentence as plain text (shown wherever an auto-named
+// rule's name would be)
 export function sentenceText(rule, ctx) {
   return sentence(rule, ctx).map((p) => (typeof p === "string" ? p : p.t === "tok" ? p.s : `${p.s} `)).join("")
     .replace(/\s+/g, " ").trim();
+}
+
+// ruleLabel a rule's name for display: its own name, else its sentence
+export function ruleLabel(rule, ctx) {
+  return (rule && rule.name) || (rule ? sentenceText(rule, ctx) : "");
 }
 
 // normalizePageTag as the server matches page tags (NormalizeTag, the same
@@ -302,16 +325,21 @@ export function switchAction(rule, type, stash, { defaults, folders } = {}) {
 // stash, so switching back restores it). A PDF-only trigger locks the
 // condition to PDFs & books; leaving one drops that lock.
 // Returns { rule, stash }; inputs are not mutated.
+// Each trigger type's last parameters are kept in stash.triggers, so picking
+// a card again restores them (minPages, settle hours, the page tag, ...).
 export function chooseTrigger(rule, type, stash, opts) {
-  const sw = switchAction(rule, isPageTrigger(type) ? "pipeline" : "move", stash, opts);
+  const triggers = { ...((stash && stash.triggers) || {}), [rule.trigger.type]: rule.trigger };
+  const sw = switchAction(rule, isPageTrigger(type) ? "pipeline" : "move", { ...(stash || {}), triggers }, opts);
   let r = sw.rule;
+  const next = { ...sw.stash, triggers: { ...triggers } };
   if (r.trigger.type !== type) {
+    next.triggers[r.trigger.type] = r.trigger;
     let scope = r.scope;
     if (isPdfOnly(type)) scope = "pdf_epub";
     else if (isPdfOnly(r.trigger.type)) scope = "all";
-    r = { ...r, trigger: makeTrigger(type), scope };
+    r = { ...r, trigger: next.triggers[type] || makeTrigger(type), scope };
   }
-  return { rule: r, stash: sw.stash };
+  return { rule: r, stash: next };
 }
 
 // chooseAction the rule after a THEN card is picked; a card that does not
@@ -325,8 +353,9 @@ export function chooseAction(rule, key) {
 }
 
 // forSave the rule as sent to the server: a pipeline prompt/model is trimmed
-// (whitespace-only → "" → the server's default); "anywhere" is the root
-// folder entry for both page triggers; tasks true is the default and not stored; a move rule has no
+// (whitespace-only → "" → the server's default); an empty watch becomes the
+// root folder entry ("anywhere", both page triggers), any other watch is sent
+// as it is; tasks true is the default and not stored; a move rule has no
 // watch and no tasks
 export function forSave(rule) {
   const r = { ...rule };
@@ -334,9 +363,7 @@ export function forSave(rule) {
     const action = { ...r.action, prompt: (r.action.prompt || "").trim(), model: (r.action.model || "").trim() };
     if (action.tasks !== false) delete action.tasks;
     r.action = action;
-    const places = placesOf(r);
-    if (places.length) r.watch = places;
-    else r.watch = [{ id: ROOT_ID, kind: "folder", name: ROOT_NAME }];
+    if (!(r.watch || []).length) r.watch = [{ id: ROOT_ID, kind: "folder", name: ROOT_NAME }];
     if (r.trigger.type === PAGE_TAGGED) r.trigger = { ...r.trigger, tag: (r.trigger.tag || "").trim() };
   } else {
     delete r.watch;

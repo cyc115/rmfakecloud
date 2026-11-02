@@ -409,6 +409,8 @@
 }
 .ao-namerow { display: flex; align-items: center; gap: 8px; }
 @media (max-width: 640px) {
+  // touch targets: the chip × is at least 32 px
+  .ao-wchip button { min-width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; }
   .ao-step { gap: 8px; }
   .ao-cgrid { grid-template-columns: 1fr; }
   .ao-db { padding: 6px 12px 14px; }

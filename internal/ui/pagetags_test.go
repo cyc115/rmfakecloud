@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/app/hub"
+	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/testkit/tablet"
+	"github.com/gin-gonic/gin"
 )
 
 func TestPageTagsListsDistinctTagsOfLivePages(t *testing.T) {
@@ -76,5 +79,18 @@ func TestPageTagsListsDistinctTagsOfLivePages(t *testing.T) {
 	}
 	if f := nb2["folders"].([]any); len(f) != 2 || f[0] != "proj" || f[1] != "" {
 		t.Fatalf("nb2 folders: %v", f)
+	}
+}
+
+func TestPageTagsWithoutBlobStorageIs503(t *testing.T) {
+	a := newAOAPI(t)
+	app := &ReactAppWrapper{cfg: a.cfg, organizer: autoorganize.NewService(a.storage, hub.NewHub(), 0)}
+	router := gin.New()
+	auth := router.Group("/ui/api").Group("")
+	auth.Use(app.authMiddleware())
+	app.registerAutoOrganizeRoutes(auth)
+	a.router = router
+	if code, body := a.do("GET", "/ui/api/auto-organize/page-tags", a.token("mike", true), nil); code != http.StatusServiceUnavailable {
+		t.Fatalf("nil blobs: %d %v", code, body)
 	}
 }

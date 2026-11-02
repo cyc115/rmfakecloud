@@ -6,7 +6,7 @@ import RuleEditor from "./RuleEditor";
 import Sentence from "./Sentence";
 import {
   INTERVALS, SKIP_CHIP, SKIP_LABELS, exampleRule, fmtAgo, fmtTime, isPipeline, missingFor, newPipelineRule,
-  pendingText, runCounts, sentenceText, withDisplayNames,
+  pendingText, ruleLabel, runCounts, sentenceText, withDisplayNames,
 } from "./rules";
 import "./Automation.scss";
 
@@ -152,7 +152,7 @@ function RuleRow({ rule, index, count, ctx, status, busy, onUndo, onToggle, onEd
   );
 }
 
-function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, busy }) {
+function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, busy, labelOf }) {
   if (!plan) {
     return <div className="ao-empty-pane">Press <b>Preview</b> to see what the next check would do. Nothing moves.</div>;
   }
@@ -163,7 +163,7 @@ function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, bu
     <>
       {groups.map((r) => {
         const moves = plan.moves.filter((m) => m.ruleId === r.ruleId);
-        const label = r.name || `${r.sourceName} → ${r.destName}`;
+        const label = labelOf(r.ruleId, r.name) || `${r.sourceName} → ${r.destName}`;
         let hint = moves.length ? `${moves.length} would move` : "nothing qualifies";
         if (r.problems.length) hint = r.problems.join(" · ");
         return (
@@ -217,7 +217,7 @@ function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, bu
   );
 }
 
-function MovesPane({ moves, onUndo, onReapply, busy }) {
+function MovesPane({ moves, onUndo, onReapply, busy, labelOf }) {
   if (!moves.length) return <div className="ao-empty-pane">No moves yet.</div>;
   return (
     <>
@@ -227,7 +227,7 @@ function MovesPane({ moves, onUndo, onReapply, busy }) {
           <div className="what">
             <div className="doc">{m.docName}</div>
             <div className="path">{m.fromName}<span className="arr">→</span>{m.toName}{" "}
-              <span className="rule">· rule {m.ruleNumber} {m.ruleName}
+              <span className="rule">· rule {m.ruleNumber} {labelOf(m.ruleId, m.ruleName)}
                 {m.kind === "reapply" ? " · re-applied" : ""}
                 {m.undoneAt ? ` · undone ${fmtTime(m.undoneAt)} · hold set` : ""}
                 {m.holdId ? " · returned to source, held" : ""}
@@ -312,7 +312,7 @@ export default function Automation() {
   const [drawer, setDrawer] = useState({ open: false, rule: null, index: -1 });
   const [pipeline, setPipeline] = useState(null);
   const [watchables, setWatchables] = useState([]);
-  const [pageTags, setPageTags] = useState([]);
+  const [watchablesError, setWatchablesError] = useState(false);
   const [dragFrom, setDragFrom] = useState(null);
   const [dragOver, setDragOver] = useState(null);
   const activityRef = useRef(null);
@@ -322,6 +322,13 @@ export default function Automation() {
   const saveChain = useRef(Promise.resolve());
 
   const refreshPipeline = useCallback(() => apiService.getPipeline().then(setPipeline).catch(() => {}), []);
+  // the editor's In picker: a failed load shows "Couldn't load … (retry)" there
+  const loadWatchables = useCallback(() => {
+    setWatchablesError(false);
+    return apiService.getWatchables()
+      .then((w) => setWatchables(w.items))
+      .catch(() => setWatchablesError(true));
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -339,8 +346,8 @@ export default function Automation() {
     }
     // the page-watch extras are optional: the page works without them
     refreshPipeline();
-    apiService.getWatchables().then((w) => setWatchables(w.items)).catch(() => {});
-  }, [refreshPipeline]);
+    loadWatchables();
+  }, [refreshPipeline, loadWatchables]);
 
   useEffect(() => {
     refresh();
@@ -441,12 +448,13 @@ export default function Automation() {
     if (!hasMoveRules) setTab("pages");
   };
 
-  // Run now: the document rules (sweep) and the page rules (page watch)
-  const runNow = async () => {
+  // Run now: the document rules (sweep) and the page rules (page watch);
+  // movesOnly (the Preview's Apply) runs the document rules alone
+  const runNow = async (movesOnly) => {
     setBusy(true);
     try {
-      const pages = hasPageRules && pipeline && pipeline.enabled;
-      if (hasMoveRules || !pages) {
+      const pages = movesOnly !== true && hasPageRules && pipeline && pipeline.enabled;
+      if (movesOnly === true || hasMoveRules || !pages) {
         if (!(await sweep())) return;
       }
       if (pages) await checkPages();
@@ -486,14 +494,13 @@ export default function Automation() {
   };
 
   const openDrawer = (rule, index) => {
-    // one after the other: both read the tree, whose root blob lock is not shared
-    apiService.getWatchables().then((w) => setWatchables(w.items)).catch(() => {})
-      .then(() => apiService.getPageTags()).then((t) => t && setPageTags(t.tags)).catch(() => {});
+    loadWatchables();
     setDrawer({ open: true, rule: JSON.parse(JSON.stringify(rule)), index });
   };
   const closeDrawer = () => setDrawer((d) => ({ ...d, open: false }));
   const saveRule = async (rule) => {
-    const named = withDisplayNames(rule, folders);
+    // page rules keep source and destination as they are (unused by them)
+    const named = isPipeline(rule) ? rule : withDisplayNames(rule, folders);
     const editing = drawer.index >= 0 && named.id;
     try {
       await save((c) => {
@@ -513,10 +520,11 @@ export default function Automation() {
     closeDrawer();
     toast.success("Rule saved");
   };
-  const deleteRule = (index) => {
-    const id = rules[index] && rules[index].id;
+  // deleteRule by id: the list may have changed since the editor opened
+  const deleteRule = (id) => {
+    const index = rules.findIndex((r) => r.id === id);
     // eslint-disable-next-line no-alert
-    if (!id || !window.confirm(`Delete rule ${index + 1}?`)) return;
+    if (!id || index < 0 || !window.confirm(`Delete rule ${index + 1}?`)) return;
     setRules((cur) => cur.filter((r) => r.id !== id));
     closeDrawer();
   };
@@ -546,6 +554,11 @@ export default function Automation() {
     rules.filter((r) => r.enabled && !isPipeline(r) && r.source.id === rule.source.id).length > 1;
   const otherRules = rules.map((r, i) => ({ ...r, _number: i + 1 })).filter((r, i) => i !== drawer.index && !isPipeline(r));
   const example = exampleRule(folders);
+  // labelOf a rule's display name in Preview and Moves: its name, else its sentence
+  const labelOf = (ruleId, fallback) => {
+    const r = rules.find((x) => x.id === ruleId);
+    return r ? ruleLabel(r, ctx) : fallback;
+  };
 
   return (
     <div className="ao">
@@ -582,7 +595,7 @@ export default function Automation() {
               <span className="ao-acts">
                 <button className="ao-btn" disabled={busy} onClick={() => runPreview()}>Preview</button>
                 <button className="ao-btn" disabled={busy || !config.settings.enabled || view.status.running}
-                  title={config.settings.enabled ? "Check every rule now" : "Turn automation on to run"} onClick={runNow}>
+                  title={config.settings.enabled ? "Check every rule now" : "Turn automation on to run"} onClick={() => runNow(false)}>
                   Run now
                 </button>
               </span>
@@ -622,7 +635,7 @@ export default function Automation() {
                 }}
                 onPreview={() => runPreview(r.enabled ? { ruleId: r.id } : { rule: r })}
                 onMove={(d) => reorder(r.id, d)}
-                onDelete={() => deleteRule(i)} />
+                onDelete={() => deleteRule(r.id)} />
             ))}
           </div>
           <div className="ao-note">
@@ -643,9 +656,9 @@ export default function Automation() {
             </span>
           </div>
           <div className="ao-pane">
-            {tab === "preview" && <PreviewPane plan={plan} partial={planPartial} live={live} busy={busy} onApply={runNow}
+            {tab === "preview" && <PreviewPane plan={plan} partial={planPartial} live={live} busy={busy} onApply={() => runNow(true)} labelOf={labelOf}
               onPreviewAll={() => runPreview()} onReapply={reapply} />}
-            {tab === "moves" && <MovesPane moves={log.moves} busy={busy} onUndo={undo} onReapply={reapply} />}
+            {tab === "moves" && <MovesPane moves={log.moves} busy={busy} onUndo={undo} onReapply={reapply} labelOf={labelOf} />}
             {tab === "runs" && <RunsPane runs={log.runs} />}
             {tab === "pages" && <PageRunsPane pipeline={pipeline} />}
           </div>
@@ -653,9 +666,9 @@ export default function Automation() {
       </div>
 
       <RuleEditor open={drawer.open} initial={drawer.rule} isNew={drawer.index < 0} folders={folders}
-        watchables={watchables} pageTags={pageTags} pipelineDefaults={pipeline && pipeline.defaults}
+        watchables={watchables} watchablesError={watchablesError} onRetryWatchables={loadWatchables} pipelineDefaults={pipeline && pipeline.defaults}
         otherRules={otherRules} onCancel={closeDrawer} onSave={saveRule}
-        onDelete={() => deleteRule(drawer.index)}
+        onDelete={() => deleteRule(drawer.rule && drawer.rule.id)}
         onShowPreview={(p) => {
           setPlan(p);
           setPlanPartial(true);

@@ -6,7 +6,7 @@ import Sentence from "./Sentence";
 import {
   ACTION_CARDS, CONDITIONS, NO_AUTOMATION_TAG, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
   actionFit, actionKey, chooseAction, chooseTrigger, conditionLock, destinationName, forSave, isPageTrigger,
-  normalizePageTag, patternError, placesOf, sentenceText, tagSuggestions, taggedCount,
+  editableWatch, normalizePageTag, patternError, placesOf, sentenceText, tagSuggestions, taggedCount,
 } from "./rules";
 
 function num(v) {
@@ -73,11 +73,17 @@ function Card({ card, selected, disabled, onPick, badge }) {
   );
 }
 
-export default function RuleEditor({ open, initial, isNew, folders, watchables, pageTags, pipelineDefaults, otherRules, onCancel, onSave, onDelete, onShowPreview }) {
+export default function RuleEditor({ open, initial, isNew, folders, watchables, watchablesError, onRetryWatchables, pipelineDefaults, otherRules, onCancel, onSave, onDelete, onShowPreview }) {
   const [rule, setRule] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState(null);
   const [matches, setMatches] = useState(null);
+  const [matchesError, setMatchesError] = useState(false);
+  const [previewTry, setPreviewTry] = useState(0);
+  // page tags: fetched only while "I tag a page" is picked; null = not loaded
+  const [pageTags, setPageTags] = useState(null);
+  const [tagsError, setTagsError] = useState(false);
+  const [tagsTry, setTagsTry] = useState(0);
   const [autoName, setAutoName] = useState(true);
   const [renaming, setRenaming] = useState(false);
   const [srcOpen, setSrcOpen] = useState(false);
@@ -92,11 +98,14 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     stash.current = null;
     setServerError(null);
     setMatches(null);
+    setMatchesError(false);
+    setPageTags(null);
+    setTagsError(false);
     setRenaming(false);
     setSrcOpen(false);
     setCondOpen(false);
-    setAutoName(!initial || !initial.name || initial.name === sentenceText(initial, { folders, watchables }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // no name = named by its sentence; saving keeps it "" (the list shows the sentence)
+    setAutoName(!initial || !initial.name);
   }, [initial]);
 
   useEffect(() => {
@@ -110,29 +119,48 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
 
   const { errors, warnings } = rule ? validate(rule, otherRules, folders) : { errors: [], warnings: [] };
   const page = rule ? isPageTrigger(rule.trigger.type) : false;
+  const tagged = !!rule && rule.trigger.type === PAGE_TAGGED;
+
+  useEffect(() => {
+    if (!open || !tagged || pageTags !== null) return;
+    let cancelled = false;
+    setTagsError(false);
+    apiService.getPageTags()
+      .then((res) => !cancelled && setPageTags(res.tags || []))
+      .catch(() => !cancelled && setTagsError(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, tagged, pageTags, tagsTry]);
 
   // live "Matches now" for document rules, debounced against preview with the draft rule
   useEffect(() => {
     if (!open || !rule || errors.length || page) {
       setMatches(null);
+      setMatchesError(false);
       return;
     }
     let cancelled = false;
     const timer = setTimeout(() => {
+      setMatchesError(false);
       apiService.previewAutoOrganize({ rule })
         .then((plan) => {
           if (cancelled) return;
           lastPlan.current = plan;
           setMatches(plan.moves.length);
         })
-        .catch(() => !cancelled && setMatches(null));
+        .catch(() => {
+          if (cancelled) return;
+          setMatches(null);
+          setMatchesError(true);
+        });
     }, 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, JSON.stringify(rule), errors.length]);
+  }, [open, JSON.stringify(rule), errors.length, previewTry]);
 
   if (!rule) return null;
 
@@ -158,7 +186,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     setServerError(null);
     try {
       const out = forSave(rule);
-      out.name = autoName ? autoText : (rule.name || "").trim();
+      out.name = autoName ? "" : (rule.name || "").trim();
       await onSave(out);
     } catch (e) {
       setServerError(e.message);
@@ -182,7 +210,13 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
           <input type="text" list="ao-page-tags" value={t.tag} placeholder="page tag" aria-label="page tag"
             onChange={(e) => updateTrigger({ tag: e.target.value })} />
           <datalist id="ao-page-tags">{tagNames.map((n) => <option key={n} value={n} />)}</datalist>
-          <span className="ao-hint">{tagNames.length ? `your tags: ${tagNames.slice(0, 4).join(", ")}${tagNames.length > 4 ? ", …" : ""}` : "no page tags on your pages yet"}</span>
+          {tagsError ? (
+            <span className="ao-hint bad" role="status">Couldn&apos;t load your page tags{" "}
+              <button type="button" className="ao-link" onClick={() => setTagsTry((n) => n + 1)}>(retry)</button></span>
+          ) : (
+            <span className="ao-hint">{pageTags === null ? "loading your tags…"
+              : tagNames.length ? `your tags: ${tagNames.slice(0, 4).join(", ")}${tagNames.length > 4 ? ", …" : ""}` : "no page tags on your pages yet"}</span>
+          )}
         </div>
       )}
       {t.type === "finished_reading" && (
@@ -237,7 +271,13 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   );
 
   const places = page ? (
-    <PlacesPicker items={watchables} selected={placesOf(rule)} onChange={(watch) => update({ watch })} />
+    <>
+      <PlacesPicker items={watchables} selected={editableWatch(rule)} onChange={(watch) => update({ watch })} />
+      {watchablesError && (
+        <div className="ao-hint bad" role="status">Couldn&apos;t load your folders and notebooks{" "}
+          <button type="button" className="ao-link" onClick={onRetryWatchables}>(retry)</button></div>
+      )}
+    </>
   ) : (
     <div className="ao-places">
       <div className="ao-frow">
@@ -316,7 +356,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
 
   let preview;
   if (page) {
-    const n = t.type === PAGE_TAGGED && normalizePageTag(t.tag) ? taggedCount(pageTags, rule) : null;
+    const n = tagged && normalizePageTag(t.tag) && pageTags !== null ? taggedCount(pageTags, rule) : null;
     preview = (
       <div className="ao-matches">
         <span className="n">Applies from your next change</span>
@@ -332,7 +372,12 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     preview = (
       <div className="ao-matches">
         Matches now:{" "}
-        <span className="n">{matches === null ? "…" : plural(matches, "document")}</span>
+        {matchesError ? (
+          <span className="ao-hint bad" role="status">Couldn&apos;t load the preview{" "}
+            <button type="button" className="ao-link" onClick={() => setPreviewTry((n) => n + 1)}>(retry)</button></span>
+        ) : (
+          <span className="n">{matches === null ? "…" : plural(matches, "document")}</span>
+        )}
         <button className="ao-btn link sm" disabled={matches === null}
           onClick={() => lastPlan.current && onShowPreview(lastPlan.current)}>▸ show</button>
         <span className="ao-hint">→ {destinationName(rule, ctx)}</span>

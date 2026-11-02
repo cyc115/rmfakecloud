@@ -17,6 +17,7 @@ export default function PlacesPicker({ items, selected, onChange }) {
     else onChange([...selected, { id: i.id, kind: i.kind, name: i.name }]);
   };
   const label = (s) => {
+    if (s.kind === "folder" && s.id === "") return "My files (anywhere)";
     const hit = list.find((i) => i.id === s.id && i.kind === s.kind);
     return hit ? hit.path : s.name || s.id;
   };

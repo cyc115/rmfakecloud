@@ -9,6 +9,7 @@ import (
 	"github.com/danjacques/gofslock/fslock"
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
+	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	"github.com/gin-gonic/gin"
 )
 
@@ -122,7 +123,7 @@ func ancestors(snap *autoorganize.Snapshot, parent string) []string {
 // page_tagged preview count
 func (app *ReactAppWrapper) autoOrganizePageTags(c *gin.Context) {
 	if app.blobs == nil {
-		c.JSON(http.StatusOK, gin.H{"tags": []PageTag{}})
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, viewmodel.NewErrorResponse("page tags are not available"))
 		return
 	}
 	tags, err := listPageTags(app.blobs, userID(c))
