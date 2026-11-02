@@ -32,7 +32,7 @@ from playwright.sync_api import expect
 
 from conftest import _context
 from test_autoorganize_ui import assert_healthy, open_page, save_rule
-from test_pipeline_ui import start_pipeline_rule, watch
+from test_pipeline_ui import open_prompt, start_pipeline_rule, watch
 
 RM_PAGES_URL = os.environ.get("RM_PAGES_URL", "")
 API = os.environ.get("E2E_RMPAGES_API", "http://10.0.0.11:8801").rstrip("/")  # reachable from here
@@ -111,9 +111,9 @@ def rmseed(*args):
 
 
 def run_pipeline(page, api):
-    """Click the pipeline panel's Run now; returns the finished run entry."""
+    """Click the header's Run now (only page rules exist: it checks pages); returns the run entry."""
     before = len(api.get("/ui/api/auto-organize/pipeline").json()["runs"])
-    page.locator(".ao-pipeline").get_by_role("button", name="Run now").click()
+    page.locator(".ao-hdr").get_by_role("button", name="Run now").click()
     wait_for(lambda: len(api.get("/ui/api/auto-organize/pipeline").json()["runs"]) > before, 60, "the run", 1)
     run = api.get("/ui/api/auto-organize/pipeline").json()["lastRun"]
     assert run["trigger"] == "run now" and run["mode"] == "live" and not run.get("error"), run
@@ -150,6 +150,7 @@ def test_page_change_to_vault_note_and_staged_task(desktop, tmp_path):
     expect(page.locator(".ao-seg label.on")).to_have_text("Live")
     drawer = start_pipeline_rule(page)
     watch(drawer, "Projects")
+    open_prompt(drawer)
     expect(drawer.get_by_label("prompt")).to_have_value(pipe["defaults"]["prompt"])
     save_rule(page, drawer)
     cfg = api.get("/ui/api/auto-organize").json()

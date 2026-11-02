@@ -77,6 +77,7 @@ mkdir -p $DATA
 cd $REMOTE
 mkdir -p ui/dist && { [ -f ui/dist/index.html ] || touch ui/dist/index.html; }
 podman run --rm -v $REMOTE:/src:Z -v rmfc-gocache:/root/go -w /src -e CGO_ENABLED=0 $GO_IMG go build -o /src/rmseed ./cmd/rmseed
+podman run --rm -v $REMOTE:/src:Z -v rmfc-gocache:/root/go -w /src -e CGO_ENABLED=0 $GO_IMG go build -o /src/tagpage ./scripts/e2e/tagpage
 seed() { podman run --rm -v $REMOTE:/src:Z -v $DATA:/data:Z -w /src $GO_IMG /src/rmseed --data /data --user e2e "\$@"; }
 T=internal/testkit/tablet/testdata
 seed init
@@ -86,6 +87,8 @@ seed folder 33333333-3333-4333-8333-333333333333 Projects ""
 seed folder 44444444-4444-4444-8444-444444444444 Alpha 33333333-3333-4333-8333-333333333333
 seed notebook 55555555-5555-4555-8555-555555555555 "E2E Notes" 33333333-3333-4333-8333-333333333333
 seed page 55555555-5555-4555-8555-555555555555 p1 /src/\$T/strokes_a.rm
+# page tag "todo" on p1: the Automation editor suggests it and counts it (page_tagged preview)
+podman run --rm -v $REMOTE:/src:Z -v $DATA:/data:Z -w /src $GO_IMG /src/tagpage --data /data --user e2e 55555555-5555-4555-8555-555555555555 p1 todo
 # password login e2e / e2epass123 (rmseed init uses a placeholder password)
 podman run --rm -v $DATA:/data:Z -e DATADIR=/data localhost/rmfakecloud:e2e setuser -u e2e -p e2epass123 -a -s
 podman run -d --name $NAME -p $PORT:3000 -v $DATA:/data:Z -e DATADIR=/data -e JWT_SECRET_KEY=e2e $ENVS localhost/rmfakecloud:e2e

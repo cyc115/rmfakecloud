@@ -1,16 +1,16 @@
-"""Baseline Auto-organize UI tests; every test runs on desktop and phone."""
+"""Baseline Automation UI tests (document rules); every test runs on desktop and phone."""
 import re
 
 from playwright.sync_api import expect
 
 from conftest import find
 
-GOOD_URL = "/auto-organize"
+GOOD_URL = "/automation"
 
 
 def open_page(page):
     page.goto(GOOD_URL)
-    expect(page.get_by_role("heading", name="Auto-organize")).to_be_visible()
+    expect(page.get_by_role("heading", name="Automation", exact=True)).to_be_visible()
 
 
 def assert_healthy(page):
@@ -24,12 +24,28 @@ def pick(page, listbox, name):
         has_text=re.compile(rf"^\W*{re.escape(name)}$")).click()
 
 
-def add_rule(page, source="Inbox", dest="Archive", pattern="Paper*"):
-    page.get_by_role("button", name="+ Add rule").click()
+def new_rule(page):
+    page.get_by_role("button", name="+ New").click()
     drawer = page.get_by_label("Edit rule")
     expect(drawer).to_be_visible()
-    pick(page, "source folder", source)
-    drawer.get_by_label("Trigger").select_option("name_matches")
+    return drawer
+
+
+def card(drawer, title):
+    return drawer.get_by_role("radio", name=title, exact=True)
+
+
+def pick_source(page, drawer, name):
+    drawer.get_by_role("button", name="change", exact=True).click()
+    pick(page, "source folder", name)
+
+
+def add_rule(page, source="Inbox", dest="Archive", pattern="Paper*"):
+    """A document rule: Its name matches <pattern> in <source> → Move it to <dest>."""
+    drawer = new_rule(page)
+    card(drawer, "Its name matches").click()
+    expect(card(drawer, "Move it to…")).to_have_attribute("aria-checked", "true")
+    pick_source(page, drawer, source)
     drawer.get_by_label("pattern").fill(pattern)
     pick(page, "destination folder", dest)
     return drawer
@@ -48,9 +64,10 @@ def inbox_docs(api):
 
 def test_page_loads_with_dry_mode_and_no_rules(page):
     open_page(page)
-    expect(page.get_by_text("No rules yet")).to_be_visible()
+    expect(page.get_by_text("No automations yet")).to_be_visible()
     expect(page.locator(".ao-seg label.dry.on")).to_have_text("Dry-run")
-    expect(page.get_by_role("button", name="Run dry sweep")).to_be_visible()
+    expect(page.locator(".ao-hdr .ao-status")).to_contain_text("Dry-run · checks every")
+    expect(page.get_by_role("button", name="Run now")).to_be_visible()
     assert_healthy(page)
 
 
@@ -71,17 +88,15 @@ def test_save_rule_persists_after_reload(page):
     page.reload()
     rule = page.locator(".ao-rule")
     expect(rule).to_have_count(1)
-    expect(rule).to_contain_text("Inbox")
-    expect(rule).to_contain_text("Archive")
-    expect(rule).to_contain_text("Paper*")
+    expect(rule.locator(".ao-sentence")).to_have_text("IF a document named like “Paper*” is in Inbox THEN move it to Archive")
     assert_healthy(page)
 
 
 def test_run_now_in_dry_mode_logs_planned_move(page):
     open_page(page)
     save_rule(page, add_rule(page))
-    page.get_by_role("button", name="Run dry sweep").click()
-    expect(page.get_by_text("Dry sweep:")).to_be_visible()
+    page.get_by_role("button", name="Run now").click()
+    expect(page.get_by_text("Dry run: 1 would move")).to_be_visible()
     page.get_by_role("tab", name="Runs").click()
     expect(page.locator(".ao-runs .ao-chip.dry").first).to_have_text("DRY")
     expect(page.locator(".ao-runs")).to_contain_text("1 would")
@@ -96,7 +111,7 @@ def test_delete_rule(page):
     page.once("dialog", lambda d: d.accept())
     page.get_by_label("Rule actions").click()
     page.get_by_role("button", name="Delete", exact=True).click()
-    expect(page.get_by_text("No rules yet")).to_be_visible()
+    expect(page.get_by_text("No automations yet")).to_be_visible()
     assert_healthy(page)
 
 
