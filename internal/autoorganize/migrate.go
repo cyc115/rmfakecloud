@@ -8,7 +8,8 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/automation"
 )
 
-// RuleIssue a v2 rule that has no v1 form (ToV1); Index is its config position
+// RuleIssue a rule one format cannot carry as is: a v2 rule with no v1 form
+// (ToV1), or a v1 rule migrated disabled (MigrateV1, X3). Index is its config position.
 type RuleIssue struct {
 	Index  int
 	RuleID string
@@ -93,11 +94,26 @@ func destToV1(d *automation.Destination) Destination {
 // Rule order and ids are kept; the revision goes up by one. It never runs v2
 // Validate (X2): a v1 rule that matched nothing migrates to one that matches
 // nothing. Only an action other than move or pipeline is an error.
-func MigrateV1(v1 *Config) (*automation.Config, error) {
+//
+// X3: v1 never normalized on load, and the move planner skipped an enabled
+// move rule that failed v1 Validate as it was stored ("Invalid rule"). Such a
+// rule migrates disabled, and is returned as a RuleIssue for the caller to
+// log. Pipeline rules are not checked: the v1 page watch ran them unvalidated.
+func MigrateV1(v1 *Config) (*automation.Config, []RuleIssue, error) {
 	if v1 == nil {
-		return nil, errors.New("no v1 config to migrate")
+		return nil, nil, errors.New("no v1 config to migrate")
 	}
 	c := copyV1(v1)
+	invalid := map[int]string{}
+	for i := range c.Rules {
+		raw := c.Rules[i]
+		if !raw.Enabled || raw.IsPipeline() {
+			continue
+		}
+		if err := raw.Validate(); err != nil {
+			invalid[i] = err.Error()
+		}
+	}
 	c.Normalize()
 	out := &automation.Config{
 		Version:  automation.Version,
@@ -105,15 +121,21 @@ func MigrateV1(v1 *Config) (*automation.Config, error) {
 		Settings: automation.Settings(c.Settings),
 		Rules:    make([]automation.Rule, 0, len(c.Rules)),
 	}
+	var issues []RuleIssue
 	for i := range c.Rules {
 		r := &c.Rules[i]
 		nr, err := ruleToV2(r)
 		if err != nil {
-			return nil, fmt.Errorf("rule %d (%s): %w", i+1, r.ID, err)
+			return nil, nil, fmt.Errorf("rule %d (%s): %w", i+1, r.ID, err)
+		}
+		if reason, ok := invalid[i]; ok {
+			nr.Enabled = false
+			issues = append(issues, RuleIssue{Index: i, RuleID: r.ID,
+				Reason: "v1 skipped it as an invalid rule (" + reason + "); migrated disabled"})
 		}
 		out.Rules = append(out.Rules, nr)
 	}
-	return out, nil
+	return out, issues, nil
 }
 
 func ruleToV2(r *Rule) (automation.Rule, error) {
@@ -138,6 +160,10 @@ func ruleToV2(r *Rule) (automation.Rule, error) {
 		in := make([]automation.Place, 0, len(r.Watch))
 		for _, w := range r.Watch {
 			in = append(in, automation.Place{ID: w.ID, Kind: w.Kind, Name: w.Name})
+		}
+		// the v1 page watch ran every pipeline trigger but page_tagged as page_changed
+		if r.Trigger.Type != TriggerPageTagged {
+			trig = automation.Trigger{Type: automation.TriggerPageChanged}
 		}
 		nr.When = automation.When{Subject: automation.SubjectPage, In: in, Trigger: trig}
 		a := automation.Action{Type: automation.ActionExtractTasks, Prompt: r.Action.Prompt, Model: r.Action.Model}

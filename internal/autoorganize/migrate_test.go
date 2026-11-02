@@ -33,13 +33,23 @@ func decoded(t *testing.T, b []byte) any {
 	return v
 }
 
+// mustMigrate migrates v1, which must not hold a rule v1 skipped as invalid
 func mustMigrate(t *testing.T, v1 *Config) *automation.Config {
 	t.Helper()
-	c, err := MigrateV1(v1)
+	c, issues := migrateIssues(t, v1)
+	if len(issues) != 0 {
+		t.Fatalf("issues %+v", issues)
+	}
+	return c
+}
+
+func migrateIssues(t *testing.T, v1 *Config) (*automation.Config, []RuleIssue) {
+	t.Helper()
+	c, issues, err := MigrateV1(v1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return c, issues
 }
 
 // v1From parses a v1 config JSON, so absent fields get the v1 defaults
@@ -77,6 +87,7 @@ func TestMigrateV1Golden(t *testing.T) {
 
 func TestMigrateV1Mapping(t *testing.T) {
 	const src = `"source":{"id":"f1","name":"Inbox"},"destination":{"id":"f2"},"action":{"type":"move"}`
+	const pdf = `"scope":"pdf_epub",`
 	cases := []struct {
 		name  string
 		rules string
@@ -106,7 +117,7 @@ func TestMigrateV1Mapping(t *testing.T) {
 					t.Errorf("in %+v", r.When.In)
 				}
 			}},
-		{"not_opened min age on", `{"id":"r1","enabled":true,"trigger":{"type":"not_opened_for_days","days":30,"minAgeEnabled":true,"minAgeDays":0},` + src + `}`,
+		{"not_opened min age on", `{"id":"r1","enabled":true,` + pdf + `"trigger":{"type":"not_opened_for_days","days":30,"minAgeEnabled":true,"minAgeDays":0},` + src + `}`,
 			func(t *testing.T, r *automation.Rule) {
 				want := []automation.Condition{
 					{Type: automation.CondKindIs, Params: automation.Params{Kind: automation.KindPdfEpub}},
@@ -125,7 +136,7 @@ func TestMigrateV1Mapping(t *testing.T) {
 					t.Errorf("conditions %+v", r.Conditions)
 				}
 			}},
-		{"finished_reading min age on", `{"id":"r1","enabled":true,"trigger":{"type":"finished_reading","minPages":3,"minAgeEnabled":true,"minAgeDays":5},` + src + `}`,
+		{"finished_reading min age on", `{"id":"r1","enabled":true,` + pdf + `"trigger":{"type":"finished_reading","minPages":3,"minAgeEnabled":true,"minAgeDays":5},` + src + `}`,
 			func(t *testing.T, r *automation.Rule) {
 				for _, c := range r.Conditions {
 					if c.Type == automation.CondMinAgeDays {
@@ -145,7 +156,22 @@ func TestMigrateV1Mapping(t *testing.T) {
 					t.Errorf("move %+v", m)
 				}
 			}},
-		{"pinned_is keeps pinned false", `{"id":"r1","enabled":true,"trigger":{"type":"pinned_is","pinned":false},` + src + `}`,
+		{"pipeline without trigger", `{"id":"r1","enabled":true,"trigger":{"settleHours":2},"action":{"type":"pipeline"},"watch":[{"id":"","kind":"folder"}]}`,
+			func(t *testing.T, r *automation.Rule) {
+				if r.When.Trigger != (automation.Trigger{Type: automation.TriggerPageChanged}) || !r.Enabled {
+					t.Errorf("trigger %+v enabled %v", r.When.Trigger, r.Enabled)
+				}
+			}},
+		{"pipeline finished_reading", `{"id":"r1","enabled":true,"trigger":{"type":"finished_reading","minPages":4,"tag":"x"},"action":{"type":"pipeline"},"watch":[{"id":"","kind":"folder"}]}`,
+			func(t *testing.T, r *automation.Rule) {
+				if r.When.Trigger != (automation.Trigger{Type: automation.TriggerPageChanged}) || !r.Enabled {
+					t.Errorf("trigger %+v enabled %v", r.When.Trigger, r.Enabled)
+				}
+				if r.Kind() != automation.KindAll {
+					t.Errorf("kind %q", r.Kind())
+				}
+			}},
+		{"pinned_is keeps pinned false", `{"id":"r1","enabled":true,` + pdf + `"trigger":{"type":"pinned_is","pinned":false},` + src + `}`,
 			func(t *testing.T, r *automation.Rule) {
 				if r.When.Trigger != (automation.Trigger{Type: automation.TriggerPinnedIs}) {
 					t.Errorf("trigger %+v", r.When.Trigger)
@@ -183,8 +209,8 @@ func TestMigrateV1Mapping(t *testing.T) {
 // build or a hand edit migrates to what the engine ran with
 func TestMigrateV1AbsentFieldsUseV1Defaults(t *testing.T) {
 	got := mustMigrate(t, v1From(t,
-		`{"id":"n","enabled":true,"source":{"id":"f1"},"trigger":{"type":"not_opened_for_days","days":30},"destination":{"id":"f2"},"action":{"type":"move"}},`+
-			`{"id":"f","enabled":true,"source":{"id":"f1"},"trigger":{"type":"finished_reading","minPages":2},"destination":{"id":"f2"}}`))
+		`{"id":"n","enabled":true,"scope":"pdf_epub","source":{"id":"f1"},"trigger":{"type":"not_opened_for_days","days":30},"destination":{"id":"f2"},"action":{"type":"move"}},`+
+			`{"id":"f","enabled":true,"scope":"pdf_epub","source":{"id":"f1"},"trigger":{"type":"finished_reading","minPages":2},"destination":{"id":"f2"},"action":{"type":"move"}}`))
 	n, f := &got.Rules[0], &got.Rules[1]
 	want := []automation.Condition{
 		{Type: automation.CondKindIs, Params: automation.Params{Kind: automation.KindPdfEpub}},
@@ -196,12 +222,8 @@ func TestMigrateV1AbsentFieldsUseV1Defaults(t *testing.T) {
 	if f.When.Trigger.SettleHours != 6 {
 		t.Errorf("finished_reading settle %d", f.When.Trigger.SettleHours)
 	}
-	if f.Kind() != automation.KindPdfEpub {
-		t.Errorf("no scope gave kind %q", f.Kind())
-	}
-	// no action type means move
-	if f.Move() == nil {
-		t.Errorf("actions %+v", f.Actions)
+	if !n.Enabled || !f.Enabled {
+		t.Errorf("valid rules disabled: %v %v", n.Enabled, f.Enabled)
 	}
 	if err := got.Validate(); err != nil {
 		t.Errorf("Validate: %v", err)
@@ -220,12 +242,50 @@ func TestMigrateV1EmptyWatchNotRejected(t *testing.T) {
 	}
 }
 
+// TestMigrateV1InvalidRawRuleDisabled X3: v1 never normalized on load, so the
+// planner skipped an enabled move rule that failed v1 Validate as stored. It
+// migrates disabled (id and order kept) and comes back as a RuleIssue; the
+// valid rules stay enabled. Pipeline rules are not checked (never validated).
+func TestMigrateV1InvalidRawRuleDisabled(t *testing.T) {
+	v1 := loadV1Golden(t)
+	var extra []Rule
+	if err := json.Unmarshal([]byte(`[
+		{"id":"noscope","enabled":true,"source":{"id":"f1"},"trigger":{"type":"tag_is","tag":"x"},"destination":{"id":"f2"},"action":{"type":"move"}},
+		{"id":"noaction","enabled":true,"scope":"all","source":{"id":"f1"},"trigger":{"type":"tag_is","tag":"x"},"destination":{"id":"f2"}},
+		{"id":"off","enabled":false,"source":{"id":"f1"},"trigger":{"type":"tag_is","tag":"x"},"destination":{"id":"f2"}},
+		{"id":"pipe","enabled":true,"trigger":{"type":"page_changed"},"action":{"type":"pipeline"},"watch":[{"id":"","kind":"folder"}]}
+	]`), &extra); err != nil {
+		t.Fatal(err)
+	}
+	// the invalid rule sits between the golden rules, so order is checked too
+	v1.Rules = []Rule{v1.Rules[0], extra[0], v1.Rules[1], extra[1], extra[2], extra[3]}
+	got, issues := migrateIssues(t, v1)
+	ids := []string{}
+	enabled := []bool{}
+	for _, r := range got.Rules {
+		ids = append(ids, r.ID)
+		enabled = append(enabled, r.Enabled)
+	}
+	wantIDs := []string{"0a1b2c3d-0000-4000-8000-000000000001", "noscope", "0a1b2c3d-0000-4000-8000-000000000002", "noaction", "off", "pipe"}
+	if !reflect.DeepEqual(ids, wantIDs) || !reflect.DeepEqual(enabled, []bool{true, false, true, false, false, true}) {
+		t.Errorf("ids %v enabled %v", ids, enabled)
+	}
+	if len(issues) != 2 || issues[0].Index != 1 || issues[0].RuleID != "noscope" || !strings.Contains(issues[0].Reason, `unknown scope ""`) ||
+		issues[1].Index != 3 || issues[1].RuleID != "noaction" || !strings.Contains(issues[1].Reason, `unsupported action ""`) {
+		t.Errorf("issues %+v", issues)
+	}
+	// the rest of the rule is still migrated (with the v1 defaults)
+	if r := got.Rules[1]; r.Kind() != automation.KindPdfEpub || r.Move() == nil {
+		t.Errorf("disabled rule %+v", r)
+	}
+}
+
 func TestMigrateV1UnknownActionErrors(t *testing.T) {
-	_, err := MigrateV1(v1From(t, `{"id":"r1","enabled":true,"trigger":{"type":"tag_is","tag":"x"},"action":{"type":"copy"}}`))
+	_, _, err := MigrateV1(v1From(t, `{"id":"r1","enabled":true,"trigger":{"type":"tag_is","tag":"x"},"action":{"type":"copy"}}`))
 	if err == nil || !strings.Contains(err.Error(), `"copy"`) || !strings.Contains(err.Error(), "r1") {
 		t.Errorf("err %v", err)
 	}
-	if _, err := MigrateV1(nil); err == nil {
+	if _, _, err := MigrateV1(nil); err == nil {
 		t.Error("nil config migrated")
 	}
 }
@@ -286,9 +346,9 @@ func TestToV1RoundTrip(t *testing.T) {
 
 func TestToV1MapsEveryV1Form(t *testing.T) {
 	v1 := v1From(t,
-		`{"id":"n","enabled":true,"source":{"id":"f1"},"trigger":{"type":"not_opened_for_days","days":30,"minAgeEnabled":true,"minAgeDays":3},"destination":{"id":"f2"}},`+
-			`{"id":"o","enabled":true,"source":{"id":"f1"},"trigger":{"type":"not_opened_for_days","days":30,"minAgeEnabled":false},"destination":{"id":"f2"}},`+
-			`{"id":"p","enabled":true,"scope":"notebooks","source":{"id":"f1"},"trigger":{"type":"pinned_is","pinned":false},"destination":{"id":"f2"}},`+
+		`{"id":"n","enabled":true,"scope":"pdf_epub","source":{"id":"f1"},"trigger":{"type":"not_opened_for_days","days":30,"minAgeEnabled":true,"minAgeDays":3},"destination":{"id":"f2"},"action":{"type":"move"}},`+
+			`{"id":"o","enabled":true,"scope":"all","source":{"id":"f1"},"trigger":{"type":"not_opened_for_days","days":30,"minAgeEnabled":false},"destination":{"id":"f2"},"action":{"type":"move"}},`+
+			`{"id":"p","enabled":true,"scope":"notebooks","source":{"id":"f1"},"trigger":{"type":"pinned_is","pinned":false},"destination":{"id":"f2"},"action":{"type":"move"}},`+
 			`{"id":"g","enabled":true,"scope":"notebooks","trigger":{"type":"page_tagged","tag":"todo"},"action":{"type":"pipeline","prompt":"P","model":"M","tasks":false}}`)
 	v2 := mustMigrate(t, v1)
 	back, issues := ToV1(v2, v1)
