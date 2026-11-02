@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 )
 
@@ -83,41 +84,112 @@ func daysSince(t, now time.Time) float64 {
 	return now.Sub(t).Hours() / 24
 }
 
-// evalTrigger evaluates r's trigger through the registry. It does not apply
-// the common guards (checkDoc does).
-func evalTrigger(r *Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
-	def, ok := triggerDefs[r.Trigger.Type]
+// mergeEval combines a trigger and its conditions, in order: match is the AND
+// of all, inputs the union, detail the parts joined with " · ". The first
+// skip wins; the evaluations after it are not merged.
+func mergeEval(evs ...evaluation) evaluation {
+	if len(evs) == 1 {
+		return evs[0]
+	}
+	out := evaluation{match: true}
+	var parts []string
+	for _, ev := range evs {
+		if ev.inputs != nil {
+			if out.inputs == nil {
+				out.inputs = map[string]string{}
+			}
+			for k, v := range ev.inputs {
+				out.inputs[k] = v
+			}
+		}
+		if ev.detail != "" {
+			parts = append(parts, ev.detail)
+		}
+		if ev.skip != "" {
+			out.match = false
+			out.skip, out.skipDetail = ev.skip, ev.skipDetail
+			break
+		}
+		out.match = out.match && ev.match
+	}
+	out.detail = strings.Join(parts, " · ")
+	return out
+}
+
+// evalRule evaluates r's trigger, then its conditions in order (ruleConditions);
+// it stops at the first skip. It does not apply the common guards (checkDoc does).
+func evalRule(r *Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	eval, ok := evaluators[r.Trigger.Type]
 	if !ok {
 		return evaluation{skip: SkipInvalidRule, skipDetail: "unknown trigger " + r.Trigger.Type}
 	}
-	return def.Eval(&r.Trigger, d, ci, fs, now)
+	tp := r.Trigger.params()
+	evs := []evaluation{eval(&tp, d, ci, fs, now)}
+	for _, c := range ruleConditions(r) {
+		if evs[len(evs)-1].skip != "" {
+			break
+		}
+		ceval, ok := conditionEvaluators[c.Type]
+		if !ok {
+			evs = append(evs, evaluation{skip: SkipInvalidRule, skipDetail: "unknown condition " + c.Type})
+			break
+		}
+		p := c.P
+		evs = append(evs, ceval(&p, d, ci, fs, now))
+	}
+	return mergeEval(evs...)
+}
+
+// evalKind the kind_is guard (v1 scope): skip with the out_of_scope detail
+// when the document is not of kind. Only all covers every document; like v1,
+// any other value ("" included) must equal the document's kind.
+func evalKind(kind string, ci *ContentInfo) (skip bool, detail string) {
+	got := ci.Kind()
+	if kind == automation.KindAll || got == kind {
+		return false, ""
+	}
+	what := "notebook"
+	if got == automation.KindPdfEpub {
+		what = strings.ToLower(ci.FileType)
+	} else if got == "other" {
+		what = "file type “" + ci.FileType + "”"
+	}
+	applies := "PDF & EPUB"
+	if kind == automation.KindNotebooks {
+		applies = "notebooks"
+	}
+	return true, what + ", rule applies to " + applies
 }
 
 // evalNotOpened not_opened_for_days: never opened, or last opened at least
-// Days ago; with the minimum-age guard the document must also be old enough
-func evalNotOpened(t *Trigger, d *DocSnap, _ *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
-	anchor, src := ageAnchor(d, fs, now)
+// Days ago. The age anchor stays an input (holds are keyed on it, with or
+// without the min-age condition).
+func evalNotOpened(p *automation.Params, d *DocSnap, _ *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	anchor, _ := ageAnchor(d, fs, now)
 	ev := evaluation{inputs: map[string]string{"lastOpened": d.LastOpened, "ageAnchor": strconv.FormatInt(anchor.UnixMilli(), 10)}}
-	age := daysSince(anchor, now)
 	opened, ok := parseMillis(d.LastOpened)
 	if ok {
 		ev.detail = fmt.Sprintf("last opened %s ago", humanDuration(now.Sub(opened)))
-		ev.match = daysSince(opened, now) >= float64(t.Days)
+		ev.match = daysSince(opened, now) >= float64(p.Days)
 	} else {
 		ev.detail = "never opened"
 		ev.match = true
 	}
-	if t.MinAgeEnabled {
-		ev.detail += fmt.Sprintf(" · %s old (%s)", humanDuration(now.Sub(anchor)), src)
-		if age < float64(t.MinAgeDays) {
-			ev.match = false
-		}
-	}
 	return ev
 }
 
+// evalMinAge min_age_days: the document is at least Days old (age anchor)
+func evalMinAge(p *automation.Params, d *DocSnap, _ *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	anchor, src := ageAnchor(d, fs, now)
+	return evaluation{
+		inputs: map[string]string{"ageAnchor": strconv.FormatInt(anchor.UnixMilli(), 10)},
+		detail: fmt.Sprintf("%s old (%s)", humanDuration(now.Sub(anchor)), src),
+		match:  daysSince(anchor, now) >= float64(p.Days),
+	}
+}
+
 // evalNotModified not_modified_for_days; a missing lastModified is a skip, never a guess
-func evalNotModified(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
+func evalNotModified(p *automation.Params, d *DocSnap, _ *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
 	ev := evaluation{inputs: map[string]string{"lastModified": d.LastModified}}
 	mod, ok := parseMillis(d.LastModified)
 	if !ok {
@@ -126,56 +198,66 @@ func evalNotModified(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, now t
 		return ev
 	}
 	ev.detail = fmt.Sprintf("last modified %s ago", humanDuration(now.Sub(mod)))
-	ev.match = daysSince(mod, now) >= float64(t.Days)
+	ev.match = daysSince(mod, now) >= float64(p.Days)
 	return ev
 }
 
 // evalNameMatches name_matches: glob or /regex/, case-insensitive (CompilePattern)
-func evalNameMatches(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+func evalNameMatches(p *automation.Params, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
 	ev := evaluation{inputs: map[string]string{"name": d.Name}}
-	re, err := CompilePattern(t.Pattern)
+	re, err := CompilePattern(p.Pattern)
 	if err != nil {
 		ev.skip = SkipInvalidRule
 		ev.skipDetail = err.Error()
 		return ev
 	}
 	ev.match = re.MatchString(d.Name)
-	ev.detail = fmt.Sprintf("name matches “%s”", t.Pattern)
+	ev.detail = fmt.Sprintf("name matches “%s”", p.Pattern)
 	return ev
 }
 
 // evalTagIs tag_is: a document-level tag equal to Tag after normalisation
-func evalTagIs(t *Trigger, _ *DocSnap, ci *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+func evalTagIs(p *automation.Params, _ *DocSnap, ci *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
 	norm := make([]string, 0, len(ci.Tags))
 	for _, tag := range ci.Tags {
 		norm = append(norm, NormalizeTag(tag))
 	}
 	sort.Strings(norm)
 	ev := evaluation{inputs: map[string]string{"tags": strings.Join(norm, ",")}}
-	ev.match = ci.HasTag(t.Tag)
-	ev.detail = fmt.Sprintf("tagged “%s”", NormalizeTag(t.Tag))
+	ev.match = ci.HasTag(p.Tag)
+	ev.detail = fmt.Sprintf("tagged “%s”", NormalizeTag(p.Tag))
+	return ev
+}
+
+// evalTagIsNot tag_is_not: the negation of tag_is, on the same inputs
+func evalTagIsNot(p *automation.Params, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	ev := evalTagIs(p, d, ci, fs, now)
+	ev.match = !ev.match
+	ev.detail = fmt.Sprintf("not tagged “%s”", NormalizeTag(p.Tag))
 	return ev
 }
 
 // evalAgeSinceCreated age_since_created, from the age anchor
-func evalAgeSinceCreated(t *Trigger, d *DocSnap, _ *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+func evalAgeSinceCreated(p *automation.Params, d *DocSnap, _ *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
 	anchor, src := ageAnchor(d, fs, now)
 	ev := evaluation{inputs: map[string]string{"ageAnchor": strconv.FormatInt(anchor.UnixMilli(), 10), "ageSource": src}}
 	ev.detail = fmt.Sprintf("arrived %s ago (%s)", humanDuration(now.Sub(anchor)), src)
-	ev.match = daysSince(anchor, now) >= float64(t.Days)
+	ev.match = daysSince(anchor, now) >= float64(p.Days)
 	return ev
 }
 
-// evalNotAMoveTrigger the Eval of triggers the move planner does not own
-// (page_changed, page_tagged): a skip, never a match and never nil
-func evalNotAMoveTrigger(t *Trigger, _ *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
-	return evaluation{skip: SkipOutOfScope, skipDetail: t.Type + " is evaluated by the page watch, not the move planner"}
+// evalNotAMoveTrigger the evaluator of triggers the move planner does not own
+// (page_changed, page_tagged): a skip, never a match
+func evalNotAMoveTrigger(typ string) evalFunc {
+	return func(_ *automation.Params, _ *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+		return evaluation{skip: SkipOutOfScope, skipDetail: typ + " is evaluated by the page watch, not the move planner"}
+	}
 }
 
 // evalPinnedIs pinned_is
-func evalPinnedIs(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
+func evalPinnedIs(p *automation.Params, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.Time) evaluation {
 	ev := evaluation{inputs: map[string]string{"pinned": strconv.FormatBool(d.Pinned)}}
-	ev.match = d.Pinned == t.Pinned
+	ev.match = d.Pinned == p.Pinned
 	if d.Pinned {
 		ev.detail = "pinned"
 	} else {
@@ -184,10 +266,11 @@ func evalPinnedIs(t *Trigger, d *DocSnap, _ *ContentInfo, _ *FirstSeen, _ time.T
 	return ev
 }
 
-// evalReading finished_reading and read_progress. Metadata lastOpenedPage is
-// authoritative (0-indexed); the .content value is logged for drift.
-func evalReading(t *Trigger, d *DocSnap, ci *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
-	ev := evaluation{inputs: map[string]string{
+// readingState the part finished_reading and read_progress share. Metadata
+// lastOpenedPage is authoritative (0-indexed); the .content value is logged
+// for drift. ok false: ev is final (a skip, or never opened).
+func readingState(p *automation.Params, d *DocSnap, ci *ContentInfo, now time.Time) (ev evaluation, settled, ok bool) {
+	ev = evaluation{inputs: map[string]string{
 		"pageCount":      strconv.Itoa(ci.PageCount),
 		"lastOpenedPage": strconv.Itoa(d.LastOpenedPage),
 		"lastOpened":     d.LastOpened,
@@ -195,20 +278,32 @@ func evalReading(t *Trigger, d *DocSnap, ci *ContentInfo, _ *FirstSeen, now time
 	if ci.PageCount <= 0 {
 		ev.skip = SkipPageCountUnknown
 		ev.skipDetail = "pageCount 0, the tablet has not synced the content yet"
-		return ev
+		return ev, false, false
 	}
 	ev.detail = fmt.Sprintf("%d pp · last page %d of %d (content: %d)", ci.PageCount, d.LastOpenedPage+1, ci.PageCount, ci.LastOpenedPage+1)
 	opened, ok := parseMillis(d.LastOpened)
 	if !ok {
 		ev.detail += " · never opened"
-		return ev
+		return ev, false, false
 	}
 	since := now.Sub(opened)
 	ev.detail += " · settled " + humanDuration(since)
-	settled := since >= time.Duration(t.SettleHours)*time.Hour
+	return ev, since >= time.Duration(p.SettleHours)*time.Hour, true
+}
 
-	if t.Type == TriggerFinishedReading {
-		ev.match = ci.PageCount >= t.MinPages && d.LastOpenedPage == ci.PageCount-1 && settled
+// evalFinished finished_reading: at least MinPages, on the last page, settled
+func evalFinished(p *automation.Params, d *DocSnap, ci *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
+	ev, settled, ok := readingState(p, d, ci, now)
+	if ok {
+		ev.match = ci.PageCount >= p.MinPages && d.LastOpenedPage == ci.PageCount-1 && settled
+	}
+	return ev
+}
+
+// evalProgress read_progress: at least Percent read, settled
+func evalProgress(p *automation.Params, d *DocSnap, ci *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
+	ev, settled, ok := readingState(p, d, ci, now)
+	if !ok {
 		return ev
 	}
 	progress := float64(d.LastOpenedPage+1) / float64(ci.PageCount)
@@ -216,11 +311,11 @@ func evalReading(t *Trigger, d *DocSnap, ci *ContentInfo, _ *FirstSeen, now time
 		progress = 1
 	}
 	ev.detail = fmt.Sprintf("%d%% read · ", int(math.Floor(progress*100))) + ev.detail
-	ev.match = progress*100 >= float64(t.Percent) && settled
+	ev.match = progress*100 >= float64(p.Percent) && settled
 	return ev
 }
 
-// docCheck the outcome of the common guards plus the trigger
+// docCheck the outcome of the common guards plus the rule
 type docCheck struct {
 	skip   string
 	detail string
@@ -228,8 +323,9 @@ type docCheck struct {
 }
 
 // checkDoc applies the §4.0 guards that depend only on the document and the
-// rule, then the trigger. Hold, cycle guard and claims are the planner's.
-// The same function re-checks a document inside the move closure.
+// rule (trash, unreadable, no-automation, pinned, already in the destination,
+// kind), then the rule (evalRule). Hold, cycle guard and claims are the
+// planner's. The same function re-checks a document inside the move closure.
 func checkDoc(r *Rule, destID string, d *DocSnap, ci *ContentInfo, fs *FirstSeen, locate func(string) Location, now time.Time) docCheck {
 	if locate(d.ID) == LocInTrash {
 		return docCheck{skip: SkipInTrash, detail: "in Trash"}
@@ -246,21 +342,10 @@ func checkDoc(r *Rule, destID string, d *DocSnap, ci *ContentInfo, fs *FirstSeen
 	if destID != "" && d.Parent == destID {
 		return docCheck{skip: SkipAlreadyInDest, detail: "already in the destination"}
 	}
-	kind := ci.Kind()
-	if r.Scope != ScopeAll && kind != r.Scope {
-		what := "notebook"
-		if kind == ScopePdfEpub {
-			what = strings.ToLower(ci.FileType)
-		} else if kind == "other" {
-			what = "file type “" + ci.FileType + "”"
-		}
-		applies := "PDF & EPUB"
-		if r.Scope == ScopeNotebooks {
-			applies = "notebooks"
-		}
-		return docCheck{skip: SkipOutOfScope, detail: what + ", rule applies to " + applies}
+	if skip, detail := evalKind(r.Scope, ci); skip {
+		return docCheck{skip: SkipOutOfScope, detail: detail}
 	}
-	ev := evalTrigger(r, d, ci, fs, now)
+	ev := evalRule(r, d, ci, fs, now)
 	if ev.skip != "" {
 		return docCheck{skip: ev.skip, detail: ev.skipDetail, ev: ev}
 	}

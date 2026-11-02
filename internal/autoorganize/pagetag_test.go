@@ -161,7 +161,7 @@ func TestNormalizePageTaggedAndTasks(t *testing.T) {
 
 func TestPageTaggedEvalSkipsNeverMatches(t *testing.T) {
 	r := pageTaggedRule()
-	ev := evalTrigger(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
+	ev := evalRule(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
 	if ev.match || ev.skip == "" {
 		t.Errorf("page_tagged under the move planner must skip, got %+v", ev)
 	}

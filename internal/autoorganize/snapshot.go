@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 )
@@ -369,10 +370,10 @@ func (c *ContentInfo) PageTag(pageID, tag string) (at time.Time, ok bool) {
 	return at, true
 }
 
-// NormalizePageTag a page tag as matched: the same as document tags
-// (NormalizeTag), so "To-Do", "to_do" and "to do" are one tag
+// NormalizePageTag a page tag as matched (automation.NormalizePageTag): the
+// same as document tags, so "To-Do", "to_do" and "to do" are one tag
 func NormalizePageTag(tag string) string {
-	return NormalizeTag(tag)
+	return automation.NormalizePageTag(tag)
 }
 
 // pageTags the .content pageTags list, [{name, pageId, timestamp}]; entries

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/google/uuid"
 )
 
@@ -18,28 +19,32 @@ const (
 	ModeDry  = "dry"
 )
 
-// Scopes, read from the .content fileType
+// Scopes, read from the .content fileType (the automation kinds)
 const (
-	ScopePdfEpub   = "pdf_epub"
-	ScopeNotebooks = "notebooks"
-	ScopeAll       = "all"
+	ScopePdfEpub   = automation.KindPdfEpub
+	ScopeNotebooks = automation.KindNotebooks
+	ScopeAll       = automation.KindAll
 )
 
-// v1 triggers
+// v1 triggers (the automation trigger types)
 const (
-	TriggerFinishedReading = "finished_reading"
-	TriggerNotOpened       = "not_opened_for_days"
-	TriggerNotModified     = "not_modified_for_days"
-	TriggerNameMatches     = "name_matches"
-	TriggerTagIs           = "tag_is"
-	TriggerReadProgress    = "read_progress"
-	TriggerAgeSinceCreated = "age_since_created"
-	TriggerPinnedIs        = "pinned_is"
+	TriggerFinishedReading = automation.TriggerFinishedReading
+	TriggerNotOpened       = automation.TriggerNotOpened
+	TriggerNotModified     = automation.TriggerNotModified
+	TriggerNameMatches     = automation.TriggerNameMatches
+	TriggerTagIs           = automation.TriggerTagIs
+	TriggerReadProgress    = automation.TriggerReadProgress
+	TriggerAgeSinceCreated = automation.TriggerAgeSinceCreated
+	TriggerPinnedIs        = automation.TriggerPinnedIs
 	// TriggerPageChanged belongs to pipeline rules only; the move planner never evaluates it
-	TriggerPageChanged = "page_changed"
+	TriggerPageChanged = automation.TriggerPageChanged
 	// TriggerPageTagged belongs to pipeline rules only: pages carrying Trigger.Tag
-	TriggerPageTagged = "page_tagged"
+	TriggerPageTagged = automation.TriggerPageTagged
 )
+
+// absentMinAgeDays what a v1 minAgeDays means when the JSON leaves it out,
+// per trigger type (0 for the rest)
+var absentMinAgeDays = map[string]int{TriggerNotOpened: 7}
 
 // Actions
 const (
@@ -136,10 +141,7 @@ func (t *Trigger) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	if p.MinAgeDays == -1 {
-		p.MinAgeDays = 0
-		if def, ok := triggerDefs[p.Type]; ok {
-			p.MinAgeDays = def.AbsentMinAgeDays
-		}
+		p.MinAgeDays = absentMinAgeDays[p.Type]
 	}
 	*t = Trigger(p)
 	return nil
@@ -212,8 +214,8 @@ func (r *Rule) SkipsPinned() bool {
 
 // PageBased triggers that need a pageCount and are locked to PDF & EPUB
 func (t *Trigger) PageBased() bool {
-	def, ok := triggerDefs[t.Type]
-	return ok && def.PageBased
+	s, ok := automation.Triggers[t.Type]
+	return ok && s.PageBased
 }
 
 func validInterval(m int) bool {
@@ -266,8 +268,10 @@ func (c *Config) Normalize() {
 				r.Action.Prompt = DefaultPipelinePrompt
 			}
 		}
-		if def, ok := triggerDefs[r.Trigger.Type]; ok && def.Defaults != nil {
-			def.Defaults(&r.Trigger)
+		if s, ok := automation.Triggers[r.Trigger.Type]; ok && s.Defaults != nil {
+			p := r.Trigger.params()
+			s.Defaults(&p)
+			r.Trigger.setParams(p)
 		}
 		if cm := r.Destination.CreateIfMissing; cm != nil {
 			cm.Name = strings.TrimSpace(cm.Name)
@@ -349,18 +353,25 @@ func (r *Rule) Validate() error {
 	}
 
 	t := &r.Trigger
-	def, ok := triggerDefs[t.Type]
+	spec, ok := automation.Triggers[t.Type]
 	if !ok {
 		return fmt.Errorf("unknown trigger %q", t.Type)
 	}
-	if def.PipelineOnly {
+	if isPageTrigger(spec) {
 		return fmt.Errorf("trigger %q is only for pipeline rules", t.Type)
 	}
-	if def.PageBased && r.Scope != ScopePdfEpub {
+	if spec.PageBased && r.Scope != ScopePdfEpub {
 		return errors.New("this trigger only applies to PDF & EPUB")
 	}
-	if def.Validate != nil {
-		return def.Validate(t)
+	if spec.Validate != nil {
+		p := t.params()
+		if err := spec.Validate(&p); err != nil {
+			return err
+		}
+	}
+	// v1 only: min age is a trigger field here (a min_age_days condition in v2)
+	if t.Type == TriggerNotOpened && t.MinAgeEnabled && t.MinAgeDays < 0 {
+		return errors.New("minimum age cannot be negative")
 	}
 	return nil
 }
@@ -380,7 +391,8 @@ func (r *Rule) validatePipeline() error {
 			return errors.New("a pipeline rule needs at least one watch entry")
 		}
 	case TriggerPageTagged:
-		if err := triggerDefs[TriggerPageTagged].Validate(&r.Trigger); err != nil {
+		p := r.Trigger.params()
+		if err := automation.Triggers[TriggerPageTagged].Validate(&p); err != nil {
 			return err
 		}
 	default:
@@ -403,50 +415,22 @@ func (r *Rule) validatePipeline() error {
 	return nil
 }
 
-// CompilePattern compiles a name pattern, case-insensitive.
-// "/re/" is an RE2 regular expression (unanchored); anything else is a glob
-// matched against the whole name, where * is any run and ? one character.
+// CompilePattern compiles a name pattern, case-insensitive (automation.CompilePattern)
 func CompilePattern(p string) (*regexp.Regexp, error) {
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return nil, errors.New("pattern cannot be empty")
-	}
-	if len(p) >= 2 && strings.HasPrefix(p, "/") && strings.HasSuffix(p, "/") {
-		re, err := regexp.Compile("(?i)" + p[1:len(p)-1])
-		if err != nil {
-			return nil, fmt.Errorf("invalid regular expression: %v", err)
-		}
-		return re, nil
-	}
-	var sb strings.Builder
-	sb.WriteString("(?is)^")
-	for _, r := range p {
-		switch r {
-		case '*':
-			sb.WriteString(".*")
-		case '?':
-			sb.WriteString(".")
-		default:
-			sb.WriteString(regexp.QuoteMeta(string(r)))
-		}
-	}
-	sb.WriteString("$")
-	return regexp.Compile(sb.String())
+	return automation.CompilePattern(p)
 }
 
 // NoAutomationTag the opt-out tag, as displayed
-const NoAutomationTag = "no automation"
-
-var tagSeparators = regexp.MustCompile(`[\s_\-]+`)
+const NoAutomationTag = automation.NoAutomationTag
 
 // NormalizeTag lowercases and collapses whitespace, '-' and '_' runs to one space
 func NormalizeTag(tag string) string {
-	return strings.TrimSpace(tagSeparators.ReplaceAllString(strings.ToLower(tag), " "))
+	return automation.NormalizeTag(tag)
 }
 
 // IsNoAutomationTag reports whether tag is the opt-out tag in any spelling
 func IsNoAutomationTag(tag string) bool {
-	return NormalizeTag(tag) == NoAutomationTag
+	return automation.IsNoAutomationTag(tag)
 }
 
 // LoopWarnings returns, per rule id, the 1-based numbers of the other enabled

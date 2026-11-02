@@ -1,153 +1,88 @@
 package autoorganize
 
 import (
-	"errors"
 	"sort"
-	"strings"
 	"time"
+
+	"github.com/ddvk/rmfakecloud/internal/automation"
 )
 
-// triggerDef everything the package knows about one trigger type. Normalize,
-// Validate, PageBased, the JSON defaults and the evaluator all read this table,
-// so adding a trigger is one entry here (plus its evaluator and the UI's
-// vocabulary in ui/src/pages/AutoOrganize/rules.js) — see doc.go.
-type triggerDef struct {
-	// PageBased needs a pageCount, which locks the rule to PDF & EPUB
-	PageBased bool
-	// PipelineOnly the trigger belongs to pipeline rules; move rules reject it
-	PipelineOnly bool
-	// AbsentMinAgeDays what minAgeDays means when the JSON leaves it out
-	AbsentMinAgeDays int
-	// Defaults fills parameters that are zero on save (before Validate)
-	Defaults func(t *Trigger)
-	// Validate the parameters; nil when there is nothing to check
-	Validate func(t *Trigger) error
-	// Eval the trigger against one document after the common guards passed
-	Eval func(t *Trigger, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation
-}
+// evalFunc evaluates one trigger or condition against one document after the
+// common guards passed (checkDoc). Parameters, defaults and validation live in
+// the automation catalogue; the evaluators live here, keyed by the same type.
+type evalFunc func(p *automation.Params, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation
 
-func settleNotNegative(t *Trigger) error {
-	if t.SettleHours < 0 {
-		return errors.New("settle hours cannot be negative")
-	}
-	return nil
-}
-
-func daysAtLeastOne(t *Trigger) error {
-	if t.Days < 1 {
-		return errors.New("days must be at least 1")
-	}
-	return nil
-}
-
-func defaultDays(n int) func(t *Trigger) {
-	return func(t *Trigger) {
-		if t.Days == 0 {
-			t.Days = n
-		}
-	}
-}
-
-var triggerDefs = map[string]*triggerDef{
-	TriggerFinishedReading: {
-		PageBased: true,
-		Defaults: func(t *Trigger) {
-			if t.MinPages == 0 {
-				t.MinPages = 3
-			}
-		},
-		Validate: func(t *Trigger) error {
-			if t.MinPages < 1 {
-				return errors.New("minimum pages must be at least 1")
-			}
-			return settleNotNegative(t)
-		},
-		Eval: evalReading,
-	},
-	TriggerReadProgress: {
-		PageBased: true,
-		Defaults: func(t *Trigger) {
-			if t.Percent == 0 {
-				t.Percent = 80
-			}
-		},
-		Validate: func(t *Trigger) error {
-			if t.Percent < 1 || t.Percent > 100 {
-				return errors.New("percent must be between 1 and 100")
-			}
-			return settleNotNegative(t)
-		},
-		Eval: evalReading,
-	},
-	TriggerNotOpened: {
-		AbsentMinAgeDays: 7,
-		Defaults:         defaultDays(30),
-		Validate: func(t *Trigger) error {
-			if err := daysAtLeastOne(t); err != nil {
-				return err
-			}
-			if t.MinAgeEnabled && t.MinAgeDays < 0 {
-				return errors.New("minimum age cannot be negative")
-			}
-			return nil
-		},
-		Eval: evalNotOpened,
-	},
-	TriggerNotModified: {
-		Defaults: defaultDays(90),
-		Validate: daysAtLeastOne,
-		Eval:     evalNotModified,
-	},
-	TriggerNameMatches: {
-		Validate: func(t *Trigger) error {
-			_, err := CompilePattern(t.Pattern)
-			return err
-		},
-		Eval: evalNameMatches,
-	},
-	TriggerTagIs: {
-		Validate: func(t *Trigger) error {
-			if NormalizeTag(t.Tag) == "" {
-				return errors.New("tag cannot be empty")
-			}
-			if IsNoAutomationTag(t.Tag) {
-				return errors.New("documents tagged “no automation” are always skipped; pick another tag")
-			}
-			return nil
-		},
-		Eval: evalTagIs,
-	},
-	TriggerAgeSinceCreated: {
-		Defaults: defaultDays(14),
-		Validate: daysAtLeastOne,
-		Eval:     evalAgeSinceCreated,
-	},
-	TriggerPinnedIs: {
-		Eval: evalPinnedIs,
-	},
+// evaluators the trigger evaluators, one per automation.Triggers entry
+var evaluators = map[string]evalFunc{
+	TriggerFinishedReading: evalFinished,
+	TriggerReadProgress:    evalProgress,
+	TriggerNotOpened:       evalNotOpened,
+	TriggerNotModified:     evalNotModified,
+	TriggerNameMatches:     evalNameMatches,
+	TriggerTagIs:           evalTagIs,
+	TriggerAgeSinceCreated: evalAgeSinceCreated,
+	TriggerPinnedIs:        evalPinnedIs,
 	// page_changed and page_tagged are evaluated by internal/pagewatch, never
 	// by the move planner
-	TriggerPageChanged: {
-		PipelineOnly: true,
-		Eval:         evalNotAMoveTrigger,
-	},
-	TriggerPageTagged: {
-		PipelineOnly: true,
-		Defaults:     func(t *Trigger) { t.Tag = strings.TrimSpace(t.Tag) },
-		Validate: func(t *Trigger) error {
-			if NormalizePageTag(t.Tag) == "" {
-				return errors.New("tag cannot be empty")
-			}
-			return nil
-		},
-		Eval: evalNotAMoveTrigger,
-	},
+	TriggerPageChanged: evalNotAMoveTrigger(TriggerPageChanged),
+	TriggerPageTagged:  evalNotAMoveTrigger(TriggerPageTagged),
+}
+
+// conditionEvaluators the evaluators of the document conditions. kind_is has
+// none: checkDoc runs it (evalKind) before the trigger. A condition named like
+// a trigger shares the trigger's evaluator.
+var conditionEvaluators = map[string]evalFunc{
+	automation.CondTagIs:       evalTagIs,
+	automation.CondTagIsNot:    evalTagIsNot,
+	automation.CondNotOpened:   evalNotOpened,
+	automation.CondMinAgeDays:  evalMinAge,
+	automation.CondNameMatches: evalNameMatches,
+	automation.CondPinnedIs:    evalPinnedIs,
+}
+
+// condRef one condition of a rule, in evaluation order
+type condRef struct {
+	Type string
+	P    automation.Params
+}
+
+// ruleConditions the conditions a v1 rule carries implicitly: min age, only
+// for not_opened_for_days with minAgeEnabled (ruling P1; the other triggers
+// ignore minAge*). Replaced by the v2 rule's own conditions in Task 4.
+func ruleConditions(r *Rule) []condRef {
+	t := &r.Trigger
+	if t.Type == TriggerNotOpened && t.MinAgeEnabled {
+		return []condRef{{Type: automation.CondMinAgeDays, P: automation.Params{Days: t.MinAgeDays}}}
+	}
+	return nil
+}
+
+// params the catalogue parameters of a v1 trigger
+func (t *Trigger) params() automation.Params {
+	return automation.Params{MinPages: t.MinPages, SettleHours: t.SettleHours, Percent: t.Percent,
+		Days: t.Days, Pattern: t.Pattern, Tag: t.Tag, Pinned: t.Pinned}
+}
+
+// setParams writes catalogue parameters back to a v1 trigger
+func (t *Trigger) setParams(p automation.Params) {
+	t.MinPages, t.SettleHours, t.Percent, t.Days = p.MinPages, p.SettleHours, p.Percent, p.Days
+	t.Pattern, t.Tag, t.Pinned = p.Pattern, p.Tag, p.Pinned
+}
+
+// isPageTrigger the trigger belongs to the page watch (pipeline rules)
+func isPageTrigger(s *automation.Spec) bool {
+	for _, sub := range s.Subjects {
+		if sub == automation.SubjectDocument {
+			return false
+		}
+	}
+	return true
 }
 
 // TriggerTypes every known trigger type, sorted
 func TriggerTypes() []string {
-	out := make([]string, 0, len(triggerDefs))
-	for k := range triggerDefs {
+	out := make([]string, 0, len(automation.Triggers))
+	for k := range automation.Triggers {
 		out = append(out, k)
 	}
 	sort.Strings(out)

@@ -6,13 +6,17 @@
 // # Files
 //
 //   - config.go    the rule model (Config, Rule, Trigger, Destination), JSON
-//     defaults, Normalize/Validate, name patterns, tag
-//     normalisation and the loop (cycle) warnings.
-//   - registry.go  the trigger table: per type its defaults, validation,
-//     page-based flag and evaluator. Everything type-specific
-//     lives here or in the evaluator it points at.
-//   - triggers.go  the evaluators (one function per trigger), the common
-//     document guards (checkDoc) and the skip reasons.
+//     defaults, Normalize/Validate and the loop (cycle)
+//     warnings. Name patterns and tag normalisation are thin
+//     wrappers over internal/automation.
+//   - registry.go  the evaluator tables (evaluators, conditionEvaluators),
+//     the v1 rule's implicit conditions (ruleConditions) and the
+//     Trigger <-> automation.Params bridge. Parameters, defaults,
+//     validation and the page-based flag live in the
+//     internal/automation catalogue.
+//   - triggers.go  the evaluators (one function per trigger or condition),
+//     mergeEval/evalRule, the common document guards (checkDoc,
+//     evalKind) and the skip reasons.
 //   - snapshot.go  Snapshot/DocSnap, an immutable copy of the tree; folder
 //     paths and locations; ContentInfo read from .content blobs
 //     and the per-blob ContentCache.
@@ -28,17 +32,20 @@
 //
 // # Adding a trigger
 //
-//  1. Add its type constant to config.go and, if it needs new parameters,
-//     fields on Trigger (with json tags; absent-means-default handling lives
-//     in Trigger.UnmarshalJSON only for values where zero is meaningful).
-//  2. Write its evaluator in triggers.go: func(t *Trigger, d *DocSnap,
-//     ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation. Set
-//     ev.inputs to the values a hold should be keyed on, ev.detail to the
-//     sentence shown in Preview and the log, and ev.skip (never a guess) when
-//     the document cannot be evaluated.
-//  3. Register it in registry.go: Defaults, Validate, PageBased, Eval. That
-//     entry is what Normalize, Validate, PageBased and evalTrigger use, so
-//     nothing else in the package needs to change.
+//  1. Add its type constant and catalogue entry (Subjects, Fields, PageBased,
+//     Defaults, Validate) to internal/automation/catalogue.go, and alias the
+//     constant in config.go. New parameters are fields on automation.Params
+//     and on Trigger, mapped in Trigger.params/setParams (absent-means-default
+//     handling lives in Trigger.UnmarshalJSON only for values where zero is
+//     meaningful).
+//  2. Write its evaluator in triggers.go: an evalFunc, func(p
+//     *automation.Params, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now
+//     time.Time) evaluation. Set ev.inputs to the values a hold should be
+//     keyed on, ev.detail to the sentence shown in Preview and the log, and
+//     ev.skip (never a guess) when the document cannot be evaluated.
+//  3. Register it in registry.go (evaluators; conditionEvaluators for a
+//     condition). Normalize, Validate and PageBased read the catalogue and
+//     evalRule the tables, so nothing else in the package needs to change.
 //  4. Mirror it in the UI vocabulary: ui/src/pages/AutoOrganize/rules.js
 //     (TRIGGERS, TRIGGER_DEFAULTS, triggerPhrase) and the parameter inputs in
 //     RuleDrawer.jsx.
@@ -58,10 +65,9 @@
 //     requires a page trigger — page_changed with at least one Watch entry, or
 //     page_tagged with a tag (no Watch entry = the whole tree) — valid,
 //     non-trash Watch entries, and uses neither Source nor Destination.
-//   - registry.go: a trigger that belongs to one action sets PipelineOnly, so
-//     the other action rejects it (page_changed and page_tagged are rejected
-//     on move rules). Its Eval must still be non-nil; both use
-//     evalNotAMoveTrigger, a skip.
+//   - catalogue: a trigger whose only subject is "page" belongs to the
+//     pipeline action, so move rules reject it (page_changed and page_tagged).
+//     Its evaluator must still exist; both use evalNotAMoveTrigger, a skip.
 //   - plan.go: BuildPlan and LoopWarnings (config.go) consider move rules only.
 //     A new action that must not claim documents is skipped at the top of the
 //     BuildPlan loop (as IsPipeline rules are); rule numbers keep the config

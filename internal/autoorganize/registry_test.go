@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/ddvk/rmfakecloud/internal/automation"
 )
 
 func TestRegistryCoversEveryTriggerType(t *testing.T) {
@@ -18,13 +20,13 @@ func TestRegistryCoversEveryTriggerType(t *testing.T) {
 			t.Fatalf("TriggerTypes = %v, want %v", got, want)
 		}
 	}
-	for typ, def := range triggerDefs {
-		if def.Eval == nil {
+	for _, typ := range got {
+		if evaluators[typ] == nil {
 			t.Errorf("%s has no evaluator", typ)
 		}
 	}
 	pageBased := map[string]bool{}
-	for typ, def := range triggerDefs {
+	for typ, def := range automation.Triggers {
 		if def.PageBased {
 			pageBased[typ] = true
 		}
@@ -73,15 +75,15 @@ func TestUnknownTriggerIsRejectedAndSkipped(t *testing.T) {
 	if err := r.Validate(); err == nil || err.Error() != `unknown trigger "has_coffee_stains"` {
 		t.Errorf("Validate = %v", err)
 	}
-	ev := evalTrigger(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
+	ev := evalRule(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
 	if ev.skip != SkipInvalidRule {
-		t.Errorf("evalTrigger skip = %q", ev.skip)
+		t.Errorf("evalRule skip = %q", ev.skip)
 	}
 }
 
 func TestPageChangedEvalSkipsNeverMatches(t *testing.T) {
 	r := Rule{Scope: ScopeAll, Action: Action{Type: ActionPipeline}, Trigger: Trigger{Type: TriggerPageChanged}}
-	ev := evalTrigger(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
+	ev := evalRule(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
 	if ev.match || ev.skip == "" {
 		t.Errorf("page_changed under the move planner must skip, got %+v", ev)
 	}

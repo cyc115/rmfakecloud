@@ -705,7 +705,7 @@ func (s *Service) Undo(uid, moveID string) (*MoveEntry, error) {
 				snap := NewSnapshot(after)
 				if d, ok := snap.Docs[entry.DocID]; ok {
 					ci := cache.Get(d)
-					ev := evalTrigger(rule, d, &ci, st.FirstSeen[d.ID], now)
+					ev := evalRule(rule, d, &ci, st.FirstSeen[d.ID], now)
 					st.SetHold(Hold{RuleID: rule.ID, DocID: d.ID, Inputs: ev.inputs, Source: entry.From,
 						MovedTo: entry.To, CreatedAt: now.UnixMilli(), Reason: "undo"})
 				}

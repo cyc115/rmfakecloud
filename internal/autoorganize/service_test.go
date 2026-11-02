@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -561,6 +562,56 @@ func TestUndoMovesBackAndSetsHold(t *testing.T) {
 	}
 	if notifier.count() != 2 {
 		t.Fatalf("notify after move and undo: %d", notifier.count())
+	}
+}
+
+// TestUndoHoldUsesRuleInputs Undo keys its hold on the rule's merged inputs
+// (trigger + the min-age condition), so the next plan holds the document
+// instead of clearing the hold and moving it again
+func TestUndoHoldUsesRuleInputs(t *testing.T) {
+	ft, storage := newHarness(t, uid, true)
+	svc, _, clk := newService(t, storage)
+	now := clk.Now()
+	day := 24 * time.Hour
+	ft.Folder("inbox", "Inbox", "")
+	ft.Folder("arch", "Archive", "")
+	d := ft.PDF("d", "Old", "inbox", 3, 0, now.Add(-40*day))
+	d.Meta["createdTime"] = ms(now.Add(-50 * day))
+	ft.Sync()
+	saveConfig(t, svc, uid, ModeLive, Rule{ID: "r", Enabled: true, Source: FolderRef{ID: "inbox"}, Scope: ScopeAll,
+		Trigger:     Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7},
+		Destination: Destination{FolderRef: FolderRef{ID: "arch"}}, Action: Action{Type: ActionMove}})
+
+	plan, _, err := svc.Preview(uid, nil)
+	if err != nil || len(plan.Moves) != 1 {
+		t.Fatalf("preview: %+v %v", plan, err)
+	}
+	planned := plan.Moves[0].Inputs
+	if _, ok := planned["ageAnchor"]; !ok {
+		t.Fatalf("planner inputs lack ageAnchor: %v", planned)
+	}
+	if res, _ := svc.RunNow(uid); res.Run.Moved != 1 || ft.ParentOf("d") != "arch" {
+		t.Fatal("live move")
+	}
+	st, _ := svc.Store().LoadState(uid)
+	if _, err := svc.Undo(uid, st.Moves[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = svc.Store().LoadState(uid)
+	h := st.FindHold("r", "d")
+	if h == nil || h.Reason != "undo" || !reflect.DeepEqual(h.Inputs, planned) {
+		t.Fatalf("hold %+v, want inputs %v", h, planned)
+	}
+	plan, _, err = svc.Preview(uid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := false
+	for _, s := range plan.Skipped {
+		held = held || (s.DocID == "d" && s.Reason == SkipHeld)
+	}
+	if !held || len(plan.Moves) != 0 || len(plan.ClearHolds) != 0 {
+		t.Fatalf("next plan: moves %+v skipped %+v clear %+v", plan.Moves, plan.Skipped, plan.ClearHolds)
 	}
 }
 
