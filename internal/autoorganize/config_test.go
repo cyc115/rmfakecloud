@@ -8,10 +8,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ddvk/rmfakecloud/internal/automation"
 )
 
 func TestTriggerDefaultsWhenAbsent(t *testing.T) {
-	var tr Trigger
+	var tr V1Trigger
 	if err := json.Unmarshal([]byte(`{"type":"finished_reading"}`), &tr); err != nil {
 		t.Fatal(err)
 	}
@@ -25,14 +27,14 @@ func TestTriggerDefaultsWhenAbsent(t *testing.T) {
 		t.Errorf("explicit zero values must be kept: %+v", tr)
 	}
 	// not_opened_for_days: an absent minAgeDays is 7, an explicit 0 is kept
-	var absent, zero Trigger
+	var absent, zero V1Trigger
 	if err := json.Unmarshal([]byte(`{"type":"not_opened_for_days"}`), &absent); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal([]byte(`{"type":"not_opened_for_days","days":30,"minAgeEnabled":true,"minAgeDays":0}`), &zero); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &Config{Rules: []Rule{{Trigger: Trigger{Type: TriggerFinishedReading}}, {Trigger: absent}, {Trigger: zero}}}
+	cfg := &V1Config{Rules: []V1Rule{{Trigger: V1Trigger{Type: TriggerFinishedReading}}, {Trigger: absent}, {Trigger: zero}}}
 	cfg.Normalize()
 	if cfg.Rules[0].Trigger.MinPages != 3 || cfg.Rules[0].Scope != ScopePdfEpub || cfg.Rules[0].ID == "" {
 		t.Errorf("normalize: %+v", cfg.Rules[0])
@@ -45,7 +47,7 @@ func TestTriggerDefaultsWhenAbsent(t *testing.T) {
 	}
 	// and it survives a save and reload (no omitempty turning 0 back into 7)
 	b, _ := json.Marshal(cfg.Rules[2].Trigger)
-	var back Trigger
+	var back V1Trigger
 	if err := json.Unmarshal(b, &back); err != nil || back.MinAgeDays != 0 {
 		t.Errorf("minAgeDays 0 lost in a round trip: %s -> %+v", b, back)
 	}
@@ -55,48 +57,48 @@ func TestTriggerDefaultsWhenAbsent(t *testing.T) {
 }
 
 func TestRuleValidation(t *testing.T) {
-	base := func() Rule {
-		r := seedRule()
+	base := func() V1Rule {
+		r := seedV1()
 		return r
 	}
 	cases := []struct {
 		name   string
-		mutate func(r *Rule)
+		mutate func(r *V1Rule)
 		want   string
 	}{
-		{"seed rule is valid", func(r *Rule) {}, ""},
-		{"destination equals source", func(r *Rule) {
+		{"seed rule is valid", func(r *V1Rule) {}, ""},
+		{"destination equals source", func(r *V1Rule) {
 			r.Destination = Destination{FolderRef: FolderRef{ID: "rr"}}
 		}, "same as the source"},
-		{"root to root", func(r *Rule) {
+		{"root to root", func(r *V1Rule) {
 			r.Source = FolderRef{ID: RootID}
 			r.Destination = Destination{FolderRef: FolderRef{ID: RootID}}
-			r.Trigger = Trigger{Type: TriggerPinnedIs, Pinned: true}
+			r.Trigger = V1Trigger{Type: TriggerPinnedIs, Pinned: true}
 			r.Scope = ScopeAll
 		}, "same as the source"},
-		{"root source is pickable", func(r *Rule) { r.Source = FolderRef{ID: RootID} }, ""},
-		{"new subfolder needs a name", func(r *Rule) { r.Destination.CreateIfMissing.Name = "" }, "needs a name"},
-		{"finished_reading locked to pdf/epub", func(r *Rule) { r.Scope = ScopeAll }, "only applies to PDF"},
-		{"read_progress locked to pdf/epub", func(r *Rule) {
-			r.Trigger = Trigger{Type: TriggerReadProgress, Percent: 80}
+		{"root source is pickable", func(r *V1Rule) { r.Source = FolderRef{ID: RootID} }, ""},
+		{"new subfolder needs a name", func(r *V1Rule) { r.Destination.CreateIfMissing.Name = "" }, "needs a name"},
+		{"finished_reading locked to pdf/epub", func(r *V1Rule) { r.Scope = ScopeAll }, "only applies to PDF"},
+		{"read_progress locked to pdf/epub", func(r *V1Rule) {
+			r.Trigger = V1Trigger{Type: TriggerReadProgress, Percent: 80}
 			r.Scope = ScopeNotebooks
 		}, "only applies to PDF"},
-		{"percent range", func(r *Rule) { r.Trigger = Trigger{Type: TriggerReadProgress, Percent: 101} }, "between 1 and 100"},
-		{"min pages", func(r *Rule) { r.Trigger.MinPages = 0 }, "at least 1"},
-		{"invalid regex", func(r *Rule) {
-			r.Trigger = Trigger{Type: TriggerNameMatches, Pattern: "/[a-/"}
+		{"percent range", func(r *V1Rule) { r.Trigger = V1Trigger{Type: TriggerReadProgress, Percent: 101} }, "between 1 and 100"},
+		{"min pages", func(r *V1Rule) { r.Trigger.MinPages = 0 }, "at least 1"},
+		{"invalid regex", func(r *V1Rule) {
+			r.Trigger = V1Trigger{Type: TriggerNameMatches, Pattern: "/[a-/"}
 		}, "invalid regular expression"},
-		{"empty pattern", func(r *Rule) { r.Trigger = Trigger{Type: TriggerNameMatches} }, "pattern cannot be empty"},
-		{"empty tag", func(r *Rule) { r.Trigger = Trigger{Type: TriggerTagIs, Tag: "  "} }, "tag cannot be empty"},
-		{"tag_is the opt-out tag", func(r *Rule) {
-			r.Trigger = Trigger{Type: TriggerTagIs, Tag: "No_Automation"}
+		{"empty pattern", func(r *V1Rule) { r.Trigger = V1Trigger{Type: TriggerNameMatches} }, "pattern cannot be empty"},
+		{"empty tag", func(r *V1Rule) { r.Trigger = V1Trigger{Type: TriggerTagIs, Tag: "  "} }, "tag cannot be empty"},
+		{"tag_is the opt-out tag", func(r *V1Rule) {
+			r.Trigger = V1Trigger{Type: TriggerTagIs, Tag: "No_Automation"}
 			r.Scope = ScopeAll
 		}, "always skipped"},
-		{"size_over_mb is not a trigger", func(r *Rule) { r.Trigger = Trigger{Type: "size_over_mb"} }, "unknown trigger"},
-		{"copy is not an action", func(r *Rule) { r.Action = Action{Type: "copy"} }, "unsupported action"},
-		{"trash as source", func(r *Rule) { r.Source = FolderRef{ID: "trash"} }, "trash"},
-		{"days", func(r *Rule) { r.Trigger = Trigger{Type: TriggerNotModified} }, "days must be"},
-		{"unknown scope", func(r *Rule) { r.Scope = "pdf" }, "unknown scope"},
+		{"size_over_mb is not a trigger", func(r *V1Rule) { r.Trigger = V1Trigger{Type: "size_over_mb"} }, "unknown trigger"},
+		{"copy is not an action", func(r *V1Rule) { r.Action = V1Action{Type: "copy"} }, "unsupported action"},
+		{"trash as source", func(r *V1Rule) { r.Source = FolderRef{ID: "trash"} }, "trash"},
+		{"days", func(r *V1Rule) { r.Trigger = V1Trigger{Type: TriggerNotModified} }, "days must be"},
+		{"unknown scope", func(r *V1Rule) { r.Scope = "pdf" }, "unknown scope"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -117,21 +119,21 @@ func TestRuleValidation(t *testing.T) {
 }
 
 func TestSettingsValidation(t *testing.T) {
-	cfg := &Config{Settings: Settings{Mode: ModeLive, IntervalMinutes: 7}}
+	cfg := &V1Config{Settings: Settings{Mode: ModeLive, IntervalMinutes: 7}}
 	if err := cfg.Validate(); err == nil {
 		t.Error("interval 7 must be rejected")
 	}
-	cfg = &Config{Settings: Settings{Mode: "maybe", IntervalMinutes: 15}}
+	cfg = &V1Config{Settings: Settings{Mode: "maybe", IntervalMinutes: 15}}
 	if err := cfg.Validate(); err == nil {
 		t.Error("unknown mode must be rejected")
 	}
 	for _, m := range AllowedIntervals {
-		cfg = &Config{Settings: Settings{Mode: ModeDry, IntervalMinutes: m}}
+		cfg = &V1Config{Settings: Settings{Mode: ModeDry, IntervalMinutes: m}}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("interval %d: %v", m, err)
 		}
 	}
-	cfg = &Config{Settings: Settings{Mode: ModeDry, IntervalMinutes: 15}, Rules: []Rule{seedRule(), seedRule()}}
+	cfg = &V1Config{Settings: Settings{Mode: ModeDry, IntervalMinutes: 15}, Rules: []V1Rule{seedV1(), seedV1()}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Errorf("duplicate ids: %v", err)
 	}
@@ -179,25 +181,27 @@ func TestNoAutomationTagNormalisation(t *testing.T) {
 }
 
 func TestLoopWarnings(t *testing.T) {
-	mk := func(id, from, to string, enabled bool) Rule {
-		return Rule{ID: id, Enabled: enabled, Source: FolderRef{ID: from}, Destination: Destination{FolderRef: FolderRef{ID: to}}, Action: Action{Type: ActionMove}}
+	mk := func(id, from, to string, enabled bool) automation.Rule {
+		r := moveRule(id, from, to, trig(TriggerPinnedIs, P{Pinned: true}))
+		r.Enabled = enabled
+		return r
 	}
-	destOf := func(r *Rule) (string, bool) { return r.Destination.ID, true }
+	destOf := func(r *automation.Rule) (string, bool) { return r.Move().To.ID, true }
 
-	cfg := &Config{Rules: []Rule{mk("a", "inbox", "news", true), mk("b", "inbox", "archive", true), mk("c", "archive", "inbox", true)}}
+	cfg := &automation.Config{Rules: []automation.Rule{mk("a", "inbox", "news", true), mk("b", "inbox", "archive", true), mk("c", "archive", "inbox", true)}}
 	got := LoopWarnings(cfg, destOf)
 	want := map[string][]int{"b": {3}, "c": {2}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("two rule loop: got %v want %v", got, want)
 	}
 
-	cfg = &Config{Rules: []Rule{mk("a", "x", "y", true), mk("b", "y", "z", true), mk("c", "z", "x", true)}}
+	cfg = &automation.Config{Rules: []automation.Rule{mk("a", "x", "y", true), mk("b", "y", "z", true), mk("c", "z", "x", true)}}
 	got = LoopWarnings(cfg, destOf)
 	if len(got) != 3 || !reflect.DeepEqual(got["a"], []int{2, 3}) {
 		t.Errorf("three rule loop: %v", got)
 	}
 
-	cfg = &Config{Rules: []Rule{mk("b", "inbox", "archive", true), mk("c", "archive", "inbox", false)}}
+	cfg = &automation.Config{Rules: []automation.Rule{mk("b", "inbox", "archive", true), mk("c", "archive", "inbox", false)}}
 	if got := LoopWarnings(cfg, destOf); len(got) != 0 {
 		t.Errorf("disabled rule must not warn: %v", got)
 	}
@@ -215,7 +219,7 @@ func TestConfigAndStateAreSeparateFiles(t *testing.T) {
 		t.Fatalf("default config: %+v", cfg)
 	}
 
-	cfg.Rules = []Rule{seedRule()}
+	cfg.Rules = []automation.Rule{seedRule()}
 	if _, err := store.SaveConfig("u", cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +255,7 @@ func TestSaveConfigRevisionAndBackup(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(func(uid string) string { return filepath.Join(dir, uid) }, 0)
 
-	first := &Config{Revision: 0, Settings: Settings{Enabled: true, Mode: ModeDry, IntervalMinutes: 15}, Rules: []Rule{seedRule()}}
+	first := &automation.Config{Revision: 0, Settings: Settings{Enabled: true, Mode: ModeDry, IntervalMinutes: 15}, Rules: []automation.Rule{seedRule()}}
 	saved, err := store.SaveConfig("u", first)
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +265,7 @@ func TestSaveConfigRevisionAndBackup(t *testing.T) {
 	}
 
 	// a second tab still holding revision 0
-	stale := &Config{Revision: 0, Settings: Settings{Enabled: false, Mode: ModeDry, IntervalMinutes: 15}}
+	stale := &automation.Config{Revision: 0, Settings: Settings{Enabled: false, Mode: ModeDry, IntervalMinutes: 15}}
 	current, err := store.SaveConfig("u", stale)
 	if !errors.Is(err, ErrStaleRevision) {
 		t.Fatalf("err = %v, want ErrStaleRevision", err)
@@ -270,7 +274,7 @@ func TestSaveConfigRevisionAndBackup(t *testing.T) {
 		t.Fatalf("stale save must not change the file, current = %+v", current)
 	}
 
-	second := &Config{Revision: 1, Settings: Settings{Enabled: true, Mode: ModeLive, IntervalMinutes: 30}, Rules: []Rule{seedRule()}}
+	second := &automation.Config{Revision: 1, Settings: Settings{Enabled: true, Mode: ModeLive, IntervalMinutes: 30}, Rules: []automation.Rule{seedRule()}}
 	if saved, err = store.SaveConfig("u", second); err != nil || saved.Revision != 2 {
 		t.Fatalf("second save: %v rev %d", err, saved.Revision)
 	}
@@ -278,13 +282,14 @@ func TestSaveConfigRevisionAndBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var prev Config
+	var prev automation.Config
 	json.Unmarshal(bak, &prev)
-	if prev.Revision != 1 || prev.Settings.Mode != ModeDry {
+	if prev.Version != automation.Version || prev.Revision != 1 || prev.Settings.Mode != ModeDry {
 		t.Errorf(".bak should hold revision 1, got %+v", prev)
 	}
 
-	invalid := &Config{Revision: 2, Settings: Settings{Mode: ModeLive, IntervalMinutes: 15}, Rules: []Rule{{Trigger: Trigger{Type: "size_over_mb"}}}}
+	invalid := &automation.Config{Revision: 2, Settings: Settings{Mode: ModeLive, IntervalMinutes: 15},
+		Rules: []automation.Rule{{When: automation.When{Subject: automation.SubjectDocument, Trigger: trig("size_over_mb", P{})}}}}
 	if _, err := store.SaveConfig("u", invalid); err == nil {
 		t.Fatal("invalid config must be rejected")
 	}
@@ -293,25 +298,25 @@ func TestSaveConfigRevisionAndBackup(t *testing.T) {
 	}
 }
 
-func pipelineRule() Rule {
-	return Rule{
+func pipelineV1() V1Rule {
+	return V1Rule{
 		ID: "pipe", Enabled: true,
 		Scope:   ScopeNotebooks,
-		Trigger: Trigger{Type: TriggerPageChanged},
-		Action:  Action{Type: ActionPipeline},
+		Trigger: V1Trigger{Type: TriggerPageChanged},
+		Action:  V1Action{Type: ActionPipeline},
 		Watch:   []WatchRef{{ID: "nb1", Kind: "folder", Name: "Notebooks"}},
 	}
 }
 
 func TestPipelineRuleValidates(t *testing.T) {
-	r := pipelineRule()
+	r := pipelineV1()
 	if err := r.Validate(); err != nil {
 		t.Fatalf("pipeline rule must validate: %v", err)
 	}
 	if !r.IsPipeline() {
 		t.Fatal("IsPipeline false")
 	}
-	mv := seedRule()
+	mv := seedV1()
 	if mv.IsPipeline() {
 		t.Fatal("move rule reported as pipeline")
 	}
@@ -328,12 +333,12 @@ func TestPipelineRuleValidates(t *testing.T) {
 	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "kind") {
 		t.Fatalf("bad kind: %v", err)
 	}
-	r = pipelineRule()
-	r.Trigger = Trigger{Type: TriggerNameMatches, Pattern: "*"}
+	r = pipelineV1()
+	r.Trigger = V1Trigger{Type: TriggerNameMatches, Pattern: "*"}
 	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "page_changed") {
 		t.Fatalf("pipeline needs page_changed: %v", err)
 	}
-	r = pipelineRule()
+	r = pipelineV1()
 	r.Scope = "pdf"
 	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "scope") {
 		t.Fatalf("scope still checked: %v", err)
@@ -341,7 +346,7 @@ func TestPipelineRuleValidates(t *testing.T) {
 }
 
 func TestPipelineRuleRequiresWatch(t *testing.T) {
-	r := pipelineRule()
+	r := pipelineV1()
 	r.Watch = nil
 	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "watch") {
 		t.Fatalf("empty watch: %v", err)
@@ -349,7 +354,7 @@ func TestPipelineRuleRequiresWatch(t *testing.T) {
 }
 
 func TestPipelineRuleRejectsTrashWatch(t *testing.T) {
-	r := pipelineRule()
+	r := pipelineV1()
 	r.Watch = []WatchRef{{ID: "trash", Kind: "folder"}}
 	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "trash") {
 		t.Fatalf("trash watch: %v", err)
@@ -357,8 +362,8 @@ func TestPipelineRuleRejectsTrashWatch(t *testing.T) {
 }
 
 func TestPageChangedRejectedOnMoveRule(t *testing.T) {
-	r := seedRule()
-	r.Trigger = Trigger{Type: TriggerPageChanged}
+	r := seedV1()
+	r.Trigger = V1Trigger{Type: TriggerPageChanged}
 	r.Scope = ScopeAll
 	if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "page_changed") {
 		t.Fatalf("page_changed on a move rule: %v", err)
@@ -366,7 +371,7 @@ func TestPageChangedRejectedOnMoveRule(t *testing.T) {
 }
 
 func TestNormalizeFillsPipelineDefaults(t *testing.T) {
-	cfg := &Config{Rules: []Rule{{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline},
+	cfg := &V1Config{Rules: []V1Rule{{Trigger: V1Trigger{Type: TriggerPageChanged}, Action: V1Action{Type: ActionPipeline},
 		Watch: []WatchRef{{ID: "a", Kind: "folder"}}}}}
 	cfg.Normalize()
 	r := cfg.Rules[0]
@@ -380,17 +385,17 @@ func TestNormalizeFillsPipelineDefaults(t *testing.T) {
 		t.Fatalf("normalized pipeline config invalid: %v", err)
 	}
 	// explicit values are kept
-	cfg = &Config{Rules: []Rule{{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline, Model: "m/x", Prompt: "p"},
+	cfg = &V1Config{Rules: []V1Rule{{Trigger: V1Trigger{Type: TriggerPageChanged}, Action: V1Action{Type: ActionPipeline, Model: "m/x", Prompt: "p"},
 		Watch: []WatchRef{{ID: "a", Kind: "folder"}}}}}
 	cfg.Normalize()
 	if cfg.Rules[0].Action.Model != "m/x" || cfg.Rules[0].Action.Prompt != "p" {
 		t.Fatalf("explicit values overwritten: %+v", cfg.Rules[0].Action)
 	}
 	// whitespace-only is empty; padding is trimmed
-	cfg = &Config{Rules: []Rule{
-		{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline, Model: "  \t", Prompt: " \n "},
+	cfg = &V1Config{Rules: []V1Rule{
+		{Trigger: V1Trigger{Type: TriggerPageChanged}, Action: V1Action{Type: ActionPipeline, Model: "  \t", Prompt: " \n "},
 			Watch: []WatchRef{{ID: "a", Kind: "folder"}}},
-		{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline, Model: " m/x\n", Prompt: "\n p "},
+		{Trigger: V1Trigger{Type: TriggerPageChanged}, Action: V1Action{Type: ActionPipeline, Model: " m/x\n", Prompt: "\n p "},
 			Watch: []WatchRef{{ID: "a", Kind: "folder"}}},
 	}}
 	cfg.Normalize()
@@ -401,7 +406,7 @@ func TestNormalizeFillsPipelineDefaults(t *testing.T) {
 		t.Fatalf("not trimmed: %+v", a)
 	}
 	// move rules get no model or prompt
-	mv := &Config{Rules: []Rule{seedRule()}}
+	mv := &V1Config{Rules: []V1Rule{seedV1()}}
 	mv.Normalize()
 	if mv.Rules[0].Action.Model != "" || mv.Rules[0].Action.Prompt != "" {
 		t.Fatalf("move rule got pipeline defaults: %+v", mv.Rules[0].Action)
@@ -409,14 +414,14 @@ func TestNormalizeFillsPipelineDefaults(t *testing.T) {
 }
 
 func TestConfigJSONRoundTripWithWatch(t *testing.T) {
-	cfg := &Config{Revision: 2, Settings: Settings{Enabled: true, Mode: ModeLive, IntervalMinutes: 15},
-		Rules: []Rule{pipelineRule(), seedRule()}}
+	cfg := &V1Config{Revision: 2, Settings: Settings{Enabled: true, Mode: ModeLive, IntervalMinutes: 15},
+		Rules: []V1Rule{pipelineV1(), seedV1()}}
 	cfg.Normalize()
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var back Config
+	var back V1Config
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +432,7 @@ func TestConfigJSONRoundTripWithWatch(t *testing.T) {
 		t.Errorf("watch not serialised: %s", b)
 	}
 	// a move rule serialises without watch, prompt or model
-	mb, _ := json.Marshal(seedRule())
+	mb, _ := json.Marshal(seedV1())
 	for _, k := range []string{`"watch"`, `"prompt"`, `"model"`} {
 		if strings.Contains(string(mb), k) {
 			t.Errorf("move rule JSON contains %s: %s", k, mb)
@@ -436,9 +441,9 @@ func TestConfigJSONRoundTripWithWatch(t *testing.T) {
 }
 
 func TestNormalizePipelineScopeDefaultsToAll(t *testing.T) {
-	cfg := &Config{Rules: []Rule{
-		{Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "a", Kind: WatchFolder}}},
-		{Scope: ScopeNotebooks, Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "a", Kind: WatchFolder}}},
+	cfg := &V1Config{Rules: []V1Rule{
+		{Trigger: V1Trigger{Type: TriggerPageChanged}, Action: V1Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "a", Kind: WatchFolder}}},
+		{Scope: ScopeNotebooks, Trigger: V1Trigger{Type: TriggerPageChanged}, Action: V1Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "a", Kind: WatchFolder}}},
 	}}
 	cfg.Normalize()
 	if cfg.Rules[0].Scope != ScopeAll || cfg.Rules[1].Scope != ScopeNotebooks {

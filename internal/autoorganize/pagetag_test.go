@@ -72,9 +72,9 @@ func TestContentCacheReparsesEntriesWithoutPageTags(t *testing.T) {
 	}
 }
 
-func pageTaggedRule() Rule {
-	r := pipelineRule()
-	r.Trigger = Trigger{Type: TriggerPageTagged, Tag: "todo"}
+func pageTaggedRule() V1Rule {
+	r := pipelineV1()
+	r.Trigger = V1Trigger{Type: TriggerPageTagged, Tag: "todo"}
 	return r
 }
 
@@ -82,35 +82,35 @@ func TestPageTaggedValidation(t *testing.T) {
 	f := false
 	cases := []struct {
 		name string
-		edit func(r *Rule)
+		edit func(r *V1Rule)
 		// move a move rule instead of a pipeline rule
 		move bool
 		// want "" = valid, else a substring of the error
 		want string
 	}{
-		{name: "tag", edit: func(r *Rule) {}},
-		{name: "padded tag", edit: func(r *Rule) { r.Trigger.Tag = "  Todo " }},
-		{name: "empty tag", edit: func(r *Rule) { r.Trigger.Tag = "" }, want: "tag"},
-		{name: "blank tag", edit: func(r *Rule) { r.Trigger.Tag = " \t" }, want: "tag"},
-		{name: "empty watch is the whole tree", edit: func(r *Rule) { r.Watch = nil }},
-		{name: "trash watch", edit: func(r *Rule) { r.Watch = []WatchRef{{ID: "trash", Kind: WatchFolder}} }, want: "trash"},
-		{name: "bad watch kind", edit: func(r *Rule) { r.Watch = []WatchRef{{ID: "x", Kind: "page"}} }, want: "kind"},
-		{name: "scope", edit: func(r *Rule) { r.Scope = "pdf" }, want: "scope"},
-		{name: "just save notes", edit: func(r *Rule) { r.Action.Tasks = &f }},
-		{name: "page_changed still needs a watch", edit: func(r *Rule) { r.Trigger = Trigger{Type: TriggerPageChanged}; r.Watch = nil }, want: "watch"},
-		{name: "page_changed just saves notes", edit: func(r *Rule) { r.Trigger = Trigger{Type: TriggerPageChanged}; r.Action.Tasks = &f }},
-		{name: "move trigger on a pipeline rule", edit: func(r *Rule) { r.Trigger = Trigger{Type: TriggerTagIs, Tag: "x"} }, want: "trigger"},
-		{name: "page_tagged on a move rule", move: true, edit: func(r *Rule) {
+		{name: "tag", edit: func(r *V1Rule) {}},
+		{name: "padded tag", edit: func(r *V1Rule) { r.Trigger.Tag = "  Todo " }},
+		{name: "empty tag", edit: func(r *V1Rule) { r.Trigger.Tag = "" }, want: "tag"},
+		{name: "blank tag", edit: func(r *V1Rule) { r.Trigger.Tag = " \t" }, want: "tag"},
+		{name: "empty watch is the whole tree", edit: func(r *V1Rule) { r.Watch = nil }},
+		{name: "trash watch", edit: func(r *V1Rule) { r.Watch = []WatchRef{{ID: "trash", Kind: WatchFolder}} }, want: "trash"},
+		{name: "bad watch kind", edit: func(r *V1Rule) { r.Watch = []WatchRef{{ID: "x", Kind: "page"}} }, want: "kind"},
+		{name: "scope", edit: func(r *V1Rule) { r.Scope = "pdf" }, want: "scope"},
+		{name: "just save notes", edit: func(r *V1Rule) { r.Action.Tasks = &f }},
+		{name: "page_changed still needs a watch", edit: func(r *V1Rule) { r.Trigger = V1Trigger{Type: TriggerPageChanged}; r.Watch = nil }, want: "watch"},
+		{name: "page_changed just saves notes", edit: func(r *V1Rule) { r.Trigger = V1Trigger{Type: TriggerPageChanged}; r.Action.Tasks = &f }},
+		{name: "move trigger on a pipeline rule", edit: func(r *V1Rule) { r.Trigger = V1Trigger{Type: TriggerTagIs, Tag: "x"} }, want: "trigger"},
+		{name: "page_tagged on a move rule", move: true, edit: func(r *V1Rule) {
 			r.Scope = ScopeAll
-			r.Trigger = Trigger{Type: TriggerPageTagged, Tag: "todo"}
+			r.Trigger = V1Trigger{Type: TriggerPageTagged, Tag: "todo"}
 		}, want: "page_tagged"},
-		{name: "tasks on a move rule", move: true, edit: func(r *Rule) { r.Action.Tasks = &f }, want: "tasks"},
+		{name: "tasks on a move rule", move: true, edit: func(r *V1Rule) { r.Action.Tasks = &f }, want: "tasks"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := pageTaggedRule()
 			if c.move {
-				r = seedRule()
+				r = seedV1()
 			}
 			c.edit(&r)
 			err := r.Validate()
@@ -126,9 +126,9 @@ func TestPageTaggedValidation(t *testing.T) {
 
 func TestNormalizePageTaggedAndTasks(t *testing.T) {
 	tr, f := true, false
-	cfg := &Config{Rules: []Rule{
-		{Trigger: Trigger{Type: TriggerPageTagged, Tag: "  ToDo "}, Action: Action{Type: ActionPipeline, Tasks: &tr}},
-		{Trigger: Trigger{Type: TriggerPageTagged, Tag: "todo"}, Action: Action{Type: ActionPipeline, Tasks: &f}},
+	cfg := &V1Config{Rules: []V1Rule{
+		{Trigger: V1Trigger{Type: TriggerPageTagged, Tag: "  ToDo "}, Action: V1Action{Type: ActionPipeline, Tasks: &tr}},
+		{Trigger: V1Trigger{Type: TriggerPageTagged, Tag: "todo"}, Action: V1Action{Type: ActionPipeline, Tasks: &f}},
 	}}
 	cfg.Normalize()
 	a, b := cfg.Rules[0], cfg.Rules[1]
@@ -153,14 +153,14 @@ func TestNormalizePageTaggedAndTasks(t *testing.T) {
 	if strings.Contains(string(ja), `"tasks"`) || !strings.Contains(string(jb), `"tasks":false`) {
 		t.Errorf("tasks json: %s / %s", ja, jb)
 	}
-	var back Rule
+	var back V1Rule
 	if err := json.Unmarshal(jb, &back); err != nil || back.Action.ExtractsTasks() || back.Trigger.Tag != "todo" {
 		t.Errorf("round trip: %+v %v", back, err)
 	}
 }
 
 func TestPageTaggedEvalSkipsNeverMatches(t *testing.T) {
-	r := pageTaggedRule()
+	r := moveRule("r", "src", "dst", trig(TriggerPageTagged, P{Tag: "todo"}))
 	ev := evalRule(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
 	if ev.match || ev.skip == "" {
 		t.Errorf("page_tagged under the move planner must skip, got %+v", ev)

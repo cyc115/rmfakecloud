@@ -68,6 +68,10 @@ const (
 	SkipContent = "content"
 	// SkipLocation the doc's parent chain is broken: left alone this sweep
 	SkipLocation = "location"
+	// SkipCondition a rule condition cannot be evaluated for the doc (an
+	// unknown or document-only condition, a bad pattern): the doc is left
+	// alone by that rule this sweep (no events, no leave, baselines untouched)
+	SkipCondition = "condition"
 	// SkipNotAttached the snapshot has no page lists: nothing is detected
 	SkipNotAttached = "pages_not_attached"
 )

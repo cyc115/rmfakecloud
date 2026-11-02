@@ -94,6 +94,7 @@ func (app *App) Start() {
 		}
 	}
 
+	app.migrateAutomation()
 	// the sweeper runs until Stop; it does not sweep until the user list is readable
 	organizerCtx, stopOrganizer := context.WithCancel(context.Background())
 	app.stopOrganizer = stopOrganizer
@@ -164,7 +165,6 @@ func (app *App) Stop() {
 		log.Fatal("Server Shutdown:", err)
 	}
 }
-
 
 // NewApp constructs an app
 func NewApp(cfg *config.Config) App {
@@ -247,6 +247,24 @@ func NewApp(cfg *config.Config) App {
 	storageapp.RegisterRoutes(router)
 
 	return app
+}
+
+// migrateAutomation migrates every user's auto-organize.json to
+// automation.json before the engines start. A failure is logged and does not
+// stop the server: that user's engines fail closed until it is fixed.
+func (app *App) migrateAutomation() {
+	users, err := app.userStorer.GetUsers()
+	if err != nil {
+		log.Error("automation: cannot list users for the config migration: ", err)
+		return
+	}
+	ids := make([]string, 0, len(users))
+	for _, u := range users {
+		ids = append(ids, u.ID)
+	}
+	for uid, err := range app.organizer.Store().MigrateAll(ids) {
+		log.Errorf("automation: %s: config not migrated: %v", uid, err)
+	}
 }
 
 func badReq(c *gin.Context, message string) {

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
 	"github.com/ddvk/rmfakecloud/internal/testkit/tablet"
 )
@@ -66,13 +67,13 @@ func newService(t *testing.T, storage *fs.FileSystemStorage) (*Service, *fakeNot
 	return svc, n, c
 }
 
-func saveConfig(t *testing.T, svc *Service, uid string, mode string, rules ...Rule) *Config {
+func saveConfig(t *testing.T, svc *Service, uid string, mode string, rules ...automation.Rule) *automation.Config {
 	t.Helper()
 	cur, err := svc.Store().LoadConfig(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &Config{Revision: cur.Revision, Settings: Settings{Enabled: true, Mode: mode, IntervalMinutes: 15}, Rules: rules}
+	cfg := &automation.Config{Revision: cur.Revision, Settings: Settings{Enabled: true, Mode: mode, IntervalMinutes: 15}, Rules: rules}
 	saved, err := svc.Store().SaveConfig(uid, cfg)
 	if err != nil {
 		t.Fatal(err)

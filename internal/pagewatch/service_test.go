@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
@@ -73,7 +74,7 @@ type svcEnv struct {
 	cfgs   *autoorganize.Store
 	sender *fakeSender
 	svc    *Service
-	cfg    *autoorganize.Config
+	cfg    *automation.Config
 }
 
 func newSvcEnv(t *testing.T) *svcEnv {
@@ -84,7 +85,7 @@ func newSvcEnv(t *testing.T) *svcEnv {
 		t.Fatal(err)
 	}
 	e := &svcEnv{t: t, dir: dir, st: st, ft: tablet.New(t, st, uid), cfgs: autoorganize.NewStore(st.UserDataPath, 0), sender: &fakeSender{}}
-	e.cfg = &autoorganize.Config{Settings: autoorganize.Settings{Enabled: true, Mode: autoorganize.ModeLive, IntervalMinutes: 15}}
+	e.cfg = &automation.Config{Version: automation.Version, Settings: automation.Settings{Enabled: true, Mode: automation.ModeLive, IntervalMinutes: 15}}
 	e.save()
 	e.svc = e.newService()
 	return e
@@ -111,12 +112,9 @@ func (e *svcEnv) save() {
 }
 
 func (e *svcEnv) rule(id string) {
-	e.cfg.Rules = append(e.cfg.Rules, autoorganize.Rule{
-		ID: id, Enabled: true, Scope: autoorganize.ScopeAll,
-		Trigger: autoorganize.Trigger{Type: autoorganize.TriggerPageChanged},
-		Action:  autoorganize.Action{Type: autoorganize.ActionPipeline, Prompt: "p", Model: "m"},
-		Watch:   []autoorganize.WatchRef{folderWatch(autoorganize.RootID)},
-	})
+	r := pageRule(id, folderWatch(autoorganize.RootID))
+	r.Actions[0].Prompt, r.Actions[0].Model = "p", "m"
+	e.cfg.Rules = append(e.cfg.Rules, r)
 	e.save()
 }
 
@@ -220,7 +218,7 @@ func TestFailedSendStillPersistsAlwaysEffects(t *testing.T) {
 
 func TestDryModeSendsFeedOnly(t *testing.T) {
 	e := newSvcEnv(t)
-	e.cfg.Settings.Mode = autoorganize.ModeDry
+	e.cfg.Settings.Mode = automation.ModeDry
 	e.rule("r1")
 	e.ft.Notebook("nb", "Notes", "")
 	e.page("nb", "p1", "strokes_a.rm")
@@ -245,7 +243,7 @@ func TestDryModeSendsFeedOnly(t *testing.T) {
 	}
 
 	// going live sends what dry mode held back
-	e.cfg.Settings.Mode = autoorganize.ModeLive
+	e.cfg.Settings.Mode = automation.ModeLive
 	e.save()
 	e.run()
 	var pipe int
@@ -680,12 +678,9 @@ func TestMissingWatchLogsOncePerStreakAndShowsInStatus(t *testing.T) {
 	if err := e.ft.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	e.cfg.Rules = append(e.cfg.Rules, autoorganize.Rule{
-		ID: "r1", Enabled: true, Scope: autoorganize.ScopeAll,
-		Trigger: autoorganize.Trigger{Type: autoorganize.TriggerPageChanged},
-		Action:  autoorganize.Action{Type: autoorganize.ActionPipeline, Prompt: "p", Model: "m"},
-		Watch:   []autoorganize.WatchRef{folderWatch("w")},
-	})
+	r := pageRule("r1", folderWatch("w"))
+	r.Actions[0].Prompt, r.Actions[0].Model = "p", "m"
+	e.cfg.Rules = append(e.cfg.Rules, r)
 	e.save()
 	missingErrs := func() []*log.Entry {
 		var out []*log.Entry

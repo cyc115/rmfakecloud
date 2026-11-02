@@ -2,10 +2,12 @@ package autoorganize
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 )
@@ -49,13 +51,13 @@ func pdfInfo(pages int) ContentInfo {
 	return ContentInfo{FileType: "pdf", PageCount: pages}
 }
 
-func (m *memTree) plan(t *testing.T, now time.Time, st *State, rules ...Rule) *Plan {
+func (m *memTree) plan(t *testing.T, now time.Time, st *State, rules ...automation.Rule) *Plan {
 	t.Helper()
 	if st == nil {
 		st = NewState()
 	}
 	snap := NewSnapshot(m.tree)
-	cfg := &Config{Settings: Settings{Enabled: true, Mode: ModeDry, IntervalMinutes: 15}, Rules: rules}
+	cfg := &automation.Config{Settings: Settings{Enabled: true, Mode: ModeDry, IntervalMinutes: 15}, Rules: rules}
 	cfg.Normalize()
 	return BuildPlan(PlanInput{Snap: snap, Config: cfg, State: st, Now: now, Content: func(d *DocSnap) ContentInfo {
 		ci, ok := m.content[d.ContentHash]
@@ -100,17 +102,30 @@ func daysAgo(now time.Time, d float64) string {
 	return hoursAgo(now, d*24)
 }
 
-func moveRule(id, from, to string, trig Trigger) Rule {
-	scope := ScopePdfEpub
-	if !trig.PageBased() {
-		scope = ScopeAll
+// moveRule an enabled document rule: documents directly in from, trigger tr,
+// then conds, move to the folder to. A page-based trigger gets kind_is
+// pdf_epub first (the v1 scope it was locked to); the others cover every kind.
+func moveRule(id, from, to string, tr automation.Trigger, conds ...automation.Condition) automation.Rule {
+	all := []automation.Condition{}
+	if s := automation.Triggers[tr.Type]; s != nil && s.PageBased {
+		all = append(all, kindIs(ScopePdfEpub))
 	}
-	return Rule{ID: id, Enabled: true, Source: FolderRef{ID: from}, Scope: scope, Trigger: trig,
-		Destination: Destination{FolderRef: FolderRef{ID: to}}, Action: Action{Type: ActionMove}}
+	return automation.Rule{ID: id, Enabled: true,
+		When:       automation.When{Subject: automation.SubjectDocument, In: []automation.Place{{ID: from, Kind: automation.PlaceFolder}}, Trigger: tr},
+		Conditions: append(all, conds...),
+		Actions:    []automation.Action{{Type: automation.ActionMove, To: &automation.Destination{FolderRef: FolderRef{ID: to}}}}}
 }
 
-func readRule() Rule {
-	return moveRule("r1", "rr", "read", Trigger{Type: TriggerFinishedReading, MinPages: 3, SettleHours: 6})
+// pageRule an enabled page_changed rule over in that extracts tasks
+func pageRule(id string, in ...automation.Place) automation.Rule {
+	return automation.Rule{ID: id, Enabled: true,
+		When:       automation.When{Subject: automation.SubjectPage, In: in, Trigger: trig(TriggerPageChanged, P{})},
+		Conditions: []automation.Condition{},
+		Actions:    []automation.Action{{Type: automation.ActionExtractTasks}}}
+}
+
+func readRule() automation.Rule {
+	return moveRule("r1", "rr", "read", trig(TriggerFinishedReading, P{MinPages: 3, SettleHours: 6}))
 }
 
 func baseTree() *memTree {
@@ -167,7 +182,7 @@ func TestFinishedReading(t *testing.T) {
 
 	// settle guard 0: the just-finished doc qualifies
 	r := readRule()
-	r.Trigger.SettleHours = 0
+	r.When.Trigger.SettleHours = 0
 	p = m.plan(t, now, nil, r)
 	if !strings.Contains(strings.Join(movedIDs(p), ","), "fresh") {
 		t.Errorf("settleHours 0 should move the fresh doc: %v", movedIDs(p))
@@ -183,7 +198,7 @@ func TestReadProgress(t *testing.T) {
 	m.doc("p80", "Eight of ten", "rr", pdfInfo(10), at(7))
 	m.doc("p70", "Seven of ten", "rr", pdfInfo(10), at(6))
 	m.doc("p0", "No pages", "rr", pdfInfo(0), at(0))
-	r := moveRule("r1", "rr", "read", Trigger{Type: TriggerReadProgress, Percent: 80, SettleHours: 6})
+	r := moveRule("r1", "rr", "read", trig(TriggerReadProgress, P{Percent: 80, SettleHours: 6}))
 	p := m.plan(t, now, nil, r)
 	if got := strings.Join(movedIDs(p), ","); got != "p80" {
 		t.Fatalf("moves = %s", got)
@@ -207,7 +222,7 @@ func TestNotOpenedForDays(t *testing.T) {
 
 	st := NewState()
 	st.FirstSeen["never-none"] = &FirstSeen{At: now.Add(-8 * 24 * time.Hour).UnixMilli()}
-	r := moveRule("r1", "inbox", "archive", Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7})
+	r := moveRule("r1", "inbox", "archive", trig(TriggerNotOpened, P{Days: 30}), cond(automation.CondMinAgeDays, P{Days: 7}))
 	p := m.plan(t, now, st, r)
 	if got := strings.Join(movedIDs(p), ","); got != "never-old,never-none,never-lm,old" {
 		t.Fatalf("moves = %s", got)
@@ -223,7 +238,7 @@ func TestNotOpenedForDays(t *testing.T) {
 	}
 
 	// without the age guard a brand new never-opened doc matches at once
-	r.Trigger.MinAgeEnabled = false
+	r.Conditions = nil
 	p = m.plan(t, now, st, r)
 	if !strings.Contains(strings.Join(movedIDs(p), ","), "never-new") {
 		t.Errorf("age guard off: %v", movedIDs(p))
@@ -238,7 +253,7 @@ func TestNotModifiedForDays(t *testing.T) {
 	m.doc("stale", "Stale", "papers", ContentInfo{FileType: "notebook"}, func(md *models.MetadataFile) { md.LastModified = daysAgo(now, 100) })
 	m.doc("active", "Active", "papers", pdfInfo(2), func(md *models.MetadataFile) { md.LastModified = daysAgo(now, 10) })
 	m.doc("unknown", "No clock", "papers", pdfInfo(2), nil)
-	r := moveRule("r1", "papers", "cold", Trigger{Type: TriggerNotModified, Days: 90})
+	r := moveRule("r1", "papers", "cold", trig(TriggerNotModified, P{Days: 90}))
 	p := m.plan(t, now, nil, r)
 	if got := strings.Join(movedIDs(p), ","); got != "stale" {
 		t.Fatalf("moves = %s", got)
@@ -259,7 +274,7 @@ func TestNameMatches(t *testing.T) {
 	m.doc("wsj", "WSJ Weekend 2026-10-18", "inbox", pdfInfo(0), nil)
 	m.doc("ft", "FT Weekend", "inbox", pdfInfo(10), nil)
 	m.doc("lower", "wsj daily", "inbox", ContentInfo{FileType: "epub"}, nil)
-	r := moveRule("r1", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"})
+	r := moveRule("r1", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "WSJ *"}))
 	p := m.plan(t, now, nil, r)
 	if got := strings.Join(movedIDs(p), ","); got != "lower,wsj" {
 		t.Fatalf("moves = %s (pageCount 0 does not block name rules)", got)
@@ -274,7 +289,7 @@ func TestTagIs(t *testing.T) {
 	m.doc("strtag", "String tags", "inbox", ContentInfo{FileType: "pdf", Tags: []string{"Done"}}, nil)
 	m.doc("objtag", "Object tags", "inbox", ContentInfo{FileType: "notebook", Tags: []string{"other", "done"}}, nil)
 	m.doc("untagged", "Untagged", "inbox", pdfInfo(3), nil)
-	r := moveRule("r1", "inbox", "done", Trigger{Type: TriggerTagIs, Tag: "done"})
+	r := moveRule("r1", "inbox", "done", trig(TriggerTagIs, P{Tag: "done"}))
 	p := m.plan(t, now, nil, r)
 	if got := strings.Join(movedIDs(p), ","); got != "objtag,strtag" {
 		t.Fatalf("moves = %s", got)
@@ -312,7 +327,7 @@ func TestAgeSinceCreated(t *testing.T) {
 	m.doc("unseen", "No clocks, never seen", "inbox", pdfInfo(1), nil)
 	st := NewState()
 	st.FirstSeen["seen"] = &FirstSeen{At: now.Add(-16 * 24 * time.Hour).UnixMilli()}
-	r := moveRule("r1", "inbox", "old", Trigger{Type: TriggerAgeSinceCreated, Days: 14})
+	r := moveRule("r1", "inbox", "old", trig(TriggerAgeSinceCreated, P{Days: 14}))
 	p := m.plan(t, now, st, r)
 	if got := strings.Join(movedIDs(p), ","); got != "c20,seen,lm" {
 		t.Fatalf("moves = %s", got)
@@ -333,12 +348,12 @@ func TestPinnedGuardAndPinnedIs(t *testing.T) {
 		t.Fatalf("pinned must be skipped: %+v", p.Skipped)
 	}
 
-	r := moveRule("r2", "rr", "read", Trigger{Type: TriggerPinnedIs, Pinned: true})
+	r := moveRule("r2", "rr", "read", trig(TriggerPinnedIs, P{Pinned: true}))
 	p = m.plan(t, now, nil, r)
 	if len(p.Moves) != 1 {
 		t.Fatalf("pinned_is ignores the pinned guard: %+v", p.Skipped)
 	}
-	r.Trigger.Pinned = false
+	r.When.Trigger.Pinned = false
 	p = m.plan(t, now, nil, r)
 	if len(p.Moves) != 0 {
 		t.Fatal("is not pinned must not match a pinned doc")
@@ -358,15 +373,15 @@ func TestNoAutomationTagSkipsEveryTrigger(t *testing.T) {
 		md.Pinned = true
 	}
 	m.doc("tagged", "Staff Guide", "inbox", ContentInfo{FileType: "pdf", PageCount: 5, Tags: []string{"No-Automation", "done"}}, meta)
-	triggers := []Trigger{
-		{Type: TriggerFinishedReading, MinPages: 1},
-		{Type: TriggerReadProgress, Percent: 10},
-		{Type: TriggerNotOpened, Days: 1},
-		{Type: TriggerNotModified, Days: 1},
-		{Type: TriggerNameMatches, Pattern: "*"},
-		{Type: TriggerTagIs, Tag: "done"},
-		{Type: TriggerAgeSinceCreated, Days: 1},
-		{Type: TriggerPinnedIs, Pinned: true},
+	triggers := []automation.Trigger{
+		trig(TriggerFinishedReading, P{MinPages: 1}),
+		trig(TriggerReadProgress, P{Percent: 10}),
+		trig(TriggerNotOpened, P{Days: 1}),
+		trig(TriggerNotModified, P{Days: 1}),
+		trig(TriggerNameMatches, P{Pattern: "*"}),
+		trig(TriggerTagIs, P{Tag: "done"}),
+		trig(TriggerAgeSinceCreated, P{Days: 1}),
+		trig(TriggerPinnedIs, P{Pinned: true}),
 	}
 	for _, tr := range triggers {
 		p := m.plan(t, now, nil, moveRule("r", "inbox", "out", tr))
@@ -388,7 +403,7 @@ func TestUnreadableContentIsSkipped(t *testing.T) {
 	m.folder("inbox", "Inbox", "")
 	m.folder("out", "Out", "")
 	m.doc("broken", "Broken", "inbox", ContentInfo{Error: "cannot parse .content"}, nil)
-	p := m.plan(t, now, nil, moveRule("r", "inbox", "out", Trigger{Type: TriggerNameMatches, Pattern: "*"}))
+	p := m.plan(t, now, nil, moveRule("r", "inbox", "out", trig(TriggerNameMatches, P{Pattern: "*"})))
 	if s := skipOf(p, "broken"); s == nil || s.Reason != SkipContentUnreadable || len(p.Moves) != 0 {
 		t.Fatalf("unreadable content: %+v", p.Skipped)
 	}
@@ -408,7 +423,7 @@ func TestTrashByAncestorWalkAndUUIDResolution(t *testing.T) {
 
 	// renamed source still resolves by UUID
 	r := readRule()
-	r.Source.Name = "Research Reports"
+	r.When.In[0].Name = "Research Reports"
 	p := m.plan(t, now, nil, r)
 	rr := ruleResult(p, "r1")
 	if len(p.Moves) != 1 || rr.SourceRenamedFrom != "Research Reports" || rr.SourceName != "Research Reports (renamed)" {
@@ -416,26 +431,26 @@ func TestTrashByAncestorWalkAndUUIDResolution(t *testing.T) {
 	}
 
 	// source in trash by ancestor walk (grandchild of a trashed folder)
-	p = m.plan(t, now, nil, moveRule("r2", "grandchild", "read", Trigger{Type: TriggerFinishedReading, MinPages: 1}))
+	p = m.plan(t, now, nil, moveRule("r2", "grandchild", "read", trig(TriggerFinishedReading, P{MinPages: 1})))
 	if len(p.Moves) != 0 || !contains(p.Rules[0].Problems, "Source folder in Trash") {
 		t.Fatalf("source in trash: %+v", p.Rules[0])
 	}
 	// destination in trash by ancestor walk
-	p = m.plan(t, now, nil, moveRule("r3", "rr", "child", Trigger{Type: TriggerFinishedReading, MinPages: 1}))
+	p = m.plan(t, now, nil, moveRule("r3", "rr", "child", trig(TriggerFinishedReading, P{MinPages: 1})))
 	if len(p.Moves) != 0 || !contains(p.Rules[0].Problems, "Destination in Trash") {
 		t.Fatalf("destination in trash: %+v", p.Rules[0])
 	}
 	// UUID resolution failure: the rule is skipped and flagged, never widened
-	p = m.plan(t, now, nil, moveRule("r4", "gone-uuid", "read", Trigger{Type: TriggerNameMatches, Pattern: "*"}))
+	p = m.plan(t, now, nil, moveRule("r4", "gone-uuid", "read", trig(TriggerNameMatches, P{Pattern: "*"})))
 	if len(p.Moves) != 0 || p.Scanned != 0 || !contains(p.Rules[0].Problems, "Source folder missing") {
 		t.Fatalf("missing source: %+v", p.Rules[0])
 	}
-	p = m.plan(t, now, nil, moveRule("r5", "rr", "gone-uuid", Trigger{Type: TriggerNameMatches, Pattern: "*"}))
+	p = m.plan(t, now, nil, moveRule("r5", "rr", "gone-uuid", trig(TriggerNameMatches, P{Pattern: "*"})))
 	if len(p.Moves) != 0 || !contains(p.Rules[0].Problems, "Destination folder missing") {
 		t.Fatalf("missing destination: %+v", p.Rules[0])
 	}
 	// a document UUID is not a folder
-	p = m.plan(t, now, nil, moveRule("r6", "d1", "read", Trigger{Type: TriggerNameMatches, Pattern: "*"}))
+	p = m.plan(t, now, nil, moveRule("r6", "d1", "read", trig(TriggerNameMatches, P{Pattern: "*"})))
 	if !contains(p.Rules[0].Problems, "Source folder missing") {
 		t.Fatalf("doc as source: %+v", p.Rules[0])
 	}
@@ -449,7 +464,7 @@ func TestUnknownParentIsNeverRoot(t *testing.T) {
 	m.doc("orphan", "Orphan", "missing-folder", pdfInfo(1), nil)
 	m.folder("loop-a", "A", "loop-b")
 	m.folder("loop-b", "B", "loop-a")
-	r := moveRule("r1", RootID, "archive", Trigger{Type: TriggerNameMatches, Pattern: "*"})
+	r := moveRule("r1", RootID, "archive", trig(TriggerNameMatches, P{Pattern: "*"}))
 	p := m.plan(t, now, nil, r)
 	if got := strings.Join(movedIDs(p), ","); got != "rootdoc" {
 		t.Fatalf("root source moves = %s; an unknown parent is not root", got)
@@ -468,8 +483,8 @@ func TestFirstMatchWinsInListOrder(t *testing.T) {
 	m.folder("archive", "Archive", "")
 	m.doc("wsj", "WSJ old", "inbox", pdfInfo(3), func(md *models.MetadataFile) { md.CreatedTime = daysAgo(now, 60) })
 	m.doc("other", "Other old", "inbox", pdfInfo(3), func(md *models.MetadataFile) { md.CreatedTime = daysAgo(now, 60) })
-	a := moveRule("a", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"})
-	b := moveRule("b", "inbox", "archive", Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7})
+	a := moveRule("a", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "WSJ *"}))
+	b := moveRule("b", "inbox", "archive", trig(TriggerNotOpened, P{Days: 30}), cond(automation.CondMinAgeDays, P{Days: 7}))
 
 	p := m.plan(t, now, nil, a, b)
 	if len(p.Moves) != 2 || p.Moves[0].DocID != "wsj" || p.Moves[0].To != "news" || p.Moves[1].DocID != "other" || p.Moves[1].To != "archive" {
@@ -499,8 +514,8 @@ func TestSkippedByEarlierRuleIsNotClaimed(t *testing.T) {
 	m.folder("archive", "Archive", "")
 	m.folder("inbox", "Inbox", "")
 	m.doc("d", "Pinned doc", "archive", pdfInfo(3), func(md *models.MetadataFile) { md.Pinned = true })
-	a := moveRule("a", "archive", "inbox", Trigger{Type: TriggerNameMatches, Pattern: "*"})
-	b := moveRule("b", "archive", "inbox", Trigger{Type: TriggerPinnedIs, Pinned: true})
+	a := moveRule("a", "archive", "inbox", trig(TriggerNameMatches, P{Pattern: "*"}))
+	b := moveRule("b", "archive", "inbox", trig(TriggerPinnedIs, P{Pinned: true}))
 	p := m.plan(t, now, nil, a, b)
 	if len(p.Moves) != 1 || p.Moves[0].RuleID != "b" {
 		t.Fatalf("rule a skips pinned, rule b may claim: %+v", p.Moves)
@@ -514,8 +529,8 @@ func TestSnapshotIsolationWithinOnePlan(t *testing.T) {
 	m.folder("archive", "Archive", "")
 	m.folder("deep", "Deep", "")
 	m.doc("d", "Doc", "inbox", pdfInfo(3), nil)
-	a := moveRule("a", "inbox", "archive", Trigger{Type: TriggerNameMatches, Pattern: "*"})
-	b := moveRule("b", "archive", "deep", Trigger{Type: TriggerNameMatches, Pattern: "*"})
+	a := moveRule("a", "inbox", "archive", trig(TriggerNameMatches, P{Pattern: "*"}))
+	b := moveRule("b", "archive", "deep", trig(TriggerNameMatches, P{Pattern: "*"}))
 	p := m.plan(t, now, nil, a, b)
 	if len(p.Moves) != 1 || p.Moves[0].To != "archive" {
 		t.Fatalf("a move earlier in the sweep must not feed a later rule: %+v", p.Moves)
@@ -561,7 +576,7 @@ func TestCycleGuardRefusesReturn(t *testing.T) {
 	fp := NewSnapshot(m.tree).Docs["d"].Fingerprint
 	st := NewState()
 	st.History = []HistoryEntry{{DocID: "d", RuleID: "a", RuleNumber: 1, From: "inbox", To: "archive", At: now.Add(-time.Hour).UnixMilli(), Fingerprint: fp}}
-	b := moveRule("b", "archive", "inbox", Trigger{Type: TriggerPinnedIs, Pinned: true})
+	b := moveRule("b", "archive", "inbox", trig(TriggerPinnedIs, P{Pinned: true}))
 
 	p := m.plan(t, now, st, b)
 	if s := skipOf(p, "d"); len(p.Moves) != 0 || s == nil || s.Reason != SkipCycleGuard || !strings.Contains(s.Detail, "rule 1") {
@@ -581,7 +596,7 @@ func TestCycleGuardRefusesReturn(t *testing.T) {
 
 	// the root ("My files") is a destination like any other
 	st.History = []HistoryEntry{{DocID: "d", RuleID: "a", RuleNumber: 1, From: RootID, To: "archive", At: now.Add(-time.Hour).UnixMilli(), Fingerprint: fp}}
-	toRoot := moveRule("b", "archive", RootID, Trigger{Type: TriggerPinnedIs, Pinned: true})
+	toRoot := moveRule("b", "archive", RootID, trig(TriggerPinnedIs, P{Pinned: true}))
 	p = m.plan(t, now, st, toRoot)
 	if s := skipOf(p, "d"); len(p.Moves) != 0 || s == nil || s.Reason != SkipCycleGuard {
 		t.Fatalf("cycle guard back to root: moves %v skipped %+v", movedIDs(p), p.Skipped)
@@ -654,9 +669,8 @@ func TestPlanIgnoresPipelineRules(t *testing.T) {
 	m.folder("inbox", "Inbox", "")
 	m.folder("news", "News", "")
 	m.doc("wsj", "WSJ Weekend", "inbox", pdfInfo(0), nil)
-	pipe := Rule{ID: "pipe", Enabled: true, Scope: ScopeAll, Trigger: Trigger{Type: TriggerPageChanged},
-		Action: Action{Type: ActionPipeline}, Watch: []WatchRef{{ID: "inbox", Kind: "folder"}}}
-	mv := moveRule("r2", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"})
+	pipe := pageRule("pipe", automation.Place{ID: "inbox", Kind: automation.PlaceFolder})
+	mv := moveRule("r2", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "WSJ *"}))
 	p := m.plan(t, now, nil, pipe, mv)
 	if got := strings.Join(movedIDs(p), ","); got != "wsj" {
 		t.Fatalf("moves = %q, want wsj (a pipeline rule must not claim documents)", got)
@@ -673,18 +687,19 @@ func TestPlanIgnoresPipelineRules(t *testing.T) {
 }
 
 func TestLoopWarningsIgnorePipelineRules(t *testing.T) {
-	a := moveRule("a", "f1", "f2", Trigger{Type: TriggerPinnedIs, Pinned: true})
-	pipe := Rule{ID: "p", Enabled: true, Trigger: Trigger{Type: TriggerPageChanged}, Action: Action{Type: ActionPipeline},
-		Source: FolderRef{ID: "f2"}, Destination: Destination{FolderRef: FolderRef{ID: "f1"}}}
-	cfg := &Config{Rules: []Rule{a, pipe}}
-	if got := LoopWarnings(cfg, func(r *Rule) (string, bool) { return r.Destination.ID, true }); len(got) != 0 {
+	a := moveRule("a", "f1", "f2", trig(TriggerPinnedIs, P{Pinned: true}))
+	// a page rule "in f2" that would close the loop if it moved anything
+	pipe := pageRule("p", automation.Place{ID: "f2", Kind: automation.PlaceFolder})
+	cfg := &automation.Config{Rules: []automation.Rule{a, pipe}}
+	if got := LoopWarnings(cfg, func(r *automation.Rule) (string, bool) { return "f1", true }); len(got) != 0 {
 		t.Fatalf("pipeline rule formed a loop: %v", got)
 	}
 }
 
-// TestFinishedReadingIgnoresMinAgeAndPinned (R-B3): finished_reading carries
-// minAgeEnabled, minAgeDays and pinned from the v1 form, but never reads them;
-// v2 may drop them. A future createdTime does not hold a finished document.
+// TestFinishedReadingIgnoresMinAgeAndPinned (R-B3): finished_reading never
+// reads pinned or days (v1 carried them with minAge*; MigrateV1 drops them).
+// Leftover parameters outside the type's fields change nothing, and a future
+// createdTime does not hold a finished document.
 func TestFinishedReadingIgnoresMinAgeAndPinned(t *testing.T) {
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	m := baseTree()
@@ -702,8 +717,8 @@ func TestFinishedReadingIgnoresMinAgeAndPinned(t *testing.T) {
 	m.doc("nb", "Sketchbook", "rr", ContentInfo{FileType: "notebook", PageCount: 5}, opened(4, 9))
 
 	a, b := readRule(), readRule()
-	a.Trigger.MinAgeEnabled, a.Trigger.MinAgeDays, a.Trigger.Pinned = true, 0, true
-	b.Trigger.MinAgeEnabled, b.Trigger.MinAgeDays, b.Trigger.Pinned = false, 99, false
+	a.When.Trigger.Days, a.When.Trigger.Pinned = 0, true
+	b.When.Trigger.Days, b.When.Trigger.Pinned = 99, false
 	pa, pb := m.plan(t, now, nil, a), m.plan(t, now, nil, b)
 	if got := movedIDs(pa); !reflect.DeepEqual(got, []string{"done", "future"}) {
 		t.Fatalf("moved %v, want done and future", got)
@@ -735,7 +750,7 @@ func TestNotOpenedMinAgeZeroFutureAnchor(t *testing.T) {
 	m.doc("future", "Future", "rr", pdfInfo(5), func(md *models.MetadataFile) { md.CreatedTime = ms(future) })
 	inputs := map[string]string{"lastOpened": "", "ageAnchor": ms(future)}
 
-	rule := moveRule("r1", "rr", "read", Trigger{Type: TriggerNotOpened, Days: 1, MinAgeEnabled: true, MinAgeDays: 0})
+	rule := moveRule("r1", "rr", "read", trig(TriggerNotOpened, P{Days: 1}), cond(automation.CondMinAgeDays, P{Days: 0}))
 	// a hold keyed on exactly these inputs survives the sweep only if the
 	// evaluator's inputs are the same map (sameInputs), match or not
 	st := NewState()
@@ -748,12 +763,58 @@ func TestNotOpenedMinAgeZeroFutureAnchor(t *testing.T) {
 		t.Fatalf("guard on: inputs are not %v (hold cleared)", inputs)
 	}
 
-	rule.Trigger.MinAgeEnabled = false
+	rule.Conditions = nil
 	p = m.plan(t, now, nil, rule)
 	if got := movedIDs(p); !reflect.DeepEqual(got, []string{"future"}) {
 		t.Fatalf("guard off: moved %v, want future", got)
 	}
 	if got := p.Moves[0].Inputs; !reflect.DeepEqual(got, inputs) {
 		t.Fatalf("guard off: inputs %v, want %v", got, inputs)
+	}
+}
+
+// TestDocumentRuleMultiConditionAND not_opened_for_days 30 AND kind_is
+// pdf_epub AND tag_is "keep": only the old, unopened, tagged PDF matches. The
+// rest count as v1 counted them: not matching, or skipped out of scope.
+func TestDocumentRuleMultiConditionAND(t *testing.T) {
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	m := newMemTree()
+	m.folder("inbox", "Inbox", "")
+	m.folder("archive", "Archive", "")
+	keep := func(ci ContentInfo) ContentInfo { ci.Tags = []string{"Keep"}; return ci }
+	old := func(md *models.MetadataFile) { md.LastOpened = daysAgo(now, 40); md.CreatedTime = daysAgo(now, 100) }
+	m.doc("hit", "Old tagged paper", "inbox", keep(pdfInfo(5)), old)
+	m.doc("never", "Never opened tagged book", "inbox", keep(ContentInfo{FileType: "epub", PageCount: 9}), func(md *models.MetadataFile) { md.CreatedTime = daysAgo(now, 100) })
+	m.doc("recent", "Recently opened", "inbox", keep(pdfInfo(5)), func(md *models.MetadataFile) { md.LastOpened = daysAgo(now, 2) })
+	m.doc("untagged", "Old untagged", "inbox", pdfInfo(5), old)
+	m.doc("nb", "Old tagged notebook", "inbox", keep(ContentInfo{FileType: "notebook", PageCount: 5}), old)
+
+	r := moveRule("r1", "inbox", "archive", trig(TriggerNotOpened, P{Days: 30}),
+		kindIs(ScopePdfEpub), cond(automation.CondTagIs, P{Tag: "keep"}))
+	p := m.plan(t, now, nil, r)
+	moved := movedIDs(p)
+	sort.Strings(moved)
+	if got := strings.Join(moved, ","); got != "hit,never" {
+		t.Fatalf("moves = %q, want hit and never", got)
+	}
+	rr := ruleResult(p, "r1")
+	if rr.Checked != 5 || rr.Matches != 2 || rr.NotMatching != 2 || rr.OptedOut != 0 {
+		t.Fatalf("rule result %+v", rr)
+	}
+	if s := skipOf(p, "nb"); s == nil || s.Reason != SkipOutOfScope || s.Detail != "notebook, rule applies to PDF & EPUB" {
+		t.Fatalf("notebook skip = %+v", s)
+	}
+	for _, id := range []string{"recent", "untagged"} {
+		if s := skipOf(p, id); s != nil {
+			t.Errorf("%s skipped (%+v), want not matching", id, s)
+		}
+	}
+	for _, mv := range p.Moves {
+		if k := keys(mv.Inputs); !reflect.DeepEqual(k, []string{"ageAnchor", "lastOpened", "tags"}) {
+			t.Errorf("%s inputs %v", mv.DocID, k)
+		}
+		if !strings.HasSuffix(mv.Detail, " · tagged “keep”") {
+			t.Errorf("%s detail %q", mv.DocID, mv.Detail)
+		}
 	}
 }

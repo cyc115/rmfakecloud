@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 )
 
@@ -19,7 +20,7 @@ const DefaultMinAge = 10 * time.Minute
 // Input everything Detect reads. Snap must have had AttachPages called.
 type Input struct {
 	Snap    *autoorganize.Snapshot
-	Config  *autoorganize.Config
+	Config  *automation.Config
 	State   *State
 	Content func(*autoorganize.DocSnap) autoorganize.ContentInfo
 	// ModTime the blob's write time; an error skips the page (never "old")
@@ -40,8 +41,8 @@ type Plan struct {
 	// SkipRules the first pipeline rule a skipped page was evaluated for
 	// (absent when only the feed saw it)
 	SkipRules map[SkipNote]string `json:"-"`
-	// MissingWatches watch entries of enabled pipeline rules whose id is not
-	// in the tree (the folder or doc was deleted): the rule watches nothing there
+	// MissingWatches places of enabled page rules whose id is not in the tree
+	// (the folder or doc was deleted): the rule watches nothing there
 	MissingWatches []MissingWatch `json:"missingWatches"`
 	// Abort non-empty: the snapshot cannot be trusted; send nothing, save
 	// nothing (Advance returns the input state unchanged)
@@ -519,7 +520,7 @@ func (d *detector) feedEdits(v *docView) {
 	}
 }
 
-// ---- pipeline: enabled pipeline rules, their watched documents ----
+// ---- pipeline: enabled page rules, the documents they cover ----
 
 func (d *detector) pipeline() {
 	cfg := d.in.Config
@@ -527,25 +528,31 @@ func (d *detector) pipeline() {
 		return
 	}
 	for i := range cfg.Rules {
-		if r := &cfg.Rules[i]; r.Enabled && r.IsPipeline() {
+		// a page rule without a page action has nothing to send
+		if r := &cfg.Rules[i]; r.Enabled && r.IsPage() && r.PageAction() != nil {
 			d.rule(r)
 		}
 	}
 }
 
-func (d *detector) rule(r *autoorganize.Rule) {
+func (d *detector) rule(r *automation.Rule) {
 	base := d.ruleBase(r)
 	d.missingWatches(r)
 	held := pagesOf(base.Baselines)
 	known := ruleDocs(base)
+	tags, tagged := pageTags(r)
 	for _, v := range d.docs {
+		in, skip := d.inRule(r, v)
 		switch {
-		case !d.inRule(r, v):
+		case skip != "":
+			// a condition that cannot be evaluated: left alone, never left
+			d.skipFor(SkipNote{DocID: v.snap.ID, Reason: SkipCondition}, r.ID)
+		case !in:
 			if known[v.snap.ID] {
 				d.leave(r.ID, v.snap.ID)
 			}
-		case r.Trigger.Type == autoorganize.TriggerPageTagged:
-			d.taggedDoc(r, base, held[v.snap.ID], v)
+		case tagged:
+			d.taggedDoc(r, tags, base, held[v.snap.ID], v)
 		default:
 			d.ruleDoc(r, base, held[v.snap.ID], v)
 		}
@@ -564,7 +571,7 @@ func (d *detector) rule(r *autoorganize.Rule) {
 // another trigger (type or tag) is replaced by an empty one: the rule starts
 // afresh, as at its first activation, so nothing it held is read with the
 // wrong meaning (old pages never turn into edits).
-func (d *detector) ruleBase(r *autoorganize.Rule) *RuleState {
+func (d *detector) ruleBase(r *automation.Rule) *RuleState {
 	key := stateTrigger(r)
 	if base := d.base.Rules[r.ID]; base != nil && base.Trigger == key {
 		return base
@@ -580,18 +587,34 @@ func (d *detector) ruleBase(r *autoorganize.Rule) *RuleState {
 	return fresh
 }
 
-// stateTrigger what a rule's state is built for (RuleState.Trigger)
-func stateTrigger(r *autoorganize.Rule) string {
-	if r.Trigger.Type == autoorganize.TriggerPageTagged {
-		return autoorganize.TriggerPageTagged + ":" + autoorganize.NormalizePageTag(r.Trigger.Tag)
+// pageTags the page tags a page must carry to count for r (P4): the
+// page_tagged trigger's tag plus every page_tag_is condition. tagged true runs
+// the tagged path, also when the set is empty (a blank tag), where no page
+// counts: a blank tag never widens the rule to every page.
+func pageTags(r *automation.Rule) (tags []string, tagged bool) {
+	tagged = r.When.Trigger.Type == automation.TriggerPageTagged
+	for _, c := range r.Conditions {
+		tagged = tagged || c.Type == automation.CondPageTagIs
 	}
-	// page_changed: every state written before page_tagged existed
-	return ""
+	return r.PageTags(), tagged
 }
 
-// missingWatches reports the rule's watch entries gone from the tree or trashed
-func (d *detector) missingWatches(r *autoorganize.Rule) {
-	for _, w := range r.Watch {
+// stateTrigger what a rule's state is built for (RuleState.Trigger): "" for
+// page_changed (every state written before page_tagged existed), else
+// "page_tagged:" and the sorted tags joined by 0x1f (P4), so one tag keeps
+// the v1 key and "page_changed AND page_tag_is X" shares the key of
+// "page_tagged X"
+func stateTrigger(r *automation.Rule) string {
+	tags, tagged := pageTags(r)
+	if !tagged {
+		return ""
+	}
+	return automation.TriggerPageTagged + ":" + strings.Join(tags, "\x1f")
+}
+
+// missingWatches reports the rule's places gone from the tree or trashed
+func (d *detector) missingWatches(r *automation.Rule) {
+	for _, w := range r.When.In {
 		if w.ID == autoorganize.RootID {
 			continue
 		}
@@ -646,31 +669,34 @@ func (d *detector) leave(ruleID, docID string) {
 	})
 }
 
-// inRule the doc is watched by the rule, in scope, and not opted out
-func (d *detector) inRule(r *autoorganize.Rule, v *docView) bool {
+// inRule the doc is not trashed or opted out, passes the rule's document
+// conditions (autoorganize.DocConditionsMatch: kind_is, tag_is, tag_is_not,
+// name_matches) and is in one of its places. skip non-empty: a condition
+// cannot be evaluated, and the doc is left alone for this rule this sweep.
+func (d *detector) inRule(r *automation.Rule, v *docView) (in bool, skip string) {
 	if v.trashed || v.ci.HasNoAutomationTag() {
-		return false
+		return false, ""
 	}
-	if r.Scope != "" && r.Scope != autoorganize.ScopeAll && v.ci.Kind() != r.Scope {
-		return false
+	if ok, skip := autoorganize.DocConditionsMatch(r, v.snap, &v.ci, d.in.Now); skip != "" || !ok {
+		return false, skip
 	}
-	if len(r.Watch) == 0 {
-		// page_tagged: no entries is the whole tree (page_changed needs one)
-		return r.Trigger.Type == autoorganize.TriggerPageTagged
+	if len(r.When.In) == 0 {
+		// page_tagged: no places is the whole tree (page_changed needs one)
+		return r.When.Trigger.Type == automation.TriggerPageTagged, ""
 	}
-	for _, w := range r.Watch {
+	for _, w := range r.When.In {
 		switch w.Kind {
-		case autoorganize.WatchDocument:
+		case automation.PlaceDocument:
 			if w.ID == v.snap.ID {
-				return true
+				return true, ""
 			}
-		case autoorganize.WatchFolder:
+		case automation.PlaceFolder:
 			if d.under(v.snap.Parent, w.ID) {
-				return true
+				return true, ""
 			}
 		}
 	}
-	return false
+	return false, ""
 }
 
 // under folder is parent or one of its ancestors (the root holds everything
@@ -702,7 +728,7 @@ func (d *detector) under(parent, folder string) bool {
 // accepted with none skipped. A doc first seen after the rule last looked is
 // new content and a member at once (R12, R15). Both get a page_deleted per
 // page the baseline holds that is gone.
-func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string, v *docView) {
+func (d *detector) ruleDoc(r *automation.Rule, base *RuleState, held []string, v *docView) {
 	docID, ruleID, now := v.snap.ID, r.ID, d.in.Now
 	member := base.Members[docID]
 	if !member && !base.LastActive.IsZero() && d.seenAt(docID).After(base.LastActive) {
@@ -760,7 +786,7 @@ func (d *detector) ruleDoc(r *autoorganize.Rule, base *RuleState, held []string,
 // pageChange an edit (before = prev) or a transcribe_only (no before) of page
 // p; the rule's baseline moves to the page's hash once it is accepted (and a
 // page_tagged pin is dropped). Returns the trace id.
-func (d *detector) pageChange(kind string, r *autoorganize.Rule, v *docView, p autoorganize.PageSnap, prev string, at time.Time) string {
+func (d *detector) pageChange(kind string, r *automation.Rule, v *docView, p autoorganize.PageSnap, prev string, at time.Time) string {
 	ev := d.pipelineEvent(kind, r, v, p.ID, at)
 	ev.PageIndex, ev.AfterHash = p.Index, p.Hash
 	if kind == KindEdit {
@@ -779,7 +805,7 @@ func (d *detector) pageChange(kind string, r *autoorganize.Rule, v *docView, p a
 
 // pagesDeleted a page_deleted per page the rule's baseline holds (held) that
 // is gone from the doc; the baseline drops it once accepted. Returns the ids.
-func (d *detector) pagesDeleted(r *autoorganize.Rule, base *RuleState, v *docView, held []string, current map[string]bool) []string {
+func (d *detector) pagesDeleted(r *automation.Rule, base *RuleState, v *docView, held []string, current map[string]bool) []string {
 	var traces []string
 	ruleID, docID := r.ID, v.snap.ID
 	for _, pageID := range held {
@@ -799,21 +825,24 @@ func (d *detector) pagesDeleted(r *autoorganize.Rule, base *RuleState, v *docVie
 	return traces
 }
 
-// pipelineEvent a rule's event; index and hashes are left to the caller
-func (d *detector) pipelineEvent(kind string, r *autoorganize.Rule, v *docView, pageID string, at time.Time) Event {
+// pipelineEvent a rule's event; index and hashes are left to the caller.
+// The prompt and model come from the rule's page action (pipeline() runs
+// only rules that have one).
+func (d *detector) pipelineEvent(kind string, r *automation.Rule, v *docView, pageID string, at time.Time) Event {
+	a := r.PageAction()
 	ev := d.event(kind, v, pageID, at)
 	ev.Watched = true
 	ev.RuleID = r.ID
-	ev.Prompt = strings.TrimSpace(r.Action.Prompt)
+	ev.Prompt = strings.TrimSpace(a.Prompt)
 	if ev.Prompt == "" {
-		ev.Prompt = autoorganize.DefaultPipelinePrompt
+		ev.Prompt = automation.DefaultPipelinePrompt
 	}
-	ev.Model = strings.TrimSpace(r.Action.Model)
+	ev.Model = strings.TrimSpace(a.Model)
 	if ev.Model == "" {
-		ev.Model = autoorganize.DefaultPipelineModel
+		ev.Model = automation.DefaultPipelineModel
 	}
 	ev.PageOrder = append([]string(nil), v.order...)
-	if !r.Action.ExtractsTasks() {
+	if a.Type == automation.ActionSaveNotes {
 		// "just save notes": rm-pages extracts no tasks; the kind is unchanged
 		no := false
 		ev.Tasks = &no

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
 	"github.com/ddvk/rmfakecloud/internal/testkit/tablet"
@@ -25,7 +26,7 @@ type env struct {
 	st    *fs.FileSystemStorage
 	cache map[string]autoorganize.ContentInfo
 	state *State
-	cfg   *autoorganize.Config
+	cfg   *automation.Config
 	now   time.Time
 	// recent blob hashes whose mtime is inside MinAge
 	recent map[string]bool
@@ -47,8 +48,8 @@ func newEnv(t *testing.T) *env {
 		st:    st,
 		cache: map[string]autoorganize.ContentInfo{},
 		state: NewState(),
-		cfg: &autoorganize.Config{Settings: autoorganize.Settings{
-			Enabled: true, Mode: autoorganize.ModeLive, IntervalMinutes: 15,
+		cfg: &automation.Config{Version: automation.Version, Settings: automation.Settings{
+			Enabled: true, Mode: automation.ModeLive, IntervalMinutes: 15,
 		}},
 		now:      time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC),
 		recent:   map[string]bool{},
@@ -83,24 +84,34 @@ func (e *env) blankPage(doc, page string) {
 	delete(e.ft.Docs[doc].RM, page)
 }
 
-func (e *env) rule(id string, watch ...autoorganize.WatchRef) *autoorganize.Rule {
-	e.cfg.Rules = append(e.cfg.Rules, autoorganize.Rule{
-		ID:      id,
-		Enabled: true,
-		Scope:   autoorganize.ScopeAll,
-		Trigger: autoorganize.Trigger{Type: autoorganize.TriggerPageChanged},
-		Action:  autoorganize.Action{Type: autoorganize.ActionPipeline, Prompt: "prompt-" + id, Model: "model-" + id},
-		Watch:   watch,
-	})
+// pageRule an enabled page_changed rule over in that extracts tasks, with no
+// conditions (kind all)
+func pageRule(id string, in ...automation.Place) automation.Rule {
+	return automation.Rule{
+		ID:         id,
+		Enabled:    true,
+		When:       automation.When{Subject: automation.SubjectPage, In: in, Trigger: automation.Trigger{Type: automation.TriggerPageChanged}},
+		Conditions: []automation.Condition{},
+		Actions:    []automation.Action{{Type: automation.ActionExtractTasks, Prompt: "prompt-" + id, Model: "model-" + id}},
+	}
+}
+
+func (e *env) rule(id string, watch ...automation.Place) *automation.Rule {
+	e.cfg.Rules = append(e.cfg.Rules, pageRule(id, watch...))
 	return &e.cfg.Rules[len(e.cfg.Rules)-1]
 }
 
-func folderWatch(id string) autoorganize.WatchRef {
-	return autoorganize.WatchRef{ID: id, Kind: autoorganize.WatchFolder}
+func folderWatch(id string) automation.Place {
+	return automation.Place{ID: id, Kind: automation.PlaceFolder}
 }
 
-func docWatch(id string) autoorganize.WatchRef {
-	return autoorganize.WatchRef{ID: id, Kind: autoorganize.WatchDocument}
+func docWatch(id string) automation.Place {
+	return automation.Place{ID: id, Kind: automation.PlaceDocument}
+}
+
+// cond a condition of type typ with params p
+func cond(typ string, p automation.Params) automation.Condition {
+	return automation.Condition{Type: typ, Params: p}
 }
 
 func (e *env) modTime(hash string) (time.Time, error) {
@@ -460,7 +471,7 @@ func TestPipelineNeedsEnabled(t *testing.T) {
 
 	// Dry mode is the loop's business: Detect still plans pipeline events
 	e.cfg.Settings.Enabled = true
-	e.cfg.Settings.Mode = autoorganize.ModeDry
+	e.cfg.Settings.Mode = automation.ModeDry
 	wantEvents(t, "enabled pipeline", e.detect().Pipeline, "transcribe_only nb/p1 r1")
 }
 
@@ -511,7 +522,8 @@ func TestNoAutomationTagExcludedFromPipelineNotFeed(t *testing.T) {
 
 func TestScopeMismatchExcludedFromPipeline(t *testing.T) {
 	e := newEnv(t)
-	e.rule("r1", folderWatch(autoorganize.RootID)).Scope = autoorganize.ScopePdfEpub
+	r := e.rule("r1", folderWatch(autoorganize.RootID))
+	r.Conditions = append(r.Conditions, cond(automation.CondKindIs, automation.Params{Kind: automation.KindPdfEpub}))
 	e.ft.Notebook("nb", "Notes", "")
 	e.page("nb", "p1", "strokes_a.rm")
 	wantEvents(t, "pipeline", e.detect().Pipeline)
@@ -1205,11 +1217,11 @@ func TestMissingWatchEntriesReported(t *testing.T) {
 	e.ft.Notebook("nb", "Notes", "w")
 	e.page("nb", "p1", "strokes_a.rm")
 	e.rule("r1", folderWatch(autoorganize.RootID), folderWatch("w"), docWatch("nb"),
-		autoorganize.WatchRef{ID: "gone-f", Kind: autoorganize.WatchFolder, Name: "Old"}, docWatch("gone-d"))
+		automation.Place{ID: "gone-f", Kind: automation.PlaceFolder, Name: "Old"}, docWatch("gone-d"))
 	p := e.detect()
 	want := []MissingWatch{
-		{RuleID: "r1", WatchID: "gone-f", Kind: autoorganize.WatchFolder, Name: "Old"},
-		{RuleID: "r1", WatchID: "gone-d", Kind: autoorganize.WatchDocument},
+		{RuleID: "r1", WatchID: "gone-f", Kind: automation.PlaceFolder, Name: "Old"},
+		{RuleID: "r1", WatchID: "gone-d", Kind: automation.PlaceDocument},
 	}
 	if !reflect.DeepEqual(p.MissingWatches, want) {
 		t.Fatalf("missing = %+v", p.MissingWatches)
@@ -1293,8 +1305,8 @@ func TestTrashedWatchEntryIsMissing(t *testing.T) {
 	e.ft.Move("w", "trash") // sub's chain now ends in the trash
 	e.ft.Move("nb", "trash")
 	want := []MissingWatch{
-		{RuleID: "r1", WatchID: "sub", Kind: autoorganize.WatchFolder, InTrash: true},
-		{RuleID: "r1", WatchID: "nb", Kind: autoorganize.WatchDocument, InTrash: true},
+		{RuleID: "r1", WatchID: "sub", Kind: automation.PlaceFolder, InTrash: true},
+		{RuleID: "r1", WatchID: "nb", Kind: automation.PlaceDocument, InTrash: true},
 	}
 	if p := e.detect(); !reflect.DeepEqual(p.MissingWatches, want) {
 		t.Fatalf("missing %+v", p.MissingWatches)

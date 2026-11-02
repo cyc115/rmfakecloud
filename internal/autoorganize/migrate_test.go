@@ -10,13 +10,13 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/automation"
 )
 
-func loadV1Golden(t *testing.T) *Config {
+func loadV1Golden(t *testing.T) *V1Config {
 	t.Helper()
 	b, err := os.ReadFile("testdata/v1-golden.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var c Config
+	var c V1Config
 	if err := json.Unmarshal(b, &c); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func decoded(t *testing.T, b []byte) any {
 }
 
 // mustMigrate migrates v1, which must not hold a rule v1 skipped as invalid
-func mustMigrate(t *testing.T, v1 *Config) *automation.Config {
+func mustMigrate(t *testing.T, v1 *V1Config) *automation.Config {
 	t.Helper()
 	c, issues := migrateIssues(t, v1)
 	if len(issues) != 0 {
@@ -43,7 +43,7 @@ func mustMigrate(t *testing.T, v1 *Config) *automation.Config {
 	return c
 }
 
-func migrateIssues(t *testing.T, v1 *Config) (*automation.Config, []RuleIssue) {
+func migrateIssues(t *testing.T, v1 *V1Config) (*automation.Config, []RuleIssue) {
 	t.Helper()
 	c, issues, err := MigrateV1(v1)
 	if err != nil {
@@ -53,9 +53,9 @@ func migrateIssues(t *testing.T, v1 *Config) (*automation.Config, []RuleIssue) {
 }
 
 // v1From parses a v1 config JSON, so absent fields get the v1 defaults
-func v1From(t *testing.T, rules string) *Config {
+func v1From(t *testing.T, rules string) *V1Config {
 	t.Helper()
-	var c Config
+	var c V1Config
 	if err := json.Unmarshal([]byte(`{"revision":3,"settings":{"enabled":true,"mode":"dry","intervalMinutes":15},"rules":[`+rules+`]}`), &c); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestMigrateV1EmptyWatchNotRejected(t *testing.T) {
 // valid rules stay enabled. Pipeline rules are not checked (never validated).
 func TestMigrateV1InvalidRawRuleDisabled(t *testing.T) {
 	v1 := loadV1Golden(t)
-	var extra []Rule
+	var extra []V1Rule
 	if err := json.Unmarshal([]byte(`[
 		{"id":"noscope","enabled":true,"source":{"id":"f1"},"trigger":{"type":"tag_is","tag":"x"},"destination":{"id":"f2"},"action":{"type":"move"}},
 		{"id":"noaction","enabled":true,"scope":"all","source":{"id":"f1"},"trigger":{"type":"tag_is","tag":"x"},"destination":{"id":"f2"}},
@@ -258,7 +258,7 @@ func TestMigrateV1InvalidRawRuleDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the invalid rule sits between the golden rules, so order is checked too
-	v1.Rules = []Rule{v1.Rules[0], extra[0], v1.Rules[1], extra[1], extra[2], extra[3]}
+	v1.Rules = []V1Rule{v1.Rules[0], extra[0], v1.Rules[1], extra[1], extra[2], extra[3]}
 	got, issues := migrateIssues(t, v1)
 	ids := []string{}
 	enabled := []bool{}
@@ -336,7 +336,7 @@ func TestToV1RoundTrip(t *testing.T) {
 		t.Errorf("pipeline rule %+v", p)
 	}
 	// a newer base revision wins
-	if c, _ := ToV1(v2, &Config{Revision: 40}); c.Revision != 41 {
+	if c, _ := ToV1(v2, &V1Config{Revision: 40}); c.Revision != 41 {
 		t.Errorf("revision %d with base 40", c.Revision)
 	}
 	if c, _ := ToV1(v2, nil); c.Revision != 12 {

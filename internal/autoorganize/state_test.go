@@ -64,7 +64,7 @@ func TestDrySweepsDoNotFloodTheLog(t *testing.T) {
 	ft.PDF("w", "WSJ Weekend", "inbox", 3, 0, time.Time{})
 	ft.Sync()
 	svc, _, _ := newService(t, storage)
-	saveConfig(t, svc, uid, ModeLive, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}))
+	saveConfig(t, svc, uid, ModeLive, moveRule("r", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "WSJ *"})))
 	ft.PDF("w2", "WSJ Monday", "inbox", 3, 0, time.Time{})
 	ft.Sync()
 	if res, _ := svc.RunNow(uid); res.Run.Moved != 2 {
@@ -73,7 +73,7 @@ func TestDrySweepsDoNotFloodTheLog(t *testing.T) {
 	ft.Pull()
 	ft.PDF("w3", "WSJ Tuesday", "inbox", 3, 0, time.Time{})
 	ft.Sync()
-	saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}))
+	saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "WSJ *"})))
 	for i := 0; i < 80; i++ {
 		if _, err := svc.RunNow(uid); err != nil {
 			t.Fatal(err)
@@ -164,7 +164,7 @@ func TestSweepPrunesStaleHolds(t *testing.T) {
 		t.Fatalf("hold of a deleted doc kept: %+v", st.Holds)
 	}
 	// the rule is deleted
-	saveConfig(t, svc, uid, ModeLive, moveRule("other", "rr", "rr2", Trigger{Type: TriggerPinnedIs, Pinned: true}))
+	saveConfig(t, svc, uid, ModeLive, moveRule("other", "rr", "rr2", trig(TriggerPinnedIs, P{Pinned: true})))
 	svc.RunNow(uid)
 	st, _ = svc.Store().LoadState(uid)
 	if len(st.Holds) != 0 || len(st.CreatedFolders) != 0 {

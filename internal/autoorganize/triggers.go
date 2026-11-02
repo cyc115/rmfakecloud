@@ -85,8 +85,9 @@ func daysSince(t, now time.Time) float64 {
 }
 
 // mergeEval combines a trigger and its conditions, in order: match is the AND
-// of all, inputs the union, detail the parts joined with " · ". The first
-// skip wins; the evaluations after it are not merged.
+// of all, inputs the union, detail the parts joined with " · ". It stops at
+// the first evaluation that skips or does not match; the evaluations after it
+// are not merged, so a later skip never outranks an earlier non-match.
 func mergeEval(evs ...evaluation) evaluation {
 	if len(evs) == 1 {
 		return evs[0]
@@ -110,23 +111,30 @@ func mergeEval(evs ...evaluation) evaluation {
 			out.skip, out.skipDetail = ev.skip, ev.skipDetail
 			break
 		}
-		out.match = out.match && ev.match
+		if !ev.match {
+			out.match = false
+			break
+		}
 	}
 	out.detail = strings.Join(parts, " · ")
 	return out
 }
 
-// evalRule evaluates r's trigger, then its conditions in order (ruleConditions);
-// it stops at the first skip. It does not apply the common guards (checkDoc does).
-func evalRule(r *Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
-	eval, ok := evaluators[r.Trigger.Type]
+// evalRule evaluates r's trigger, then its document conditions in stored
+// order (Rule.DocConditions; kind_is is checkDoc's guard). It stops at the
+// first skip or non-match (ruling a): a trigger that does not match gives the
+// trigger's own evaluation, and no condition is evaluated. It does not apply
+// the common guards (checkDoc does).
+func evalRule(r *automation.Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	t := &r.When.Trigger
+	eval, ok := evaluators[t.Type]
 	if !ok {
-		return evaluation{skip: SkipInvalidRule, skipDetail: "unknown trigger " + r.Trigger.Type}
+		return evaluation{skip: SkipInvalidRule, skipDetail: "unknown trigger " + t.Type}
 	}
-	tp := r.Trigger.params()
+	tp := t.Params
 	evs := []evaluation{eval(&tp, d, ci, fs, now)}
-	for _, c := range ruleConditions(r) {
-		if evs[len(evs)-1].skip != "" {
+	for _, c := range r.DocConditions() {
+		if last := evs[len(evs)-1]; last.skip != "" || !last.match {
 			break
 		}
 		ceval, ok := conditionEvaluators[c.Type]
@@ -134,10 +142,59 @@ func evalRule(r *Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time
 			evs = append(evs, evaluation{skip: SkipInvalidRule, skipDetail: "unknown condition " + c.Type})
 			break
 		}
-		p := c.P
+		p := c.Params
 		evs = append(evs, ceval(&p, d, ci, fs, now))
 	}
 	return mergeEval(evs...)
+}
+
+// DocConditionsMatch the document conditions of a page rule, for the page
+// watch: kind_is, then the conditions with both a document and a page subject
+// (tag_is, tag_is_not, name_matches) in stored order. page_tag_is is not one:
+// the page watch reads it through Rule.PageTags. in false: the doc is outside
+// the rule. skip non-empty: a condition cannot be evaluated (an unknown type,
+// a document-only condition, a bad pattern), and the doc must be left alone,
+// never guessed in or out.
+func DocConditionsMatch(r *automation.Rule, d *DocSnap, ci *ContentInfo, now time.Time) (in bool, skip string) {
+	for _, c := range r.Conditions {
+		if c.Type == automation.CondKindIs {
+			if out, _ := evalKind(c.Kind, ci); out {
+				return false, ""
+			}
+		}
+	}
+	for _, c := range r.Conditions {
+		if c.Type == automation.CondKindIs || c.Type == automation.CondPageTagIs {
+			continue
+		}
+		spec, known := automation.Conditions[c.Type]
+		ceval, ok := conditionEvaluators[c.Type]
+		if !known || !ok || !hasSubjects(spec, automation.SubjectDocument, automation.SubjectPage) {
+			return false, "condition " + c.Type + " cannot be evaluated for pages"
+		}
+		p := c.Params
+		ev := ceval(&p, d, ci, nil, now)
+		if ev.skip != "" {
+			return false, ev.skip + ": " + ev.skipDetail
+		}
+		if !ev.match {
+			return false, ""
+		}
+	}
+	return true, ""
+}
+
+func hasSubjects(s *automation.Spec, want ...string) bool {
+	for _, w := range want {
+		found := false
+		for _, sub := range s.Subjects {
+			found = found || sub == w
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // evalKind the kind_is guard (v1 scope): skip with the out_of_scope detail
@@ -326,7 +383,7 @@ type docCheck struct {
 // rule (trash, unreadable, no-automation, pinned, already in the destination,
 // kind), then the rule (evalRule). Hold, cycle guard and claims are the
 // planner's. The same function re-checks a document inside the move closure.
-func checkDoc(r *Rule, destID string, d *DocSnap, ci *ContentInfo, fs *FirstSeen, locate func(string) Location, now time.Time) docCheck {
+func checkDoc(r *automation.Rule, destID string, d *DocSnap, ci *ContentInfo, fs *FirstSeen, locate func(string) Location, now time.Time) docCheck {
 	if locate(d.ID) == LocInTrash {
 		return docCheck{skip: SkipInTrash, detail: "in Trash"}
 	}
@@ -342,7 +399,7 @@ func checkDoc(r *Rule, destID string, d *DocSnap, ci *ContentInfo, fs *FirstSeen
 	if destID != "" && d.Parent == destID {
 		return docCheck{skip: SkipAlreadyInDest, detail: "already in the destination"}
 	}
-	if skip, detail := evalKind(r.Scope, ci); skip {
+	if skip, detail := evalKind(r.Kind(), ci); skip {
 		return docCheck{skip: SkipOutOfScope, detail: detail}
 	}
 	ev := evalRule(r, d, ci, fs, now)

@@ -40,36 +40,19 @@ var conditionEvaluators = map[string]evalFunc{
 	automation.CondPinnedIs:    evalPinnedIs,
 }
 
-// condRef one condition of a rule, in evaluation order
-type condRef struct {
-	Type string
-	P    automation.Params
-}
-
-// ruleConditions the conditions a v1 rule carries implicitly: min age, only
-// for not_opened_for_days with minAgeEnabled (ruling P1; the other triggers
-// ignore minAge*). Replaced by the v2 rule's own conditions in Task 4.
-func ruleConditions(r *Rule) []condRef {
-	t := &r.Trigger
-	if t.Type == TriggerNotOpened && t.MinAgeEnabled {
-		return []condRef{{Type: automation.CondMinAgeDays, P: automation.Params{Days: t.MinAgeDays}}}
-	}
-	return nil
-}
-
-// params the catalogue parameters of a v1 trigger
-func (t *Trigger) params() automation.Params {
+// params the catalogue parameters of a v1 trigger (migration)
+func (t *V1Trigger) params() automation.Params {
 	return automation.Params{MinPages: t.MinPages, SettleHours: t.SettleHours, Percent: t.Percent,
 		Days: t.Days, Pattern: t.Pattern, Tag: t.Tag, Pinned: t.Pinned}
 }
 
 // setParams writes catalogue parameters back to a v1 trigger
-func (t *Trigger) setParams(p automation.Params) {
+func (t *V1Trigger) setParams(p automation.Params) {
 	t.MinPages, t.SettleHours, t.Percent, t.Days = p.MinPages, p.SettleHours, p.Percent, p.Days
 	t.Pattern, t.Tag, t.Pinned = p.Pattern, p.Tag, p.Pinned
 }
 
-// isPageTrigger the trigger belongs to the page watch (pipeline rules)
+// isPageTrigger the trigger belongs to the page watch (v1 pipeline rules)
 func isPageTrigger(s *automation.Spec) bool {
 	for _, sub := range s.Subjects {
 		if sub == automation.SubjectDocument {

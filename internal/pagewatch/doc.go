@@ -34,10 +34,16 @@
 // feed baseline, an "open" when lastOpened changed (the last-opened page).
 // Feed events are never Watched and carry no rule.
 //
-// Pipeline events exist only when Settings.Enabled, per enabled pipeline
-// rule, for documents under a watched folder (any depth; the root watches
-// the whole tree) or watched by id, in the rule's scope, without the
-// "no automation" tag. Each rule has its own baselines and members:
+// Pipeline events exist only when Settings.Enabled, per enabled page rule
+// (automation.json, When.Subject "page", with an extract_tasks or save_notes
+// action), for documents in one of its places (When.In: a folder at any
+// depth, the root folder for the whole tree, or a document by id), without
+// the "no automation" tag, that pass its document conditions
+// (autoorganize.DocConditionsMatch: kind_is, tag_is, tag_is_not,
+// name_matches). A condition that cannot be evaluated (an unknown or
+// document-only condition, a bad pattern) leaves the doc alone for that rule:
+// a "condition" skip, no events and no leave. Each rule has its own
+// baselines and members:
 //
 //   - joining: a doc that is not yet a member gets one "transcribe_only" per
 //     page with a hash not yet delivered whose blob mtime is no later than
@@ -66,9 +72,11 @@
 //   - leaving (moved out, trashed, tagged, out of scope, gone): no events;
 //     membership and baselines are dropped, so a re-join starts over.
 //
-// A page_tagged rule (detect_tagged.go) watches the same documents (no watch
-// entries = the whole tree) but only their pages that carry Trigger.Tag
-// (.content pageTags, trimmed, case-insensitive):
+// A rule with page tags (detect_tagged.go; P4: the page_tagged trigger's tag
+// plus every page_tag_is condition, Rule.PageTags) covers the same documents
+// (page_tagged with no places = the whole tree) but only their pages that
+// carry every tag (.content pageTags, NormalizePageTag); a page's tag time is
+// the latest of them. A blank tag set counts no page:
 //
 //   - newly tagged (no baseline): one "edit" with an empty BeforeHash (the
 //     whole page) when the rule had the doc at an earlier sweep
@@ -81,14 +89,17 @@
 //   - untagged: no events; its baseline and pin are dropped.
 //   - deleted while delivered: "page_deleted", as above.
 //
-// RuleState.Trigger records what a rule's state was built for ("" =
-// page_changed, else "page_tagged:<tag>"); a rule whose trigger type or tag
-// changed starts afresh, as at its first activation.
+// RuleState.Trigger records what a rule's state was built for (stateTrigger:
+// "" = page_changed with no page tags, else "page_tagged:" and the sorted
+// tags joined by 0x1f, so one tag is the v1 "page_tagged:<tag>" and
+// "page_changed AND page_tag_is X" shares the key of "page_tagged X"); a rule
+// whose trigger type or tags changed starts afresh, as at its first
+// activation.
 //
 // Every pipeline event carries the doc's PageOrder; a pure reorder emits
-// nothing. A rule with Action.Tasks false ("just save notes") puts
-// "tasks": false on each of its events; rm-pages saves the note and extracts
-// no tasks. Other events have no "tasks" key.
+// nothing. The prompt and model come from the rule's page action; a
+// save_notes action puts "tasks": false on each of its events (rm-pages saves
+// the note and extracts no tasks). extract_tasks events have no "tasks" key.
 //
 // # Skips (the page or doc keeps its old baseline)
 //
@@ -97,6 +108,8 @@
 //   - content: the doc's .content is unreadable or absent; the whole doc is
 //     left alone (no events, baselines and membership untouched).
 //   - location: the doc's parent chain is broken; left alone likewise.
+//   - condition: one rule cannot evaluate a condition for the doc; that rule
+//     leaves it alone this sweep (other rules and the feed are unaffected).
 //   - pages_not_attached: Snapshot.AttachPages did not run; Detect plans
 //     nothing rather than read missing pages as deletions.
 //
@@ -107,10 +120,13 @@
 //
 // # Guards
 //
-//   - A watch entry whose folder or doc id is gone from the tree, or whose
+//   - A place whose folder or doc id is gone from the tree, or whose
 //     parent chain ends in the trash (InTrash), is listed in
 //     Plan.MissingWatches; the service logs one Error per (rule, id) streak
 //     and the Pipeline panel flags the rule.
+//   - A config that cannot be loaded (a corrupt automation.json, or an
+//     auto-organize.json that cannot be migrated) fails the run before the
+//     state is read: nothing is sent or saved (P6, fail closed).
 //   - A snapshot with no documents while the state knows more than
 //     EmptyTreeGuard is a broken tree read: Plan.Abort is set, the run sends
 //     and saves nothing and logs an Error (pruning would drop every baseline).

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/model"
 	"github.com/ddvk/rmfakecloud/internal/storage"
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
@@ -304,7 +305,7 @@ func (s *Service) RunNow(uid string) (*SweepResult, error) {
 // session what every read of a user's auto-organize world starts from
 type session struct {
 	uid  string
-	cfg  *Config
+	cfg  *automation.Config
 	st   *State
 	tree *models.HashTree
 }
@@ -334,7 +335,7 @@ func (s *Service) contentCache(uid string, st *State) *ContentCache {
 	return NewContentCache(st.ContentCache, s.storage.BlobStorage(uid).GetReader)
 }
 
-func (s *Service) planFor(uid string, cfg *Config, st *State, tree *models.HashTree) (*Snapshot, *ContentCache, *Plan) {
+func (s *Service) planFor(uid string, cfg *automation.Config, st *State, tree *models.HashTree) (*Snapshot, *ContentCache, *Plan) {
 	snap := NewSnapshot(tree)
 	st.UpdateFirstSeen(snap, s.Now())
 	cache := s.contentCache(uid, st)
@@ -358,7 +359,7 @@ func recordLiveMove(st *State, entry MoveEntry, fingerprint string, inputs map[s
 	return &st.Moves[0]
 }
 
-func findRule(cfg *Config, id string) (*Rule, int) {
+func findRule(cfg *automation.Config, id string) (*automation.Rule, int) {
 	for i := range cfg.Rules {
 		if cfg.Rules[i].ID == id {
 			return &cfg.Rules[i], i + 1
@@ -370,7 +371,7 @@ func findRule(cfg *Config, id string) (*Rule, int) {
 // recheckFor the closure re-check for a rule's move: the no-automation tag,
 // the guards and the trigger against the re-mirrored document. The inputs that
 // held are written to *inputs.
-func (s *Service) recheckFor(uid string, r *Rule, dest string, st *State, cache *ContentCache, inputs *map[string]string) func(t *models.HashTree, d *models.HashDoc) error {
+func (s *Service) recheckFor(uid string, r *automation.Rule, dest string, st *State, cache *ContentCache, inputs *map[string]string) func(t *models.HashTree, d *models.HashDoc) error {
 	return func(t *models.HashTree, d *models.HashDoc) error {
 		cur := NewSnapshot(t)
 		snap, ok := cur.Docs[d.EntryName]
@@ -428,10 +429,10 @@ func recheckUndo(back string, st *State, cache *ContentCache) func(t *models.Has
 	}
 }
 
-func (s *Service) createFolder(uid string, r *Rule, cm *CreateIfMissing) (string, error) {
+func (s *Service) createFolder(uid string, r *automation.Rule, cm *CreateIfMissing) (string, error) {
 	parent := cm.Parent
 	if parent == ParentSource {
-		parent = r.Source.ID
+		parent = r.Source().ID
 	}
 	doc, err := s.storage.CreateBlobFolder(uid, cm.Name, parent)
 	if err != nil {
@@ -528,7 +529,7 @@ func (s *Service) sweepLocked(ctx context.Context, ul *userLoop, trigger string,
 // sweep the bookkeeping of one LIVE sweep while its planned moves are applied
 type sweep struct {
 	uid   string
-	cfg   *Config
+	cfg   *automation.Config
 	st    *State
 	cache *ContentCache
 	run   *RunEntry
@@ -602,7 +603,7 @@ func (s *Service) finishRun(uid string, st *State, run *RunEntry, start time.Tim
 // Preview a dry evaluation that changes nothing. With draft set, the draft
 // replaces the rule with the same id (or is appended) and is evaluated in its
 // list position, enabled.
-func (s *Service) Preview(uid string, draft *Rule) (*Plan, *Config, error) {
+func (s *Service) Preview(uid string, draft *automation.Rule) (*Plan, *automation.Config, error) {
 	ss, err := s.open(uid)
 	if err != nil {
 		return nil, nil, err
@@ -611,11 +612,12 @@ func (s *Service) Preview(uid string, draft *Rule) (*Plan, *Config, error) {
 	if draft != nil {
 		d := *draft
 		d.Enabled = true
-		tmp := &Config{Settings: cfg.Settings, Rules: []Rule{d}}
+		d.Actions = append([]automation.Action(nil), draft.Actions...)
+		tmp := &automation.Config{Settings: cfg.Settings, Rules: []automation.Rule{d}}
 		tmp.Normalize()
 		d = tmp.Rules[0]
 		replaced := false
-		rules := make([]Rule, len(cfg.Rules))
+		rules := make([]automation.Rule, len(cfg.Rules))
 		copy(rules, cfg.Rules)
 		for i := range rules {
 			if rules[i].ID == d.ID {
@@ -767,14 +769,15 @@ func (s *Service) Reapply(uid, holdID string) (*MoveEntry, error) {
 	}
 	cache := s.contentCache(uid, st)
 	var inputs map[string]string
-	err = moveDoc(tree, s.storage.BlobStorage(uid), d.ID, rule.Source.ID, to, s.recheckFor(uid, rule, to, st, cache, &inputs))
+	src := rule.Source().ID
+	err = moveDoc(tree, s.storage.BlobStorage(uid), d.ID, src, to, s.recheckFor(uid, rule, to, st, cache, &inputs))
 	if err != nil {
 		return nil, err
 	}
 	after := NewSnapshot(tree)
 	entry := MoveEntry{DocID: d.ID, DocName: d.Name, RuleID: rule.ID,
-		RuleName: ruleLabel(rule, snap.PathName(rule.Source.ID), after.PathName(to)), RuleNumber: num,
-		From: rule.Source.ID, FromName: snap.PathName(rule.Source.ID), To: to, ToName: after.PathName(to),
+		RuleName: ruleLabel(rule, snap.PathName(src), after.PathName(to)), RuleNumber: num,
+		From: src, FromName: snap.PathName(src), To: to, ToName: after.PathName(to),
 		Detail: "re-applied after hold", Kind: "reapply"}
 	stored := recordLiveMove(st, entry, d.Fingerprint, inputs, s.Now())
 	kept := st.HeldNow[:0]
@@ -822,9 +825,10 @@ func (s *Service) View(uid string) (*View, error) {
 	for _, rr := range plan.Rules {
 		dests[rr.RuleID] = rr.DestID
 	}
-	loops := LoopWarnings(cfg, func(r *Rule) (string, bool) {
+	loops := LoopWarnings(cfg, func(r *automation.Rule) (string, bool) {
 		id := dests[r.ID]
-		return id, id != "" || (r.Destination.CreateIfMissing == nil && r.Destination.ID == RootID)
+		to := moveTo(r)
+		return id, id != "" || (to != nil && to.CreateIfMissing == nil && to.ID == RootID)
 	})
 	v := &View{Revision: cfg.Revision, Settings: cfg.Settings, Status: s.Status(uid, st), Folders: snap.Folders(),
 		Rules: []RuleView{}, CreatedFolders: st.CreatedFolders}

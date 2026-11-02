@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ddvk/rmfakecloud/internal/automation"
 )
 
 // PlannedMove one document, one rule, one move
@@ -77,7 +79,7 @@ type Plan struct {
 // PlanInput everything the pure planner reads
 type PlanInput struct {
 	Snap    *Snapshot
-	Config  *Config
+	Config  *automation.Config
 	State   *State
 	Content func(d *DocSnap) ContentInfo
 	Now     time.Time
@@ -91,14 +93,27 @@ type resolvedDest struct {
 	problem string
 }
 
+// moveTo the destination of r's move action; nil when it has none
+func moveTo(r *automation.Rule) *automation.Destination {
+	if mv := r.Move(); mv != nil {
+		return mv.To
+	}
+	return nil
+}
+
 // ResolveDestination resolves a rule's destination by UUID, or for
 // createIfMissing via the state's created folder, then by name under the parent
-func ResolveDestination(r *Rule, snap *Snapshot, st *State) resolvedDest {
-	cm := r.Destination.CreateIfMissing
+func ResolveDestination(r *automation.Rule, snap *Snapshot, st *State) resolvedDest {
+	to := moveTo(r)
+	if to == nil {
+		// never the root by default: a rule without a destination moves nothing
+		return resolvedDest{problem: "No move destination"}
+	}
+	cm := to.CreateIfMissing
 	if cm == nil {
-		id := r.Destination.ID
+		id := to.ID
 		if !snap.FolderExists(id) {
-			return resolvedDest{id: id, name: r.Destination.Name, problem: "Destination folder missing"}
+			return resolvedDest{id: id, name: to.Name, problem: "Destination folder missing"}
 		}
 		if snap.Locate(id) == LocInTrash {
 			return resolvedDest{id: id, name: snap.PathName(id), problem: "Destination in Trash"}
@@ -107,7 +122,7 @@ func ResolveDestination(r *Rule, snap *Snapshot, st *State) resolvedDest {
 	}
 	parent := cm.Parent
 	if parent == ParentSource {
-		parent = r.Source.ID
+		parent = r.Source().ID
 	}
 	if !snap.FolderExists(parent) {
 		return resolvedDest{name: cm.Name, problem: "Destination parent folder missing"}
@@ -141,7 +156,7 @@ func ResolveDestination(r *Rule, snap *Snapshot, st *State) resolvedDest {
 	return resolvedDest{name: cm.Name, problem: fmt.Sprintf("%d folders named “%s” in %s", len(matches), cm.Name, parentName)}
 }
 
-func ruleLabel(r *Rule, srcName, destName string) string {
+func ruleLabel(r *automation.Rule, srcName, destName string) string {
 	if r.Name != "" {
 		return r.Name
 	}
@@ -158,33 +173,34 @@ func BuildPlan(in PlanInput) *Plan {
 
 	for i := range in.Config.Rules {
 		r := &in.Config.Rules[i]
-		if r.IsPipeline() {
-			// pipeline rules never claim a document; numbering keeps the config position
+		if !r.IsDocument() {
+			// page rules never claim a document; numbering keeps the config position
 			continue
 		}
 		num := i + 1
-		rr := RuleResult{RuleID: r.ID, Number: num, Name: r.Name, Enabled: r.Enabled, SourceID: r.Source.ID, Problems: []string{}}
+		src := r.Source()
+		rr := RuleResult{RuleID: r.ID, Number: num, Name: r.Name, Enabled: r.Enabled, SourceID: src.ID, Problems: []string{}}
 
 		// source, by UUID only
 		srcOK := true
-		if !in.Snap.FolderExists(r.Source.ID) {
-			rr.SourceName = r.Source.Name
+		if !in.Snap.FolderExists(src.ID) {
+			rr.SourceName = src.Name
 			rr.Problems = append(rr.Problems, "Source folder missing")
 			srcOK = false
 		} else {
-			rr.SourceName = in.Snap.PathName(r.Source.ID)
-			if cur := lastName(rr.SourceName); r.Source.Name != "" && r.Source.Name != cur && r.Source.ID != RootID {
-				rr.SourceRenamedFrom = r.Source.Name
+			rr.SourceName = in.Snap.PathName(src.ID)
+			if cur := lastName(rr.SourceName); src.Name != "" && src.Name != cur && src.ID != RootID {
+				rr.SourceRenamedFrom = src.Name
 			}
-			if in.Snap.Locate(r.Source.ID) == LocInTrash {
+			if in.Snap.Locate(src.ID) == LocInTrash {
 				rr.Problems = append(rr.Problems, "Source folder in Trash")
 				srcOK = false
 			}
 		}
 		dest := ResolveDestination(r, in.Snap, in.State)
 		rr.DestID, rr.DestName, rr.DestWillCreate = dest.id, dest.name, dest.create != nil
-		if r.Destination.CreateIfMissing == nil && dest.problem == "" && r.Destination.Name != "" && r.Destination.Name != lastName(dest.name) && dest.id != RootID {
-			rr.DestRenamedFrom = r.Destination.Name
+		if to := moveTo(r); to != nil && to.CreateIfMissing == nil && dest.problem == "" && to.Name != "" && to.Name != lastName(dest.name) && dest.id != RootID {
+			rr.DestRenamedFrom = to.Name
 		}
 		if dest.problem != "" {
 			rr.Problems = append(rr.Problems, dest.problem)
@@ -192,7 +208,7 @@ func BuildPlan(in PlanInput) *Plan {
 		if err := r.Validate(); err != nil {
 			rr.Problems = append(rr.Problems, "Invalid rule: "+err.Error())
 		}
-		if srcOK && dest.problem == "" && dest.id != "" && dest.id == r.Source.ID {
+		if srcOK && dest.problem == "" && dest.id != "" && dest.id == src.ID {
 			rr.Problems = append(rr.Problems, "Destination is the same as the source")
 		}
 		label := ruleLabel(r, rr.SourceName, rr.DestName)
@@ -201,7 +217,7 @@ func BuildPlan(in PlanInput) *Plan {
 			continue
 		}
 
-		for _, d := range in.Snap.Children(r.Source.ID) {
+		for _, d := range in.Snap.Children(src.ID) {
 			if d.IsFolder() {
 				// guard 1: only documents are ever candidates
 				continue
@@ -226,7 +242,7 @@ func BuildPlan(in PlanInput) *Plan {
 				continue
 			}
 			hold := in.State.FindHold(r.ID, d.ID)
-			holdApplies := hold != nil && hold.Source == r.Source.ID && sameInputs(hold.Inputs, chk.ev.inputs)
+			holdApplies := hold != nil && hold.Source == src.ID && sameInputs(hold.Inputs, chk.ev.inputs)
 			if hold != nil && !holdApplies {
 				p.ClearHolds = append(p.ClearHolds, HoldRef{RuleID: r.ID, DocID: d.ID})
 			}
@@ -283,4 +299,71 @@ func (p *Plan) SkippedCount() int {
 		}
 	}
 	return n
+}
+
+// LoopWarnings returns, per rule id, the 1-based numbers of the other enabled
+// document rules it forms a folder cycle with (R5, a warning, never a
+// rejection). destOf resolves a rule's destination folder id; ok false leaves
+// the rule out (e.g. a subfolder that has not been created yet cannot lead
+// anywhere). Page rules move nothing and are left out.
+func LoopWarnings(c *automation.Config, destOf func(r *automation.Rule) (id string, ok bool)) map[string][]int {
+	type edge struct {
+		from, to string
+		idx      int
+	}
+	var edges []edge
+	for i := range c.Rules {
+		r := &c.Rules[i]
+		if !r.Enabled || !r.IsDocument() || r.Move() == nil {
+			continue
+		}
+		to, ok := destOf(r)
+		if !ok {
+			continue
+		}
+		edges = append(edges, edge{r.Source().ID, to, i})
+	}
+	result := map[string][]int{}
+	for _, e := range edges {
+		// rules on any path from e.to back to e.from close a cycle with e
+		visited := map[string]bool{}
+		var path []int
+		var members []int
+		var dfs func(node string) bool
+		dfs = func(node string) bool {
+			if node == e.from {
+				members = append(members, path...)
+				return true
+			}
+			if visited[node] {
+				return false
+			}
+			visited[node] = true
+			found := false
+			for _, n := range edges {
+				if n.idx == e.idx || n.from != node {
+					continue
+				}
+				path = append(path, n.idx)
+				if dfs(n.to) {
+					found = true
+				}
+				path = path[:len(path)-1]
+			}
+			return found
+		}
+		dfs(e.to)
+		if len(members) > 0 {
+			seen := map[int]bool{}
+			var nums []int
+			for _, m := range members {
+				if !seen[m] {
+					seen[m] = true
+					nums = append(nums, m+1)
+				}
+			}
+			result[c.Rules[e.idx].ID] = nums
+		}
+	}
+	return result
 }

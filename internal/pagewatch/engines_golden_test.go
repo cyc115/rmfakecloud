@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/testkit/tablet"
 )
@@ -40,20 +41,39 @@ const (
 // goldenNow the fixed clock of the golden scenario (newEnv's start)
 var goldenNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
-// goldenConfig the v1 fixture as the server loads it (Store.LoadConfig: a
-// plain unmarshal of the saved, already normalised file)
-func goldenConfig(t *testing.T) *autoorganize.Config {
+// goldenV1 the v1 fixture as the v1 server loaded it (a plain unmarshal of
+// the saved, already normalised file)
+func goldenV1(t *testing.T) *autoorganize.V1Config {
 	t.Helper()
 	b, err := os.ReadFile("../autoorganize/testdata/v1-golden.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &autoorganize.Config{}
+	cfg := &autoorganize.V1Config{}
 	if err := json.Unmarshal(b, cfg); err != nil {
 		t.Fatal(err)
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("fixture invalid: %v", err)
+	}
+	return cfg
+}
+
+// goldenConfig the v1 fixture as the server runs it: MigrateV1 (what
+// Store.LoadConfig writes to automation.json on the first load)
+func goldenConfig(t *testing.T) *automation.Config {
+	t.Helper()
+	return migrated(t, goldenV1(t))
+}
+
+func migrated(t *testing.T, v1 *autoorganize.V1Config) *automation.Config {
+	t.Helper()
+	cfg, issues, err := autoorganize.MigrateV1(v1)
+	if err != nil || len(issues) != 0 {
+		t.Fatalf("MigrateV1: %v, issues %+v", err, issues)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("migrated fixture invalid: %v", err)
 	}
 	return cfg
 }
@@ -239,22 +259,24 @@ func TestEnginesGolden(t *testing.T) {
 	goldenFile(t, "engines-golden.json", enginesGolden{Plan1: p1, Plan2: p2, Sweeps: sweeps})
 }
 
-// TestPageRuleIgnoresTriggerLeftovers (R-B3): a page rule carries the move
-// fields (settleHours, minAge, pinned, source, destination) from the v1 form;
-// the page watch never reads them, so v2 may drop them.
+// TestPageRuleIgnoresTriggerLeftovers (R-B3): a v1 page rule carries the move
+// fields (settleHours, minAge, pinned, source, destination); the page watch
+// never read them, so v2 drops them. Two v1 rules that differ only there
+// migrate to the same rule and run the same.
 func TestPageRuleIgnoresTriggerLeftovers(t *testing.T) {
 	e := goldenTree(t)
-	a, b := goldenConfig(t), goldenConfig(t)
-	r := &b.Rules[1]
+	va, vb := goldenV1(t), goldenV1(t)
+	r := &vb.Rules[1]
 	if r.ID != gRulePage {
 		t.Fatalf("rule 2 is %s", r.ID)
 	}
 	r.Trigger.SettleHours, r.Trigger.MinAgeEnabled, r.Trigger.MinAgeDays, r.Trigger.Pinned = 0, false, 99, false
 	r.Source = autoorganize.FolderRef{ID: "x"}
 	r.Destination = autoorganize.Destination{FolderRef: autoorganize.FolderRef{ID: "y"}}
-	if reflect.DeepEqual(a, b) {
+	if reflect.DeepEqual(va, vb) {
 		t.Fatal("configs do not differ")
 	}
+	a, b := migrated(t, va), migrated(t, vb)
 	stA, stB := NewState(), NewState()
 	for step := 1; step <= 3; step++ {
 		pageWatchStep(e, step)

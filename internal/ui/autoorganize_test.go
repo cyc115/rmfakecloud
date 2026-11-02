@@ -120,11 +120,12 @@ func (a *aoAPI) config(mode string, rev float64) map[string]any {
 		"revision": rev,
 		"settings": map[string]any{"enabled": true, "mode": mode, "intervalMinutes": 15},
 		"rules": []any{map[string]any{
-			"id": "wsj", "enabled": true, "scope": "all",
-			"source":      map[string]any{"id": a.inbox, "name": "Inbox"},
-			"trigger":     map[string]any{"type": "name_matches", "pattern": "WSJ *"},
-			"destination": map[string]any{"id": a.news, "name": "News"},
-			"action":      map[string]any{"type": "move"},
+			"id": "wsj", "enabled": true,
+			"when": map[string]any{"subject": "document",
+				"in":      []any{map[string]any{"id": a.inbox, "kind": "folder", "name": "Inbox"}},
+				"trigger": map[string]any{"type": "name_matches", "pattern": "WSJ *"}},
+			"conditions": []any{},
+			"actions":    []any{map[string]any{"type": "move", "to": map[string]any{"id": a.news, "name": "News"}}},
 		}},
 	}
 }
@@ -175,7 +176,7 @@ func TestAutoOrganizeAPIConfigRevision(t *testing.T) {
 		t.Fatalf("stale PUT: %d %v", code, body)
 	}
 	bad := a.config("dry", 1)
-	bad["rules"].([]any)[0].(map[string]any)["trigger"] = map[string]any{"type": "name_matches", "pattern": "/[/"}
+	bad["rules"].([]any)[0].(map[string]any)["when"].(map[string]any)["trigger"] = map[string]any{"type": "name_matches", "pattern": "/[/"}
 	code, body = a.do("PUT", "/ui/api/auto-organize", tok, bad)
 	if code != http.StatusBadRequest || body["ruleIndex"].(float64) != 0 || !strings.Contains(body["error"].(string), "regular expression") {
 		t.Fatalf("invalid PUT: %d %v", code, body)
@@ -213,11 +214,12 @@ func TestAutoOrganizeAPIStatePreviewRunUndo(t *testing.T) {
 	}
 	// a draft for the drawer's "Matches now"; finished_reading on a web upload
 	// (pageCount 0) is skipped, never guessed
-	draft := map[string]any{"rule": map[string]any{"enabled": true, "scope": "pdf_epub",
-		"source":      map[string]any{"id": a.inbox},
-		"trigger":     map[string]any{"type": "finished_reading", "minPages": 3, "settleHours": 6},
-		"destination": map[string]any{"createIfMissing": map[string]any{"name": "Read", "parent": "source"}},
-		"action":      map[string]any{"type": "move"}}}
+	draft := map[string]any{"rule": map[string]any{"enabled": true,
+		"when": map[string]any{"subject": "document",
+			"in":      []any{map[string]any{"id": a.inbox, "kind": "folder"}},
+			"trigger": map[string]any{"type": "finished_reading", "minPages": 3, "settleHours": 6}},
+		"conditions": []any{map[string]any{"type": "kind_is", "kind": "pdf_epub"}},
+		"actions":    []any{map[string]any{"type": "move", "to": map[string]any{"createIfMissing": map[string]any{"name": "Read", "parent": "source"}}}}}}
 	// a new draft is evaluated after the saved rules: rule 1 claims the doc
 	code, plan = a.do("POST", "/ui/api/auto-organize/preview", tok, draft)
 	skipped := plan["skipped"].([]any)

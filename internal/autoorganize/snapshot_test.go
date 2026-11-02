@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
 )
 
@@ -156,7 +157,7 @@ func TestPlanForSnapshotHasPages(t *testing.T) {
 	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	tree, _ := storage.GetCachedTree(uid)
-	snap, _, _ := svc.planFor(uid, DefaultConfig(15), NewState(), tree)
+	snap, _, _ := svc.planFor(uid, automation.DefaultConfig(15), NewState(), tree)
 	if !snap.PagesAttached || len(snap.Docs["nb"].Pages) != 1 {
 		t.Fatalf("attached=%v pages=%v", snap.PagesAttached, snap.Docs["nb"].Pages)
 	}

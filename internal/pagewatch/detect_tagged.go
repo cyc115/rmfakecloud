@@ -1,9 +1,16 @@
 package pagewatch
 
-import "github.com/ddvk/rmfakecloud/internal/autoorganize"
+import (
+	"time"
 
-// taggedDoc a doc of a page_tagged rule: only its pages that carry the tag
-// (Trigger.Tag, ContentInfo.PageTag) count.
+	"github.com/ddvk/rmfakecloud/internal/automation"
+	"github.com/ddvk/rmfakecloud/internal/autoorganize"
+)
+
+// taggedDoc a doc of a rule with page tags (pageTags: the page_tagged trigger
+// and the page_tag_is conditions): only its pages that carry every tag count
+// (ContentInfo.PageTag); the page's tag time is the latest of them. An empty
+// tag set counts no page.
 //
 //   - Newly tagged (no baseline): one edit with an empty before, the whole
 //     page, when the rule already had the doc at an earlier sweep
@@ -17,7 +24,7 @@ import "github.com/ddvk/rmfakecloud/internal/autoorganize"
 //   - Gone from the doc with a baseline: page_deleted, as for page_changed.
 //
 // Trace ids use the page_changed key (R17); rule ids keep rules apart.
-func (d *detector) taggedDoc(r *autoorganize.Rule, base *RuleState, held []string, v *docView) {
+func (d *detector) taggedDoc(r *automation.Rule, tags []string, base *RuleState, held []string, v *docView) {
 	docID, ruleID := v.snap.ID, r.ID
 	watched := base.TagWatched[docID] || (!base.LastActive.IsZero() && d.seenAt(docID).After(base.LastActive))
 	if !base.TagWatched[docID] {
@@ -34,7 +41,7 @@ func (d *detector) taggedDoc(r *autoorganize.Rule, base *RuleState, held []strin
 		key := pageKey(docID, p.ID)
 		prev := base.Baselines[key]
 		pin, pinned := base.TagJoinAt[key]
-		tagAt, tagged := v.ci.PageTag(p.ID, r.Trigger.Tag)
+		tagAt, tagged := pageTagged(&v.ci, p.ID, tags)
 		if !tagged {
 			if prev != "" || pinned {
 				drop = append(drop, key)
@@ -73,4 +80,22 @@ func (d *detector) taggedDoc(r *autoorganize.Rule, base *RuleState, held []strin
 			}
 		})
 	}
+}
+
+// pageTagged the page carries every tag; at is the latest tag time. No tags
+// is never tagged.
+func pageTagged(ci *autoorganize.ContentInfo, pageID string, tags []string) (at time.Time, ok bool) {
+	if len(tags) == 0 {
+		return time.Time{}, false
+	}
+	for _, tag := range tags {
+		t, ok := ci.PageTag(pageID, tag)
+		if !ok {
+			return time.Time{}, false
+		}
+		if t.After(at) {
+			at = t
+		}
+	}
+	return at, true
 }

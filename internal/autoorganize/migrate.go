@@ -53,9 +53,9 @@ func hasField(spec *automation.Spec, field string) bool {
 }
 
 // copyV1 a deep copy, so Normalize does not touch the caller's config
-func copyV1(v1 *Config) *Config {
+func copyV1(v1 *V1Config) *V1Config {
 	c := *v1
-	c.Rules = make([]Rule, len(v1.Rules))
+	c.Rules = make([]V1Rule, len(v1.Rules))
 	for i, r := range v1.Rules {
 		if cm := r.Destination.CreateIfMissing; cm != nil {
 			cp := *cm
@@ -71,19 +71,21 @@ func copyV1(v1 *Config) *Config {
 	return &c
 }
 
+// destToV2 a deep copy of a v1 destination (the formats share the type)
 func destToV2(d Destination) *automation.Destination {
-	out := &automation.Destination{FolderRef: automation.FolderRef(d.FolderRef)}
+	out := &automation.Destination{FolderRef: d.FolderRef}
 	if d.CreateIfMissing != nil {
-		cm := automation.CreateIfMissing(*d.CreateIfMissing)
+		cm := *d.CreateIfMissing
 		out.CreateIfMissing = &cm
 	}
 	return out
 }
 
+// destToV1 a deep copy of a v2 destination
 func destToV1(d *automation.Destination) Destination {
-	out := Destination{FolderRef: FolderRef(d.FolderRef)}
+	out := Destination{FolderRef: d.FolderRef}
 	if d.CreateIfMissing != nil {
-		cm := CreateIfMissing(*d.CreateIfMissing)
+		cm := *d.CreateIfMissing
 		out.CreateIfMissing = &cm
 	}
 	return out
@@ -99,7 +101,7 @@ func destToV1(d *automation.Destination) Destination {
 // move rule that failed v1 Validate as it was stored ("Invalid rule"). Such a
 // rule migrates disabled, and is returned as a RuleIssue for the caller to
 // log. Pipeline rules are not checked: the v1 page watch ran them unvalidated.
-func MigrateV1(v1 *Config) (*automation.Config, []RuleIssue, error) {
+func MigrateV1(v1 *V1Config) (*automation.Config, []RuleIssue, error) {
 	if v1 == nil {
 		return nil, nil, errors.New("no v1 config to migrate")
 	}
@@ -118,7 +120,7 @@ func MigrateV1(v1 *Config) (*automation.Config, []RuleIssue, error) {
 	out := &automation.Config{
 		Version:  automation.Version,
 		Revision: c.Revision + 1,
-		Settings: automation.Settings(c.Settings),
+		Settings: c.Settings,
 		Rules:    make([]automation.Rule, 0, len(c.Rules)),
 	}
 	var issues []RuleIssue
@@ -138,7 +140,7 @@ func MigrateV1(v1 *Config) (*automation.Config, []RuleIssue, error) {
 	return out, issues, nil
 }
 
-func ruleToV2(r *Rule) (automation.Rule, error) {
+func ruleToV2(r *V1Rule) (automation.Rule, error) {
 	nr := automation.Rule{ID: r.ID, Name: r.Name, Enabled: r.Enabled, Conditions: []automation.Condition{}}
 	trig := automation.Trigger{Type: r.Trigger.Type, Params: onlyFields(automation.Triggers[r.Trigger.Type], r.Trigger.params())}
 	if r.Scope != ScopeAll {
@@ -181,12 +183,12 @@ func ruleToV2(r *Rule) (automation.Rule, error) {
 // left out and reported as a RuleIssue; every rule in the result passes v1
 // Validate. The revision is max(base, c)+1, so the old binary sees a newer
 // file. base may be nil.
-func ToV1(c *automation.Config, base *Config) (*Config, []RuleIssue) {
+func ToV1(c *automation.Config, base *V1Config) (*V1Config, []RuleIssue) {
 	rev := c.Revision
 	if base != nil && base.Revision > rev {
 		rev = base.Revision
 	}
-	out := &Config{Revision: rev + 1, Settings: Settings(c.Settings), Rules: []Rule{}}
+	out := &V1Config{Revision: rev + 1, Settings: c.Settings, Rules: []V1Rule{}}
 	var issues []RuleIssue
 	seen := map[string]bool{}
 	for i := range c.Rules {
@@ -211,8 +213,8 @@ func ToV1(c *automation.Config, base *Config) (*Config, []RuleIssue) {
 }
 
 // ruleToV1 the v1 form of r, or the reason it has none
-func ruleToV1(r *automation.Rule) (Rule, string) {
-	out := Rule{ID: r.ID, Name: r.Name, Enabled: r.Enabled, Scope: r.Kind()}
+func ruleToV1(r *automation.Rule) (V1Rule, string) {
+	out := V1Rule{ID: r.ID, Name: r.Name, Enabled: r.Enabled, Scope: r.Kind()}
 	if len(r.Actions) != 1 {
 		return out, fmt.Sprintf("it has %d actions; a v1 rule has exactly one", len(r.Actions))
 	}
@@ -238,7 +240,7 @@ func ruleToV1(r *automation.Rule) (Rule, string) {
 	}
 
 	spec := automation.Triggers[tr.Type]
-	t := Trigger{Type: tr.Type}
+	t := V1Trigger{Type: tr.Type}
 	t.setParams(onlyFields(spec, tr.Params))
 	if !hasField(spec, "settleHours") {
 		t.SettleHours = 6
@@ -267,9 +269,9 @@ func ruleToV1(r *automation.Rule) (Rule, string) {
 		if a.To == nil {
 			return out, "move needs a destination"
 		}
-		out.Source = FolderRef(r.Source())
+		out.Source = r.Source()
 		out.Destination = destToV1(a.To)
-		out.Action = Action{Type: ActionMove}
+		out.Action = V1Action{Type: ActionMove}
 	case r.IsPage():
 		if a.Type != automation.ActionExtractTasks && a.Type != automation.ActionSaveNotes {
 			return out, fmt.Sprintf("a page rule with the %q action has no v1 form", a.Type)
@@ -277,7 +279,7 @@ func ruleToV1(r *automation.Rule) (Rule, string) {
 		for _, p := range r.When.In {
 			out.Watch = append(out.Watch, WatchRef{ID: p.ID, Kind: p.Kind, Name: p.Name})
 		}
-		out.Action = Action{Type: ActionPipeline, Prompt: a.Prompt, Model: a.Model}
+		out.Action = V1Action{Type: ActionPipeline, Prompt: a.Prompt, Model: a.Model}
 		if a.Type == automation.ActionSaveNotes {
 			f := false
 			out.Action.Tasks = &f

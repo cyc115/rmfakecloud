@@ -3,6 +3,7 @@ package autoorganize
 import (
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/google/uuid"
 )
 
@@ -236,7 +237,7 @@ func (st *State) newestLiveMove(docID string) *MoveEntry {
 
 // PruneHolds forgets holds and created folders of rules that no longer exist,
 // and holds of documents that are gone from the tree
-func (st *State) PruneHolds(snap *Snapshot, cfg *Config) {
+func (st *State) PruneHolds(snap *Snapshot, cfg *automation.Config) {
 	rules := map[string]bool{}
 	for i := range cfg.Rules {
 		rules[cfg.Rules[i].ID] = true

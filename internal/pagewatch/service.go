@@ -51,7 +51,8 @@ var (
 
 // Service the page watch: one loop per sync15 user. Each run loads the
 // snapshot, calls Detect, sends the events to rm-pages and saves the next
-// state. The auto-organize config is read, never written; the page watch
+// state. The automation config (automation.json, through the sweeper's
+// store) is read, never written; the page watch
 // keeps its own state file and content cache, so the two services never share
 // a file.
 type Service struct {

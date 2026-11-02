@@ -7,7 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/storage/fs"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 )
 
 func freePort(t *testing.T) string {
@@ -175,5 +179,47 @@ func TestAppLifecycleStartsAndStopsSweeper(t *testing.T) {
 	case <-done:
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("sweeper still running after Stop returned")
+	}
+}
+
+// Startup migrates every user's auto-organize.json to automation.json before
+// the engines start; a user whose file is broken is logged, not fatal.
+func TestStartupMigratesAutomationConfig(t *testing.T) {
+	a, storage := newTestApp(t)
+	user, err := model.NewUser("broken", "pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.RegisterUser(user); err != nil {
+		t.Fatal(err)
+	}
+	v1 := `{"revision": 4, "settings": {"enabled": true, "mode": "dry", "intervalMinutes": 15}, "rules": []}`
+	mike := filepath.Join(storage.UserDataPath("mike"), autoorganize.V1ConfigFileName)
+	if err := os.WriteFile(mike, []byte(v1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storage.UserDataPath("broken"), autoorganize.V1ConfigFileName), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hook := logtest.NewGlobal()
+	t.Cleanup(func() { log.StandardLogger().ReplaceHooks(make(log.LevelHooks)) })
+
+	a.migrateAutomation()
+
+	b, err := os.ReadFile(filepath.Join(storage.UserDataPath("mike"), autoorganize.ConfigFileName))
+	if err != nil || !strings.Contains(string(b), `"version": 2`) || !strings.Contains(string(b), `"revision": 5`) {
+		t.Fatalf("mike's automation.json: %s %v", b, err)
+	}
+	var errs []string
+	for _, e := range hook.AllEntries() {
+		if e.Level == log.ErrorLevel {
+			errs = append(errs, e.Message)
+		}
+	}
+	if len(errs) != 1 || !strings.HasPrefix(errs[0], "automation: broken: config not migrated: ") {
+		t.Fatalf("error logs = %q", errs)
+	}
+	if _, err := os.Stat(filepath.Join(storage.UserDataPath("broken"), autoorganize.ConfigFileName)); !os.IsNotExist(err) {
+		t.Fatalf("broken user's automation.json written: %v", err)
 	}
 }

@@ -37,20 +37,20 @@ func TestRegistryCoversEveryTriggerType(t *testing.T) {
 }
 
 func TestRegistryDefaultsAndJSONAbsence(t *testing.T) {
-	cfg := &Config{Rules: []Rule{
-		{Trigger: Trigger{Type: TriggerNotOpened}},
-		{Trigger: Trigger{Type: TriggerFinishedReading}},
-		{Trigger: Trigger{Type: TriggerReadProgress}},
-		{Trigger: Trigger{Type: TriggerNotModified}},
-		{Trigger: Trigger{Type: TriggerAgeSinceCreated}},
-		{Trigger: Trigger{Type: TriggerPinnedIs}},
+	cfg := &V1Config{Rules: []V1Rule{
+		{Trigger: V1Trigger{Type: TriggerNotOpened}},
+		{Trigger: V1Trigger{Type: TriggerFinishedReading}},
+		{Trigger: V1Trigger{Type: TriggerReadProgress}},
+		{Trigger: V1Trigger{Type: TriggerNotModified}},
+		{Trigger: V1Trigger{Type: TriggerAgeSinceCreated}},
+		{Trigger: V1Trigger{Type: TriggerPinnedIs}},
 	}}
 	cfg.Normalize()
 	if cfg.Rules[0].Trigger.Days != 30 || cfg.Rules[1].Trigger.MinPages != 3 || cfg.Rules[2].Trigger.Percent != 80 ||
 		cfg.Rules[3].Trigger.Days != 90 || cfg.Rules[4].Trigger.Days != 14 {
 		t.Errorf("defaults not applied: %+v", cfg.Rules)
 	}
-	var notOpened, created Trigger
+	var notOpened, created V1Trigger
 	if err := json.Unmarshal([]byte(`{"type":"not_opened_for_days","days":3}`), &notOpened); err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestRegistryDefaultsAndJSONAbsence(t *testing.T) {
 	if notOpened.MinAgeDays != 7 || created.MinAgeDays != 0 {
 		t.Errorf("absent minAgeDays: not_opened=%d age_since_created=%d", notOpened.MinAgeDays, created.MinAgeDays)
 	}
-	var explicit Trigger
+	var explicit V1Trigger
 	if err := json.Unmarshal([]byte(`{"type":"not_opened_for_days","days":3,"minAgeDays":0}`), &explicit); err != nil {
 		t.Fatal(err)
 	}
@@ -70,10 +70,14 @@ func TestRegistryDefaultsAndJSONAbsence(t *testing.T) {
 }
 
 func TestUnknownTriggerIsRejectedAndSkipped(t *testing.T) {
-	r := Rule{Scope: ScopeAll, Action: Action{Type: ActionMove}, Source: FolderRef{ID: "src"},
-		Destination: Destination{FolderRef: FolderRef{ID: "dst"}}, Trigger: Trigger{Type: "has_coffee_stains"}}
+	r := moveRule("r", "src", "dst", trig("has_coffee_stains", P{}))
 	if err := r.Validate(); err == nil || err.Error() != `unknown trigger "has_coffee_stains"` {
 		t.Errorf("Validate = %v", err)
+	}
+	v1 := V1Rule{Scope: ScopeAll, Action: V1Action{Type: ActionMove}, Source: FolderRef{ID: "src"},
+		Destination: Destination{FolderRef: FolderRef{ID: "dst"}}, Trigger: V1Trigger{Type: "has_coffee_stains"}}
+	if err := v1.Validate(); err == nil || err.Error() != `unknown trigger "has_coffee_stains"` {
+		t.Errorf("v1 Validate = %v", err)
 	}
 	ev := evalRule(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
 	if ev.skip != SkipInvalidRule {
@@ -82,7 +86,7 @@ func TestUnknownTriggerIsRejectedAndSkipped(t *testing.T) {
 }
 
 func TestPageChangedEvalSkipsNeverMatches(t *testing.T) {
-	r := Rule{Scope: ScopeAll, Action: Action{Type: ActionPipeline}, Trigger: Trigger{Type: TriggerPageChanged}}
+	r := moveRule("r", "src", "dst", trig(TriggerPageChanged, P{}))
 	ev := evalRule(&r, &DocSnap{}, &ContentInfo{}, nil, time.Now())
 	if ev.match || ev.skip == "" {
 		t.Errorf("page_changed under the move planner must skip, got %+v", ev)

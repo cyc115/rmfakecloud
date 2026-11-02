@@ -6,13 +6,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 )
 
 // tagRule a page_tagged pipeline rule; no watch entries = the whole tree
-func (e *env) tagRule(id, tag string, watch ...autoorganize.WatchRef) *autoorganize.Rule {
+func (e *env) tagRule(id, tag string, watch ...automation.Place) *automation.Rule {
 	r := e.rule(id, watch...)
-	r.Trigger = autoorganize.Trigger{Type: autoorganize.TriggerPageTagged, Tag: tag}
+	r.When.Trigger = automation.Trigger{Type: automation.TriggerPageTagged, Params: automation.Params{Tag: tag}}
 	return r
 }
 
@@ -242,7 +243,7 @@ func TestPageTaggedDeletedPageEmitsPageDeleted(t *testing.T) {
 func TestPageTaggedWholeTreeRespectsTrashScopeAndOptOut(t *testing.T) {
 	e := newEnv(t)
 	r := e.tagRule("r1", "todo")
-	r.Scope = autoorganize.ScopeNotebooks
+	r.Conditions = append(r.Conditions, cond(automation.CondKindIs, automation.Params{Kind: automation.KindNotebooks}))
 	e.ft.Folder("f", "Deep", "")
 	e.ft.Notebook("nb", "Notes", "f")
 	e.page("nb", "p1", "strokes_a.rm")
@@ -271,24 +272,23 @@ func TestPageTaggedTriggerChangeStartsAfresh(t *testing.T) {
 	e.sweep() // page_changed: joined, both pages delivered
 
 	// the same rule now waits for a tag: what was tagged before is pre-existing
-	e.cfg.Rules[0].Trigger = autoorganize.Trigger{Type: autoorganize.TriggerPageTagged, Tag: "todo"}
+	e.cfg.Rules[0].When.Trigger = automation.Trigger{Type: automation.TriggerPageTagged, Params: automation.Params{Tag: "todo"}}
 	wantEvents(t, "switched", e.sweep().Pipeline, "transcribe_only nb/p1 r1")
 	if rs := ruleState(e.state, "r1"); len(rs.Members)+len(rs.JoinStartedAt) != 0 || len(rs.Baselines) != 1 {
 		t.Fatalf("page_changed state kept: %+v", rs)
 	}
 	// another tag: also a fresh start, not a flood of edits
-	e.cfg.Rules[0].Trigger.Tag = "Later"
+	e.cfg.Rules[0].When.Trigger.Tag = "Later"
 	wantEvents(t, "retagged rule", e.sweep().Pipeline, "transcribe_only nb/p2 r1")
 	// back to page_changed: a fresh join, never edits of old pages
-	e.cfg.Rules[0].Trigger = autoorganize.Trigger{Type: autoorganize.TriggerPageChanged}
+	e.cfg.Rules[0].When.Trigger = automation.Trigger{Type: automation.TriggerPageChanged}
 	wantEvents(t, "back", e.sweep().Pipeline, "transcribe_only nb/p1 r1", "transcribe_only nb/p2 r1")
 }
 
 func TestTasksFalseOnPipelineEventsOnly(t *testing.T) {
 	e := newEnv(t)
-	f := false
 	notes := e.tagRule("notes", "todo")
-	notes.Action.Tasks = &f
+	notes.Actions[0].Type = automation.ActionSaveNotes
 	e.rule("tasks", folderWatch(autoorganize.RootID))
 	e.ft.Notebook("nb", "Notes", "")
 	e.page("nb", "p1", "strokes_a.rm")

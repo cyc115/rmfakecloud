@@ -33,7 +33,15 @@ func TestMergeEvalANDFirstSkip(t *testing.T) {
 	if _, ok := got.inputs["t"]; ok || got.detail != "a" {
 		t.Errorf("evaluations after the skip must not be merged: %+v", got)
 	}
-	// one evaluation passes through unchanged (v1 rules have no conditions)
+	// ruling a: a non-match stops the merge, so a later skip cannot outrank it
+	got = mergeEval(yes, no, first)
+	if got.match || got.skip != "" || got.detail != "a · b" {
+		t.Errorf("a skip after a non-match must not be merged: %+v", got)
+	}
+	if _, ok := got.inputs["s"]; ok {
+		t.Errorf("inputs after the non-match merged: %+v", got.inputs)
+	}
+	// one evaluation passes through unchanged (a rule with no conditions)
 	for _, ev := range []evaluation{yes, no, first, {skip: SkipOutOfScope, skipDetail: "x"}} {
 		if m := mergeEval(ev); !reflect.DeepEqual(m, ev) {
 			t.Errorf("mergeEval(%+v) = %+v", ev, m)
@@ -53,9 +61,14 @@ func TestMergeEvalInputsUnionDetailJoin(t *testing.T) {
 	}
 }
 
-func notOpenedRule(minAge bool, minAgeDays int) Rule {
-	return Rule{ID: "r", Scope: ScopeAll, Action: Action{Type: ActionMove},
-		Trigger: Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: minAge, MinAgeDays: minAgeDays}}
+// notOpenedRule not_opened_for_days 30, with a min_age_days condition when
+// minAge (the v1 minAgeEnabled, as MigrateV1 maps it)
+func notOpenedRule(minAge bool, minAgeDays int) automation.Rule {
+	r := moveRule("r", "src", "dst", trig(TriggerNotOpened, P{Days: 30}))
+	if minAge {
+		r.Conditions = append(r.Conditions, cond(automation.CondMinAgeDays, P{Days: minAgeDays}))
+	}
+	return r
 }
 
 func TestNotOpenedInputsKeepAgeAnchor(t *testing.T) {
@@ -157,22 +170,30 @@ func TestCatalogueComplete(t *testing.T) {
 	}
 }
 
-func TestRuleConditionsV1(t *testing.T) {
-	cases := []struct {
-		r    Rule
-		want []condRef
-	}{
-		{notOpenedRule(true, 7), []condRef{{Type: automation.CondMinAgeDays, P: automation.Params{Days: 7}}}},
-		{notOpenedRule(true, 0), []condRef{{Type: automation.CondMinAgeDays, P: automation.Params{Days: 0}}}},
-		{notOpenedRule(false, 7), nil},
-		// R-B3 / P1: the other triggers ignore min age, so they get no condition
-		{Rule{Trigger: Trigger{Type: TriggerFinishedReading, MinAgeEnabled: true, MinAgeDays: 7}}, nil},
-		{Rule{Trigger: Trigger{Type: TriggerAgeSinceCreated, Days: 3, MinAgeEnabled: true, MinAgeDays: 7}}, nil},
+// TestTriggerNonMatchShortCircuits (ruling a): a trigger that does not match
+// gives the trigger's own evaluation; its conditions are not evaluated, so a
+// condition that would skip (a bad pattern) cannot outrank the non-match
+func TestTriggerNonMatchShortCircuits(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	d := &DocSnap{ID: "d", Name: "Paper", LastOpened: ms(now.Add(-2 * 24 * time.Hour)), CreatedTime: ms(now.Add(-50 * 24 * time.Hour))}
+	ci := &ContentInfo{FileType: "pdf"}
+	r := notOpenedRule(false, 0)
+	r.Conditions = append(r.Conditions, cond(automation.CondNameMatches, P{Pattern: "/[/"}))
+	alone := notOpenedRule(false, 0)
+	got, want := evalRule(&r, d, ci, nil, now), evalRule(&alone, d, ci, nil, now)
+	if got.match || got.skip != "" || !reflect.DeepEqual(got, want) {
+		t.Fatalf("non-matching trigger: got %+v, want the trigger's evaluation %+v", got, want)
 	}
-	for _, c := range cases {
-		if got := ruleConditions(&c.r); !reflect.DeepEqual(got, c.want) {
-			t.Errorf("%s minAge %v/%d: %+v, want %+v", c.r.Trigger.Type, c.r.Trigger.MinAgeEnabled, c.r.Trigger.MinAgeDays, got, c.want)
-		}
+	// a condition non-match stops too: the bad pattern after it is not reached
+	r.Conditions = append([]automation.Condition{cond(automation.CondTagIs, P{Tag: "keep"})}, r.Conditions...)
+	d.LastOpened = ms(now.Add(-40 * 24 * time.Hour))
+	if ev := evalRule(&r, d, ci, nil, now); ev.match || ev.skip != "" || ev.detail != "last opened 40 days ago · tagged “keep”" {
+		t.Fatalf("condition non-match then skip: %+v", ev)
+	}
+	// with every earlier test matching, the bad pattern is a skip, never a guess
+	ci.Tags = []string{"keep"}
+	if ev := evalRule(&r, d, ci, nil, now); ev.match || ev.skip != SkipInvalidRule {
+		t.Fatalf("bad pattern reached: %+v", ev)
 	}
 }
 

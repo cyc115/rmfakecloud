@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/model"
 	"github.com/ddvk/rmfakecloud/internal/storage/models"
 )
@@ -71,7 +72,7 @@ func TestMoveRecheckRunsAgainAfterGenerationConflict(t *testing.T) {
 
 	svc, _, _ := newService(t, storage)
 	rule := readRule()
-	rule.Trigger.SettleHours = 6
+	rule.When.Trigger.SettleHours = 6
 	st := NewState()
 
 	// the sweeper's tree is now stale: the tablet re-opens the document and syncs
@@ -276,52 +277,52 @@ func TestEveryTriggerMovesThroughTheService(t *testing.T) {
 	now := time.Now()
 	type tc struct {
 		name    string
-		trigger Trigger
-		scope   string
+		trigger automation.Trigger
+		conds   []automation.Condition
 		setup   func(ft *fakeTablet)
 		move    []string
 		stay    map[string]string // doc -> expected skip reason ("" = simply no match)
 	}
 	day := 24 * time.Hour
 	cases := []tc{
-		{"finished_reading", Trigger{Type: TriggerFinishedReading, MinPages: 3, SettleHours: 6}, ScopePdfEpub, func(ft *fakeTablet) {
+		{"finished_reading", trig(TriggerFinishedReading, P{MinPages: 3, SettleHours: 6}), nil, func(ft *fakeTablet) {
 			ft.PDF("yes", "Done", "src", 3, 2, now.Add(-7*time.Hour))
 			ft.PDF("no", "Short", "src", 2, 1, now.Add(-7*time.Hour))
 			ft.PDF("zero", "Zero", "src", 0, 0, now.Add(-7*time.Hour))
 		}, []string{"yes"}, map[string]string{"no": "", "zero": SkipPageCountUnknown}},
-		{"read_progress", Trigger{Type: TriggerReadProgress, Percent: 50, SettleHours: 0}, ScopePdfEpub, func(ft *fakeTablet) {
+		{"read_progress", trig(TriggerReadProgress, P{Percent: 50, SettleHours: 0}), nil, func(ft *fakeTablet) {
 			ft.PDF("yes", "Half", "src", 10, 4, now.Add(-time.Minute))
 			ft.PDF("no", "Third", "src", 10, 2, now.Add(-time.Minute))
 		}, []string{"yes"}, map[string]string{"no": ""}},
-		{"not_opened_for_days", Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7}, ScopeAll, func(ft *fakeTablet) {
+		{"not_opened_for_days", trig(TriggerNotOpened, P{Days: 30}), []automation.Condition{cond(automation.CondMinAgeDays, P{Days: 7})}, func(ft *fakeTablet) {
 			ft.PDF("yes", "Old", "src", 3, 0, now.Add(-40*day))
 			ft.PDF("no", "Recent", "src", 3, 0, now.Add(-2*day))
 			nb := ft.Notebook("nbyes", "Unopened notebook", "src")
 			nb.Meta["createdTime"] = ms(now.Add(-60 * day))
 		}, []string{"yes", "nbyes"}, map[string]string{"no": ""}},
-		{"not_modified_for_days", Trigger{Type: TriggerNotModified, Days: 90}, ScopeAll, func(ft *fakeTablet) {
+		{"not_modified_for_days", trig(TriggerNotModified, P{Days: 90}), nil, func(ft *fakeTablet) {
 			d := ft.PDF("yes", "Stale", "src", 3, 0, time.Time{})
 			d.Meta["lastModified"] = ms(now.Add(-100 * day))
 			d = ft.PDF("no", "Fresh", "src", 3, 0, time.Time{})
 			d.Meta["lastModified"] = ms(now.Add(-1 * day))
 		}, []string{"yes"}, map[string]string{"no": ""}},
-		{"name_matches", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}, ScopeAll, func(ft *fakeTablet) {
+		{"name_matches", trig(TriggerNameMatches, P{Pattern: "WSJ *"}), nil, func(ft *fakeTablet) {
 			ft.PDF("yes", "WSJ Weekend", "src", 0, 0, time.Time{})
 			ft.PDF("no", "FT Weekend", "src", 0, 0, time.Time{})
 		}, []string{"yes"}, map[string]string{"no": ""}},
-		{"tag_is", Trigger{Type: TriggerTagIs, Tag: "done"}, ScopeAll, func(ft *fakeTablet) {
+		{"tag_is", trig(TriggerTagIs, P{Tag: "done"}), nil, func(ft *fakeTablet) {
 			d := ft.PDF("yes", "Tagged", "src", 3, 0, time.Time{})
 			d.Content["tags"] = []any{map[string]any{"name": "Done", "timestamp": 1}}
 			d = ft.PDF("no", "Other tag", "src", 3, 0, time.Time{})
 			d.Content["tags"] = []any{"later"}
 		}, []string{"yes"}, map[string]string{"no": ""}},
-		{"age_since_created", Trigger{Type: TriggerAgeSinceCreated, Days: 14}, ScopeAll, func(ft *fakeTablet) {
+		{"age_since_created", trig(TriggerAgeSinceCreated, P{Days: 14}), nil, func(ft *fakeTablet) {
 			d := ft.PDF("yes", "Arrived long ago", "src", 3, 0, time.Time{})
 			d.Meta["createdTime"] = ms(now.Add(-20 * day))
 			d = ft.PDF("no", "Arrived yesterday", "src", 3, 0, time.Time{})
 			d.Meta["createdTime"] = ms(now.Add(-1 * day))
 		}, []string{"yes"}, map[string]string{"no": ""}},
-		{"pinned_is", Trigger{Type: TriggerPinnedIs, Pinned: true}, ScopeAll, func(ft *fakeTablet) {
+		{"pinned_is", trig(TriggerPinnedIs, P{Pinned: true}), nil, func(ft *fakeTablet) {
 			d := ft.PDF("yes", "Pinned", "src", 3, 0, time.Time{})
 			d.Meta["pinned"] = true
 			ft.PDF("no", "Not pinned", "src", 3, 0, time.Time{})
@@ -342,8 +343,7 @@ func TestEveryTriggerMovesThroughTheService(t *testing.T) {
 			ft.Sync()
 
 			svc, _, _ := newService(t, storage)
-			saveConfig(t, svc, uid, ModeLive, Rule{ID: "r", Enabled: true, Source: FolderRef{ID: "src"}, Scope: c.scope,
-				Trigger: c.trigger, Destination: Destination{FolderRef: FolderRef{ID: "dst"}}, Action: Action{Type: ActionMove}})
+			saveConfig(t, svc, uid, ModeLive, moveRule("r", "src", "dst", c.trigger, c.conds...))
 			res, err := svc.RunNow(uid)
 			if err != nil {
 				t.Fatal(err)
@@ -387,14 +387,10 @@ func TestWorkedExampleAtMostOneCycle(t *testing.T) {
 	ft.Folder("archive", "Archive", "")
 	ft.PDF("D", "Quarterly Letter", "inbox", 4, 0, now.Add(-40*24*time.Hour))
 	ft.Sync()
-	ruleA := Rule{ID: "A", Enabled: true, Source: FolderRef{ID: "inbox"}, Scope: ScopeAll,
-		Trigger:     Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7},
-		Destination: Destination{FolderRef: FolderRef{ID: "archive"}}, Action: Action{Type: ActionMove}}
-	ruleB := Rule{ID: "B", Enabled: true, Source: FolderRef{ID: "archive"}, Scope: ScopeAll,
-		Trigger:     Trigger{Type: TriggerPinnedIs, Pinned: true},
-		Destination: Destination{FolderRef: FolderRef{ID: "inbox"}}, Action: Action{Type: ActionMove}}
+	ruleA := moveRule("A", "inbox", "archive", trig(TriggerNotOpened, P{Days: 30}), cond(automation.CondMinAgeDays, P{Days: 7}))
+	ruleB := moveRule("B", "archive", "inbox", trig(TriggerPinnedIs, P{Pinned: true}))
 	cfg := saveConfig(t, svc, uid, ModeLive, ruleA, ruleB)
-	if w := LoopWarnings(cfg, func(r *Rule) (string, bool) { return r.Destination.ID, true }); len(w) != 2 {
+	if w := LoopWarnings(cfg, func(r *automation.Rule) (string, bool) { return r.Move().To.ID, true }); len(w) != 2 {
 		t.Fatalf("save-time loop warning: %v", w)
 	}
 
@@ -578,9 +574,7 @@ func TestUndoHoldUsesRuleInputs(t *testing.T) {
 	d := ft.PDF("d", "Old", "inbox", 3, 0, now.Add(-40*day))
 	d.Meta["createdTime"] = ms(now.Add(-50 * day))
 	ft.Sync()
-	saveConfig(t, svc, uid, ModeLive, Rule{ID: "r", Enabled: true, Source: FolderRef{ID: "inbox"}, Scope: ScopeAll,
-		Trigger:     Trigger{Type: TriggerNotOpened, Days: 30, MinAgeEnabled: true, MinAgeDays: 7},
-		Destination: Destination{FolderRef: FolderRef{ID: "arch"}}, Action: Action{Type: ActionMove}})
+	saveConfig(t, svc, uid, ModeLive, moveRule("r", "inbox", "arch", trig(TriggerNotOpened, P{Days: 30}), cond(automation.CondMinAgeDays, P{Days: 7})))
 
 	plan, _, err := svc.Preview(uid, nil)
 	if err != nil || len(plan.Moves) != 1 {
@@ -662,7 +656,7 @@ func TestDebouncedTriggerSingleFlightAndLifecycle(t *testing.T) {
 	svc, _, _ := newService(t, storage)
 	svc.Debounce = 30 * time.Millisecond
 	svc.IntervalUnit = time.Hour // the fallback ticker stays out of the way
-	saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "*"}))
+	saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "*"})))
 	runs := func() int {
 		st, _ := svc.Store().LoadState(uid)
 		return len(st.Runs)
@@ -744,7 +738,7 @@ func TestFallbackTicker(t *testing.T) {
 	ft.Sync()
 	svc, _, _ := newService(t, storage)
 	svc.IntervalUnit = 4 * time.Millisecond // 5 "minutes" = 20 ms
-	cfg := saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "*"}))
+	cfg := saveConfig(t, svc, uid, ModeDry, moveRule("r", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "*"})))
 	cfg.Settings.IntervalMinutes = 5
 	svc.Store().SaveConfig(uid, cfg)
 
@@ -774,10 +768,10 @@ func TestPreviewDraftRuleInPosition(t *testing.T) {
 	ft.PDF("ft", "FT Weekend", "inbox", 3, 0, time.Time{})
 	ft.Sync()
 	svc, _, _ := newService(t, storage)
-	first := moveRule("first", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"})
+	first := moveRule("first", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "WSJ *"}))
 	saveConfig(t, svc, uid, ModeDry, first)
 
-	draft := moveRule("", "inbox", "archive", Trigger{Type: TriggerNameMatches, Pattern: "*Weekend"})
+	draft := moveRule("", "inbox", "archive", trig(TriggerNameMatches, P{Pattern: "*Weekend"}))
 	draft.Enabled = false
 	plan, _, err := svc.Preview(uid, &draft)
 	if err != nil {
@@ -814,7 +808,7 @@ func TestCorruptContentAndMissingContent(t *testing.T) {
 	ft.PDF("ok", "WSJ ok", "inbox", 3, 0, time.Time{})
 	ft.Sync()
 	svc, _, _ := newService(t, storage)
-	saveConfig(t, svc, uid, ModeLive, moveRule("r", "inbox", "news", Trigger{Type: TriggerNameMatches, Pattern: "WSJ *"}))
+	saveConfig(t, svc, uid, ModeLive, moveRule("r", "inbox", "news", trig(TriggerNameMatches, P{Pattern: "WSJ *"})))
 	res, err := svc.RunNow(uid)
 	if err != nil {
 		t.Fatal(err)

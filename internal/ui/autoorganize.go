@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/pagewatch"
@@ -76,7 +77,7 @@ func (app *ReactAppWrapper) getAutoOrganize(c *gin.Context) {
 
 func (app *ReactAppWrapper) putAutoOrganize(c *gin.Context) {
 	uid := userID(c)
-	var cfg autoorganize.Config
+	var cfg automation.Config
 	if err := c.ShouldBindJSON(&cfg); err != nil {
 		badReq(c, err.Error())
 		return
@@ -86,7 +87,7 @@ func (app *ReactAppWrapper) putAutoOrganize(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": err.Error(), "revision": saved.Revision})
 		return
 	}
-	var verr *autoorganize.ValidationError
+	var verr *automation.ValidationError
 	if errors.As(err, &verr) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": verr.Error(), "ruleIndex": verr.RuleIndex, "ruleId": verr.RuleID})
 		return
@@ -111,8 +112,8 @@ func (app *ReactAppWrapper) autoOrganizeState(c *gin.Context) {
 
 // previewRequest all rules, one rule, or a draft rule body
 type previewRequest struct {
-	RuleID string             `json:"ruleId"`
-	Rule   *autoorganize.Rule `json:"rule"`
+	RuleID string           `json:"ruleId"`
+	Rule   *automation.Rule `json:"rule"`
 }
 
 func (app *ReactAppWrapper) autoOrganizePreview(c *gin.Context) {

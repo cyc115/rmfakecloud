@@ -1,5 +1,7 @@
-// Package autoorganize applies user defined organisation rules to a sync15
-// document tree: source folder -> scope -> trigger -> action (move).
+// The v1 rule model (auto-organize.json: V1Config, V1Rule, V1Trigger,
+// V1Action). The engines run the v2 model (internal/automation); the v1 types
+// are kept for the migration on load (MigrateV1) and for rollback (ToV1).
+
 package autoorganize
 
 import (
@@ -82,33 +84,20 @@ var AllowedIntervals = automation.AllowedIntervals
 // DefaultInterval minutes
 const DefaultInterval = automation.DefaultInterval
 
-// Settings the per-user sweeper settings
-type Settings struct {
-	Enabled         bool   `json:"enabled"`
-	Mode            string `json:"mode"`
-	IntervalMinutes int    `json:"intervalMinutes"`
-}
+// Settings the per-user sweeper settings (the v1 and v2 files share the shape)
+type Settings = automation.Settings
 
 // FolderRef a folder picked from the tree, by UUID only. Name is a display cache.
-type FolderRef struct {
-	ID   string `json:"id"`
-	Name string `json:"name,omitempty"`
-}
+type FolderRef = automation.FolderRef
 
 // CreateIfMissing names a subfolder to create under Parent ("source" or a folder UUID)
-type CreateIfMissing struct {
-	Name   string `json:"name"`
-	Parent string `json:"parent"`
-}
+type CreateIfMissing = automation.CreateIfMissing
 
 // Destination of a move
-type Destination struct {
-	FolderRef
-	CreateIfMissing *CreateIfMissing `json:"createIfMissing,omitempty"`
-}
+type Destination = automation.Destination
 
-// Trigger parameters; only the fields of Type are used
-type Trigger struct {
+// V1Trigger parameters; only the fields of Type are used
+type V1Trigger struct {
 	Type string `json:"type"`
 	// finished_reading
 	MinPages int `json:"minPages,omitempty"`
@@ -130,8 +119,8 @@ type Trigger struct {
 }
 
 // UnmarshalJSON fills defaults for parameters that are absent but where zero is meaningful
-func (t *Trigger) UnmarshalJSON(b []byte) error {
-	type plain Trigger
+func (t *V1Trigger) UnmarshalJSON(b []byte) error {
+	type plain V1Trigger
 	// -1 marks an absent minAgeDays, so an explicit 0 ("at least 0 days old") is kept
 	p := plain{SettleHours: 6, MinAgeEnabled: true, Pinned: true, MinAgeDays: -1}
 	if err := json.Unmarshal(b, &p); err != nil {
@@ -140,7 +129,7 @@ func (t *Trigger) UnmarshalJSON(b []byte) error {
 	if p.MinAgeDays == -1 {
 		p.MinAgeDays = absentMinAgeDays[p.Type]
 	}
-	*t = Trigger(p)
+	*t = V1Trigger(p)
 	return nil
 }
 
@@ -152,8 +141,8 @@ type WatchRef struct {
 	Name string `json:"name,omitempty"`
 }
 
-// Action of a rule; Prompt, Model and Tasks are used by the pipeline action only
-type Action struct {
+// V1Action of a rule; Prompt, Model and Tasks are used by the pipeline action only
+type V1Action struct {
 	Type   string `json:"type"`
 	Prompt string `json:"prompt,omitempty"`
 	Model  string `json:"model,omitempty"`
@@ -163,54 +152,43 @@ type Action struct {
 }
 
 // ExtractsTasks the pipeline extracts tasks for this action (Tasks nil or true)
-func (a *Action) ExtractsTasks() bool {
+func (a *V1Action) ExtractsTasks() bool {
 	return a.Tasks == nil || *a.Tasks
 }
 
-// Rule a single organisation rule
-type Rule struct {
+// V1Rule a single organisation rule
+type V1Rule struct {
 	ID          string      `json:"id"`
 	Name        string      `json:"name,omitempty"`
 	Enabled     bool        `json:"enabled"`
 	Source      FolderRef   `json:"source"`
 	Scope       string      `json:"scope"`
-	Trigger     Trigger     `json:"trigger"`
+	Trigger     V1Trigger   `json:"trigger"`
 	Destination Destination `json:"destination"`
-	Action      Action      `json:"action"`
+	Action      V1Action    `json:"action"`
 	// Watch what a pipeline rule watches; unused by move rules
 	Watch []WatchRef `json:"watch,omitempty"`
 }
 
-// Config the UI owned config, auto-organize.json
-type Config struct {
+// V1Config the v1 config file, auto-organize.json (read for migration only)
+type V1Config struct {
 	Revision int      `json:"revision"`
 	Settings Settings `json:"settings"`
-	Rules    []Rule   `json:"rules"`
-}
-
-// DefaultConfig used when the user has no config file yet
-func DefaultConfig(interval int) *Config {
-	if !validInterval(interval) {
-		interval = DefaultInterval
-	}
-	return &Config{
-		Settings: Settings{Enabled: true, Mode: ModeDry, IntervalMinutes: interval},
-		Rules:    []Rule{},
-	}
+	Rules    []V1Rule `json:"rules"`
 }
 
 // IsPipeline reports whether the rule runs the pipeline action (not the move planner)
-func (r *Rule) IsPipeline() bool {
+func (r *V1Rule) IsPipeline() bool {
 	return r.Action.Type == ActionPipeline
 }
 
 // SkipsPinned the default pinned guard applies unless the trigger is about pinning
-func (r *Rule) SkipsPinned() bool {
+func (r *V1Rule) SkipsPinned() bool {
 	return r.Trigger.Type != TriggerPinnedIs
 }
 
 // PageBased triggers that need a pageCount and are locked to PDF & EPUB
-func (t *Trigger) PageBased() bool {
+func (t *V1Trigger) PageBased() bool {
 	s, ok := automation.Triggers[t.Type]
 	return ok && s.PageBased
 }
@@ -225,7 +203,7 @@ func validInterval(m int) bool {
 }
 
 // Normalize fills ids and per-type defaults. Called before validation on save.
-func (c *Config) Normalize() {
+func (c *V1Config) Normalize() {
 	if c.Settings.Mode == "" {
 		c.Settings.Mode = ModeDry
 	}
@@ -233,7 +211,7 @@ func (c *Config) Normalize() {
 		c.Settings.IntervalMinutes = DefaultInterval
 	}
 	if c.Rules == nil {
-		c.Rules = []Rule{}
+		c.Rules = []V1Rule{}
 	}
 	for i := range c.Rules {
 		r := &c.Rules[i]
@@ -294,7 +272,7 @@ func (e *ValidationError) Error() string {
 }
 
 // Validate checks settings and every rule
-func (c *Config) Validate() error {
+func (c *V1Config) Validate() error {
 	if c.Settings.Mode != ModeLive && c.Settings.Mode != ModeDry {
 		return &ValidationError{RuleIndex: -1, Message: "mode must be live or dry"}
 	}
@@ -316,7 +294,7 @@ func (c *Config) Validate() error {
 }
 
 // Validate a single rule
-func (r *Rule) Validate() error {
+func (r *V1Rule) Validate() error {
 	switch r.Action.Type {
 	case ActionMove:
 		if !r.Action.ExtractsTasks() {
@@ -376,7 +354,7 @@ func (r *Rule) Validate() error {
 // validatePipeline the pipeline action: a page trigger (page_changed or
 // page_tagged) and valid watch entries. page_changed needs at least one entry;
 // for page_tagged none means the whole tree. Source and destination are not used.
-func (r *Rule) validatePipeline() error {
+func (r *V1Rule) validatePipeline() error {
 	switch r.Scope {
 	case ScopePdfEpub, ScopeNotebooks, ScopeAll:
 	default:
@@ -428,70 +406,4 @@ func NormalizeTag(tag string) string {
 // IsNoAutomationTag reports whether tag is the opt-out tag in any spelling
 func IsNoAutomationTag(tag string) bool {
 	return automation.IsNoAutomationTag(tag)
-}
-
-// LoopWarnings returns, per rule id, the 1-based numbers of the other enabled
-// move rules it forms a folder cycle with (R5, a warning, never a rejection).
-// destOf resolves a rule's destination folder id; ok false leaves the rule out
-// (e.g. a subfolder that has not been created yet cannot lead anywhere).
-func LoopWarnings(c *Config, destOf func(r *Rule) (id string, ok bool)) map[string][]int {
-	type edge struct {
-		from, to string
-		idx      int
-	}
-	var edges []edge
-	for i := range c.Rules {
-		r := &c.Rules[i]
-		if !r.Enabled || r.Action.Type != ActionMove {
-			continue
-		}
-		to, ok := destOf(r)
-		if !ok {
-			continue
-		}
-		edges = append(edges, edge{r.Source.ID, to, i})
-	}
-	result := map[string][]int{}
-	for _, e := range edges {
-		// rules on any path from e.to back to e.from close a cycle with e
-		visited := map[string]bool{}
-		var path []int
-		var members []int
-		var dfs func(node string) bool
-		dfs = func(node string) bool {
-			if node == e.from {
-				members = append(members, path...)
-				return true
-			}
-			if visited[node] {
-				return false
-			}
-			visited[node] = true
-			found := false
-			for _, n := range edges {
-				if n.idx == e.idx || n.from != node {
-					continue
-				}
-				path = append(path, n.idx)
-				if dfs(n.to) {
-					found = true
-				}
-				path = path[:len(path)-1]
-			}
-			return found
-		}
-		dfs(e.to)
-		if len(members) > 0 {
-			seen := map[int]bool{}
-			var nums []int
-			for _, m := range members {
-				if !seen[m] {
-					seen[m] = true
-					nums = append(nums, m+1)
-				}
-			}
-			result[c.Rules[e.idx].ID] = nums
-		}
-	}
-	return result
 }

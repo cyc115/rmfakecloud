@@ -27,7 +27,7 @@ func TestMoveRecheckRefusesUnusableDestination(t *testing.T) {
 			ft.PDF("d", "Doc", "rr", 5, 4, now.Add(-9*time.Hour))
 			ft.Sync()
 			svc, _, _ := newService(t, storage)
-			rule := moveRule("r1", "rr", "read", Trigger{Type: TriggerFinishedReading, MinPages: 3, SettleHours: 6})
+			rule := moveRule("r1", "rr", "read", trig(TriggerFinishedReading, P{MinPages: 3, SettleHours: 6}))
 			st := NewState()
 
 			// the sweeper read the tree, then the tablet synced a change
