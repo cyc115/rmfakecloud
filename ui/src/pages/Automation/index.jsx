@@ -2,19 +2,83 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "react-toastify";
 import apiService from "../../services/api.service";
 import Spinner from "../../components/Spinner";
-import RuleDrawer from "./RuleDrawer";
+import RuleEditor from "./RuleEditor";
+import Sentence from "./Sentence";
 import {
-  INTERVALS, SKIP_CHIP, SKIP_LABELS, destinationLabel, exampleRule, fmtAgo, fmtTime,
-  isPipeline, missingFor, newRule, pendingText, pipelineSummary, runCounts, sourceLabel, triggerPhrase, withDisplayNames,
+  INTERVALS, SKIP_CHIP, SKIP_LABELS, exampleRule, fmtAgo, fmtTime, isPipeline, missingFor, newPipelineRule,
+  pendingText, runCounts, sentenceText, withDisplayNames,
 } from "./rules";
-import "./AutoOrganize.scss";
+import "./Automation.scss";
 
-function statusText(settings, status) {
-  if (status.running) return { cls: "running", text: "Sweep running…" };
-  const last = status.lastSweep ? `last sweep ${fmtTime(status.lastSweep.at)}` : "no sweep yet";
-  if (!settings.enabled) return { cls: "paused", text: `Paused · ${last}` };
-  const next = status.nextAt ? ` · next ${fmtTime(status.nextAt)}` : "";
-  return { cls: "", text: `Running every ${settings.intervalMinutes} min · ${last}${next}` };
+// modePill the header pill: Live / Dry-run and how often rules are checked
+function modePill(settings, status) {
+  if (status.running) return { cls: "running", text: "Running now…" };
+  if (!settings.enabled) return { cls: "paused", text: "Paused" };
+  const live = settings.mode === "live";
+  return { cls: live ? "" : "dry", text: `${live ? "Live" : "Dry-run"} · checks every ${settings.intervalMinutes} min` };
+}
+
+// headerStatus the sweeper and page-watch lines under the header controls
+function headerStatus(settings, status, pipeline, live) {
+  const out = [];
+  const last = status.lastSweep ? `Documents: last check ${fmtTime(status.lastSweep.at)}` : "Documents: not checked yet";
+  const next = settings.enabled && status.nextAt ? ` · next ${fmtTime(status.nextAt)}` : "";
+  out.push({ cls: "", text: last + next });
+  if (pipeline) {
+    if (!pipeline.enabled) {
+      out.push({ cls: "muted", text: "Pages: page watch is off on this server; page rules are saved but nothing is sent." });
+    } else {
+      let t = pipeline.lastRun ? `Pages: last check ${fmtTime(pipeline.lastRun.at)}` : "Pages: not checked yet";
+      if (pipeline.nextAt) t += ` · next ${fmtTime(pipeline.nextAt)}`;
+      out.push({ cls: "", text: t });
+      if (pipeline.lastError) out.push({ cls: "bad", text: `Last page check failed: ${pipeline.lastError}` });
+      if (pipeline.pendingPipeline > 0) out.push({ cls: "muted", text: pendingText(pipeline.pendingPipeline, live) });
+    }
+  }
+  return out;
+}
+
+// ruleStatus the line under a rule: last run, what it did, errors
+function ruleStatus({ rule, view, moves, pipeline, sweep, missing, sharesSource }) {
+  const out = [];
+  if (isPipeline(rule)) {
+    if (!rule.enabled) out.push({ text: "paused" });
+    else if (!pipeline || !pipeline.enabled) out.push({ text: "page watch is off on this server" });
+    else if (pipeline.lastError) out.push({ cls: "bad", text: `last check failed: ${pipeline.lastError}` });
+    else if (pipeline.lastRun) {
+      out.push({ cls: "ok", text: `● ran ${fmtAgo(pipeline.lastRun.at)}` });
+      out.push({ text: runCounts(pipeline.lastRun) });
+    } else out.push({ text: "not run yet" });
+    for (const m of missing) {
+      const w = (rule.watch || []).find((x) => x.id === m.watchId) || {};
+      out.push({ cls: "warn", text: `${w.name || m.name || m.watchId}: ${m.inTrash ? "watched item is in the Trash" : "watched item no longer exists"}` });
+    }
+    return out;
+  }
+  if (!rule.enabled) {
+    out.push({ text: "paused" });
+  } else {
+    out.push(sweep ? { cls: "ok", text: `● ran ${fmtAgo(sweep.at)}` } : { text: "not run yet" });
+  }
+  if (view) {
+    for (const p of view.problems) out.push({ cls: "bad", text: p });
+    if (rule.enabled && view.problems.length === 0) out.push({ text: view.matches > 0 ? `${view.matches} would move now` : "nothing to move now" });
+    if (view.holds > 0) out.push({ text: `${view.holds} held` });
+    if (view.optedOut > 0) out.push({ cls: "tag", text: `${view.optedOut} opted out` });
+    if (view.destWillCreate) out.push({ text: "folder created on first live move" });
+    if (view.loopsWith && view.loopsWith.length) out.push({ cls: "warn", text: `loops with rule ${view.loopsWith.join(", ")}` });
+    if (view.sourceRenamedFrom) out.push({ text: `folder renamed from “${view.sourceRenamedFrom}”` });
+    if (view.destRenamedFrom) out.push({ text: `destination renamed from “${view.destRenamedFrom}”` });
+  }
+  const last = moves.find((m) => m.ruleId === rule.id && m.kind !== "undo");
+  if (last) {
+    out.push({
+      text: `${last.mode === "LIVE" ? "moved" : "would have moved"} ${last.docName} ${fmtAgo(last.at)}${last.undoneAt ? " · undone" : ""}`,
+      undo: !last.holdId && last.canUndo && !last.undoneAt ? last : null,
+    });
+  }
+  if (sharesSource) out.push({ cls: "order", text: "order matters: shares a folder with another rule" });
+  return out;
 }
 
 function Kebab({ items }) {
@@ -42,36 +106,8 @@ function Kebab({ items }) {
   );
 }
 
-function RuleRow({ rule, index, count, view, folders, sharesSource, missing = [], onToggle, onEdit, onDuplicate, onPreview, onMove, onDelete, drag }) {
-  const chips = [];
-  if (view) {
-    for (const p of view.problems) chips.push(<span key={p} className="ao-chip bad">{p}</span>);
-    if (rule.enabled && view.problems.length === 0) {
-      chips.push(<span key="m" className={`ao-chip ${view.matches > 0 ? "ok" : ""}`}>{view.matches} match now</span>);
-    }
-    chips.push(<span key="l" className="ao-chip">{view.lastMoveAt ? `last move ${fmtAgo(view.lastMoveAt)}` : "never moved"}</span>);
-    if (view.holds > 0) chips.push(<span key="h" className="ao-chip">{view.holds} held</span>);
-    if (view.optedOut > 0) chips.push(<span key="o" className="ao-chip tag">{view.optedOut} opted out</span>);
-    if (view.destWillCreate) chips.push(<span key="c" className="ao-chip">folder created on first live move</span>);
-    if (view.loopsWith && view.loopsWith.length) {
-      chips.push(<span key="lw" className="ao-chip warn" title="The 24 h cycle guard limits this to one round trip.">loops with rule {view.loopsWith.join(", ")}</span>);
-    }
-  }
-  if (sharesSource) chips.push(<span key="om" className="ao-chip order" title="Shares a source with another rule; the first match wins">order matters</span>);
-  if (!rule.enabled) chips.push(<span key="d" className="ao-chip">disabled</span>);
-
-  const pipe = isPipeline(rule);
-  const src = pipe ? "" : sourceLabel(rule, folders, view && view.sourceName);
-  const dst = pipe ? "" : destinationLabel(rule, folders, view && view.destName);
-  if (pipe) {
-    const gone = new Map(missing.map((m) => [m.watchId, m]));
-    for (const w of rule.watch || []) {
-      const m = gone.get(w.id);
-      chips.push(m
-        ? <span key={`${w.kind}${w.id}`} className="ao-chip warn" title="The page watch cannot find this item outside the Trash; nothing is sent for it.">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id}: {m.inTrash ? "watched item is in the Trash" : "watched item no longer exists"}</span>
-        : <span key={`${w.kind}${w.id}`} className="ao-chip">{w.kind === "folder" ? "📁" : "📓"} {w.name || w.id || "My files"}</span>);
-    }
-  }
+function RuleRow({ rule, index, count, ctx, status, busy, onUndo, onToggle, onEdit, onDuplicate, onPreview, onMove, onDelete, drag }) {
+  const custom = rule.name && rule.name !== sentenceText(rule, ctx) ? rule.name : "";
   return (
     <div className={`ao-rule ${rule.enabled ? "" : "off"} ${drag.over === index ? "dragover" : ""}`}
       onDragOver={(e) => { e.preventDefault(); drag.setOver(index); }}
@@ -80,31 +116,32 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, missing = []
       <span className="ao-grip" title="Drag to reorder" draggable
         onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(index)); drag.start(index); }}
         onDragEnd={() => drag.setOver(null)}>⋮⋮</span>
-      <label className="ao-sw" title={rule.enabled ? "Enabled" : "Disabled"}>
-        <input type="checkbox" checked={rule.enabled} onChange={(e) => onToggle(e.target.checked)} aria-label={`Rule ${index + 1} enabled`} />
+      <label className="ao-sw" title={rule.enabled ? "On" : "Off"}>
+        <input type="checkbox" checked={rule.enabled} onChange={(e) => onToggle(e.target.checked)} aria-label={`Rule ${index + 1} on`} />
         <i />
       </label>
       <div className="ao-sent">
-        <div className="s">
-          <span className="ao-num">{index + 1}.</span>
-          {rule.name ? <><b>{rule.name}</b><span className="ao-hint"> · </span></> : null}
-          {pipe ? (
-            <><b>{pipelineSummary(rule)}</b><span className="arr">·</span><span className="p">{triggerPhrase(rule.trigger)}</span></>
-          ) : (
-            <>
-              <b>{src}</b><span className="arr">→</span><span className="p">{triggerPhrase(rule.trigger)}</span>
-              <span className="arr">→</span><b>{dst}</b>
-            </>
-          )}
-          {view && view.sourceRenamedFrom && <span className="ao-hint"> (source renamed from “{view.sourceRenamedFrom}”)</span>}
-          {view && view.destRenamedFrom && <span className="ao-hint"> (renamed from “{view.destRenamedFrom}”)</span>}
+        {custom && <div className="ao-rname">{custom}</div>}
+        <Sentence rule={rule} ctx={ctx} onClick={onEdit} />
+        <div className="ao-meta">
+          {status.map((s, i) => (
+            <span key={i} className={`ao-ms ${s.cls || ""}`}>
+              {i > 0 && <span className="sep"> · </span>}
+              {s.text}
+              {s.undo && (
+                <>
+                  <span className="sep"> · </span>
+                  <button type="button" className="ao-link" disabled={busy} onClick={() => onUndo(s.undo)}>undo</button>
+                </>
+              )}
+            </span>
+          ))}
         </div>
-        <div className="ao-chips">{chips}</div>
       </div>
       <Kebab items={[
         { label: "Edit", onClick: onEdit },
         { label: "Duplicate", onClick: onDuplicate },
-        { label: "Preview this rule", onClick: onPreview, disabled: pipe },
+        { label: "Preview this rule", onClick: onPreview, disabled: isPipeline(rule) },
         "-",
         { label: "Move up", onClick: () => onMove(-1), disabled: index === 0 },
         { label: "Move down", onClick: () => onMove(1), disabled: index === count - 1 },
@@ -117,7 +154,7 @@ function RuleRow({ rule, index, count, view, folders, sharesSource, missing = []
 
 function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, busy }) {
   if (!plan) {
-    return <div className="ao-empty-pane">Press <b>Preview</b> to see what the next sweep would do. Nothing moves.</div>;
+    return <div className="ao-empty-pane">Press <b>Preview</b> to see what the next check would do. Nothing moves.</div>;
   }
   const skipped = plan.skipped.filter((s) => s.reason !== "claimed");
   const claimed = plan.skipped.filter((s) => s.reason === "claimed");
@@ -160,9 +197,9 @@ function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, bu
       <div className="ao-apply">
         {partial ? (
           <>
-            {/* applying runs a sweep of every rule, so it is offered only on a full preview */}
+            {/* applying runs every document rule, so it is offered only on a full preview */}
             <button className="ao-btn" disabled={busy} onClick={onPreviewAll}>Preview all rules</button>
-            <span className="ao-hint">This preview covers one rule. A sweep applies every rule in order, so preview all rules to apply.</span>
+            <span className="ao-hint">This preview covers one rule. A run applies every document rule in order, so preview all rules to apply.</span>
           </>
         ) : (
           <>
@@ -181,7 +218,7 @@ function PreviewPane({ plan, partial, live, onApply, onPreviewAll, onReapply, bu
 }
 
 function MovesPane({ moves, onUndo, onReapply, busy }) {
-  if (!moves.length) return <div className="ao-empty-pane">No sweeper moves yet.</div>;
+  if (!moves.length) return <div className="ao-empty-pane">No moves yet.</div>;
   return (
     <>
       {moves.map((m) => (
@@ -205,13 +242,13 @@ function MovesPane({ moves, onUndo, onReapply, busy }) {
           </span>
         </div>
       ))}
-      <div className="ao-grp"><span className="ao-hint">Last 50 sweeper moves. Manual moves from the tablet are not listed. Undo reverses the move and sets a hold so the rule does not re-move it while its trigger inputs are unchanged.</span></div>
+      <div className="ao-grp"><span className="ao-hint">Last 50 moves made by rules. Manual moves from the tablet are not listed. Undo reverses the move and sets a hold so the rule does not re-move it while its trigger inputs are unchanged.</span></div>
     </>
   );
 }
 
 function RunsPane({ runs }) {
-  if (!runs.length) return <div className="ao-empty-pane">No sweeps yet.</div>;
+  if (!runs.length) return <div className="ao-empty-pane">No document checks yet.</div>;
   return (
     <div className="ao-runs-wrap">
       <table className="ao-runs">
@@ -243,52 +280,26 @@ function RunsPane({ runs }) {
   );
 }
 
-function PipelinePanel({ pipeline, live, busy, onRun }) {
+function PageRunsPane({ pipeline }) {
+  if (!pipeline || !pipeline.enabled) return <div className="ao-empty-pane">Page watch is off on this server. Page rules are saved but nothing is sent.</div>;
   const runs = pipeline.runs || [];
-  const last = pipeline.lastRun;
-  let status = "Page watch is off on this server.";
-  let cls = "paused";
-  if (pipeline.enabled) {
-    cls = pipeline.lastError ? "bad" : "";
-    status = pipeline.lastError
-      ? `Last run failed: ${pipeline.lastError}`
-      : last ? `Last run ${fmtTime(last.at)}` : "No run yet";
-    if (pipeline.nextAt) status += ` · next ${fmtTime(pipeline.nextAt)}`;
-  }
+  if (!runs.length) return <div className="ao-empty-pane">No page checks yet.</div>;
   return (
-    <div className="ao-card ao-pipeline">
-      <div className="ao-card-h">
-        <h2>Pipeline</h2>
-        <span className={`ao-status ${cls}`}><span className="dot" />{status}</span>
-        <span className="ao-spacer" />
-        <button className="ao-btn primary sm" disabled={busy || !pipeline.enabled} onClick={onRun}
-          title={pipeline.enabled ? "" : "Set RM_PAGES_URL to turn page watch on"}>Run now</button>
-      </div>
-      {pipeline.enabled && pipeline.pendingPipeline > 0 && (
-        <div className="ao-grp"><span className="ao-hint">{pendingText(pipeline.pendingPipeline, live)}</span></div>
-      )}
-      {runs.length === 0 ? (
-        <div className="ao-empty-pane">{pipeline.enabled ? "No runs yet." : "Pipeline rules are saved but nothing is sent."}</div>
-      ) : (
-        <div className="ao-pruns">
-          {runs.map((r) => (
-            <div className={`ao-prun ${r.error ? "bad" : ""}`} key={`${r.at}-${r.trigger}`}>
-              <span className="when">{fmtTime(r.at)}</span>
-              <span className={`ao-chip ${r.mode === "live" ? "live" : "dry"}`}>{r.mode}</span>
-              <span className="trig">{r.trigger}</span>
-              <span className="nums">
-                {runCounts(r)} · {r.skipped} skipped
-              </span>
-              {r.error && <span className="errbox">{r.error}</span>}
-            </div>
-          ))}
+    <div className="ao-pruns">
+      {runs.map((r) => (
+        <div className={`ao-prun ${r.error ? "bad" : ""}`} key={`${r.at}-${r.trigger}`}>
+          <span className="when">{fmtTime(r.at)}</span>
+          <span className={`ao-chip ${r.mode === "live" ? "live" : "dry"}`}>{r.mode}</span>
+          <span className="trig">{r.trigger}</span>
+          <span className="nums">{runCounts(r)} · {r.skipped} skipped</span>
+          {r.error && <span className="errbox">{r.error}</span>}
         </div>
-      )}
+      ))}
     </div>
   );
 }
 
-export default function AutoOrganize() {
+export default function Automation() {
   const [config, setConfig] = useState(null);
   const [view, setView] = useState(null);
   const [log, setLog] = useState({ moves: [], runs: [] });
@@ -301,6 +312,7 @@ export default function AutoOrganize() {
   const [drawer, setDrawer] = useState({ open: false, rule: null, index: -1 });
   const [pipeline, setPipeline] = useState(null);
   const [watchables, setWatchables] = useState([]);
+  const [pageTags, setPageTags] = useState([]);
   const [dragFrom, setDragFrom] = useState(null);
   const [dragOver, setDragOver] = useState(null);
   const activityRef = useRef(null);
@@ -308,6 +320,8 @@ export default function AutoOrganize() {
   // consecutive edits never PUT a stale revision
   const configRef = useRef(null);
   const saveChain = useRef(Promise.resolve());
+
+  const refreshPipeline = useCallback(() => apiService.getPipeline().then(setPipeline).catch(() => {}), []);
 
   const refresh = useCallback(async () => {
     try {
@@ -323,20 +337,20 @@ export default function AutoOrganize() {
       setError(e.message);
       return;
     }
-    // the pipeline extras are optional: the page works without them
-    apiService.getPipeline().then(setPipeline).catch(() => {});
+    // the page-watch extras are optional: the page works without them
+    refreshPipeline();
     apiService.getWatchables().then((w) => setWatchables(w.items)).catch(() => {});
-  }, []);
+  }, [refreshPipeline]);
 
   useEffect(() => {
     refresh();
     const timer = setInterval(() => {
       apiService.getAutoOrganizeState().then(setView).catch(() => {});
       apiService.getAutoOrganizeLog().then(setLog).catch(() => {});
-      apiService.getPipeline().then(setPipeline).catch(() => {});
+      refreshPipeline();
     }, 30000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, refreshPipeline]);
 
   if (error && !config) {
     return <div className="ao"><div className="ao-wrap"><div className="ao-alert">{error}</div></div></div>;
@@ -344,9 +358,9 @@ export default function AutoOrganize() {
   if (!config || !view) return <Spinner />;
 
   const folders = view.folders;
+  const ctx = { folders, watchables };
   const live = config.settings.mode === "live";
-  const st = statusText(config.settings, view.status);
-  const viewOf = (id) => view.rules.find((r) => r.ruleId === id);
+  const pill = modePill(config.settings, view.status);
 
   // update: (latest config) => next config
   const save = (update) => {
@@ -392,47 +406,56 @@ export default function AutoOrganize() {
     }
   };
 
+  const rules = config.rules;
+  const hasMoveRules = rules.some((r) => r.enabled && !isPipeline(r));
+  const hasPageRules = rules.some((r) => r.enabled && isPipeline(r));
+
+  // sweep: the document rules; false when the user cancelled the live confirm
+  const sweep = async () => {
+    if (live) {
+      const p = await apiService.previewAutoOrganize({});
+      if (p.moves.length === 0) {
+        toast.info("Nothing to move right now.");
+        setPlan(p);
+        setPlanPartial(false);
+        setTab("preview");
+        return true;
+      }
+      // eslint-disable-next-line no-alert
+      if (!window.confirm(`This will move ${p.moves.length} document${p.moves.length === 1 ? "" : "s"}. Continue?`)) return false;
+    }
+    const res = await apiService.runAutoOrganizeNow();
+    const r = res.run;
+    if (r.mode === "LIVE") toast.success(`Documents checked: ${r.moved} moved, ${r.errors} errors`);
+    else toast.info(`Dry run: ${r.planned} would move`);
+    setPlan(res.plan);
+    setPlanPartial(false);
+    setTab(r.mode === "LIVE" ? "moves" : "preview");
+    return true;
+  };
+
+  const checkPages = async () => {
+    const r = await apiService.runPipelineNow();
+    if (r.error) toast.error(`Page check: ${r.error}`);
+    else toast.success(`Pages checked: ${runCounts(r)}`);
+    if (!hasMoveRules) setTab("pages");
+  };
+
+  // Run now: the document rules (sweep) and the page rules (page watch)
   const runNow = async () => {
     setBusy(true);
     try {
-      if (live) {
-        const p = await apiService.previewAutoOrganize({});
-        if (p.moves.length === 0) {
-          toast.info("Nothing to move right now.");
-          setPlan(p);
-          setPlanPartial(false);
-          setTab("preview");
-          return;
-        }
-        // eslint-disable-next-line no-alert
-        if (!window.confirm(`This will move ${p.moves.length} document${p.moves.length === 1 ? "" : "s"}. Continue?`)) return;
+      const pages = hasPageRules && pipeline && pipeline.enabled;
+      if (hasMoveRules || !pages) {
+        if (!(await sweep())) return;
       }
-      const res = await apiService.runAutoOrganizeNow();
-      const r = res.run;
-      if (r.mode === "LIVE") toast.success(`Sweep done: ${r.moved} moved, ${r.errors} errors`);
-      else toast.info(`Dry sweep: ${r.planned} would move`);
-      setPlan(res.plan);
-      setPlanPartial(false);
-      setTab(r.mode === "LIVE" ? "moves" : "preview");
+      if (pages) await checkPages();
       await refresh();
     } catch (e) {
       toast.error(e.status === 409 ? `Not run: ${e.message}` : e.message);
     } finally {
       setBusy(false);
-    }
-  };
-
-  const runPipeline = async () => {
-    setBusy(true);
-    try {
-      const r = await apiService.runPipelineNow();
-      if (r.error) toast.error(`Pipeline run: ${r.error}`);
-      else toast.success(`Pipeline run: ${runCounts(r)}`);
-    } catch (e) {
-      toast.error(e.status === 409 ? `Not run: ${e.message}` : e.message);
-    } finally {
-      setBusy(false);
-      apiService.getPipeline().then(setPipeline).catch(() => {});
+      refreshPipeline();
     }
   };
 
@@ -462,9 +485,10 @@ export default function AutoOrganize() {
     }
   };
 
-  const rules = config.rules;
   const openDrawer = (rule, index) => {
-    apiService.getWatchables().then((w) => setWatchables(w.items)).catch(() => {});
+    // one after the other: both read the tree, whose root blob lock is not shared
+    apiService.getWatchables().then((w) => setWatchables(w.items)).catch(() => {})
+      .then(() => apiService.getPageTags()).then((t) => t && setPageTags(t.tags)).catch(() => {});
     setDrawer({ open: true, rule: JSON.parse(JSON.stringify(rule)), index });
   };
   const closeDrawer = () => setDrawer((d) => ({ ...d, open: false }));
@@ -518,90 +542,99 @@ export default function AutoOrganize() {
       reorder(fromId, 0, rules[to].id);
     },
   };
-  const sharesSource = (rule) => !isPipeline(rule) &&
+  const sharesSource = (rule) => !isPipeline(rule) && rule.enabled &&
     rules.filter((r) => r.enabled && !isPipeline(r) && r.source.id === rule.source.id).length > 1;
   const otherRules = rules.map((r, i) => ({ ...r, _number: i + 1 })).filter((r, i) => i !== drawer.index && !isPipeline(r));
+  const example = exampleRule(folders);
 
   return (
     <div className="ao">
       <div className="ao-wrap">
-        {/* header bar */}
-        <div className="ao-hdr">
-          <h1>Auto-organize</h1>
-          <span className={`ao-status ${st.cls}`}><span className="dot" />{st.text}</span>
-          <span className="ao-spacer" />
-          <label className="ao-sw master" title={config.settings.enabled ? "Sweeper on" : "Sweeper off"}>
-            <input type="checkbox" checked={config.settings.enabled} aria-label="Sweeper on/off"
-              onChange={(e) => setSettings({ enabled: e.target.checked })} />
-            <i />
-          </label>
-          <div className="ao-seg" title="Mode" role="radiogroup" aria-label="Mode">
-            <label className={live ? "on" : ""}>
-              <input type="radio" name="ao-mode" checked={live} onChange={() => setSettings({ mode: "live" })} /><span>Live</span>
-            </label>
-            <label className={`dry ${live ? "" : "on"}`}>
-              <input type="radio" name="ao-mode" checked={!live} onChange={() => setSettings({ mode: "dry" })} /><span>Dry-run</span>
-            </label>
-          </div>
-          <span className="ao-every">Every
-            <select className="ao-inline-sel" value={config.settings.intervalMinutes} aria-label="Sweep interval"
-              onChange={(e) => setSettings({ intervalMinutes: parseInt(e.target.value, 10) })}>
-              {INTERVALS.map((m) => <option key={m} value={m}>{m} min</option>)}
-            </select>
-          </span>
-          <span className="ao-acts">
-            <button className="ao-btn" disabled={busy} onClick={() => runPreview()}>Preview</button>
-            <button className="ao-btn primary" disabled={busy || !config.settings.enabled || view.status.running}
-              title={config.settings.enabled ? "" : "Turn the sweeper on to run"} onClick={runNow}>
-              {live ? "Run now" : "Run dry sweep"}
-            </button>
-          </span>
-        </div>
-
-        {/* rules */}
-        <div className="ao-card">
-          <div className="ao-card-h">
-            <h2>Rules</h2>
-            <span className="ao-hint">Move rules run top to bottom · first match wins per document per sweep · pipeline rules run independently</span>
-            <button className="ao-tip" title="Each sweep is one pass over the Move rules in this order. A document is claimed by the first Move rule that matches it and is not evaluated by later Move rules in that sweep. Pipeline rules do not take part in that order: each one sends the changed pages of everything it watches, whatever other rules match. A document the sweeper moved out of a folder in the last 24 h is never moved back into it, so two opposite rules can ping-pong at most once. Documents tagged “no automation” are always skipped.">?</button>
-          </div>
-          {rules.length === 0 ? (
-            <div className="ao-empty">
-              No rules yet. The sweeper does nothing until you add one.
-              <div><button className="ao-btn primary" style={{ marginTop: 12 }} onClick={() => openDrawer(exampleRule(folders), -1)}>Start with the example rule</button></div>
-              <div className="ex"><b>Research Reports</b> → finished reading, at least 3 pages, settled 6 h → <b>Research Reports / Read</b></div>
+        <div className="ao-card ao-main">
+          <div className="ao-hdr">
+            <div className="ao-hdr-top">
+              <h1>Automation</h1>
+              <span className="ao-spacer" />
+              <span className={`ao-status ${pill.cls}`}><span className="dot" />{pill.text}</span>
+              <button className="ao-btn primary" onClick={() => openDrawer(newPipelineRule(pipeline && pipeline.defaults), -1)}>+ New</button>
             </div>
-          ) : rules.map((r, i) => (
-            <RuleRow key={r.id} rule={r} index={i} count={rules.length} view={viewOf(r.id)} folders={folders}
-              sharesSource={sharesSource(r)} missing={missingFor(pipeline, r.id)} drag={drag}
-              onToggle={(on) => setRules((cur) => cur.map((x) => (x.id === r.id ? { ...x, enabled: on } : x)))}
-              onEdit={() => openDrawer(r, i)}
-              onDuplicate={() => {
-                const copy = { ...JSON.parse(JSON.stringify(r)), id: "", name: r.name ? `${r.name} (copy)` : "", enabled: false };
-                setRules((cur) => {
-                  const next = [...cur];
-                  next.splice(next.findIndex((x) => x.id === r.id) + 1, 0, copy);
-                  return next;
-                });
-              }}
-              onPreview={() => runPreview(r.enabled ? { ruleId: r.id } : { rule: r })}
-              onMove={(d) => reorder(r.id, d)}
-              onDelete={() => deleteRule(i)} />
-          ))}
-          <div className="ao-add-row">
-            <button className="ao-btn" onClick={() => openDrawer(newRule(folders), -1)}>+ Add rule</button>
-            <span className="ao-hint">Pickers only — folders come from the live tree, never typed UUIDs.</span>
+            <div className="ao-hdr-ctl">
+              <label className="ao-sw master" title={config.settings.enabled ? "Automation on" : "Automation off"}>
+                <input type="checkbox" checked={config.settings.enabled} aria-label="Automation on/off"
+                  onChange={(e) => setSettings({ enabled: e.target.checked })} />
+                <i />
+              </label>
+              <div className="ao-seg" title="Mode" role="radiogroup" aria-label="Mode">
+                <label className={live ? "on" : ""}>
+                  <input type="radio" name="ao-mode" checked={live} onChange={() => setSettings({ mode: "live" })} /><span>Live</span>
+                </label>
+                <label className={`dry ${live ? "" : "on"}`}>
+                  <input type="radio" name="ao-mode" checked={!live} onChange={() => setSettings({ mode: "dry" })} /><span>Dry-run</span>
+                </label>
+              </div>
+              <span className="ao-every">Every
+                <select className="ao-inline-sel" value={config.settings.intervalMinutes} aria-label="Check interval"
+                  onChange={(e) => setSettings({ intervalMinutes: parseInt(e.target.value, 10) })}>
+                  {INTERVALS.map((m) => <option key={m} value={m}>{m} min</option>)}
+                </select>
+              </span>
+              <span className="ao-spacer" />
+              <span className="ao-acts">
+                <button className="ao-btn" disabled={busy} onClick={() => runPreview()}>Preview</button>
+                <button className="ao-btn" disabled={busy || !config.settings.enabled || view.status.running}
+                  title={config.settings.enabled ? "Check every rule now" : "Turn automation on to run"} onClick={runNow}>
+                  Run now
+                </button>
+              </span>
+            </div>
+            <div className="ao-hdr-st">
+              {headerStatus(config.settings, view.status, pipeline, live).map((s) => (
+                <div key={s.text} className={`ao-hs ${s.cls}`}>{s.text}</div>
+              ))}
+            </div>
+          </div>
+
+          <div className="ao-rules">
+            {rules.length === 0 ? (
+              <div className="ao-empty">
+                No automations yet. Nothing runs until you add one.
+                <div className="ex"><Sentence rule={example} ctx={ctx} /></div>
+                <div><button className="ao-btn" style={{ marginTop: 12 }} onClick={() => openDrawer(example, -1)}>Start with this example</button></div>
+              </div>
+            ) : rules.map((r, i) => (
+              <RuleRow key={r.id} rule={r} index={i} count={rules.length} ctx={ctx} busy={busy} drag={drag}
+                status={ruleStatus({
+                  rule: r, view: view.rules.find((x) => x.ruleId === r.id), moves: log.moves || [], pipeline,
+                  sweep: view.status.lastSweep, missing: missingFor(pipeline, r.id), sharesSource: sharesSource(r),
+                })}
+                onUndo={undo}
+                onToggle={(on) => setRules((cur) => cur.map((x) => (x.id === r.id ? { ...x, enabled: on } : x)))}
+                onEdit={() => openDrawer(r, i)}
+                onDuplicate={() => {
+                  // an auto name stays auto (empty → the next save names it); a custom name gets "(copy)"
+                  const custom = r.name && r.name !== sentenceText(r, ctx);
+                  const copy = { ...JSON.parse(JSON.stringify(r)), id: "", name: custom ? `${r.name} (copy)` : "", enabled: false };
+                  setRules((cur) => {
+                    const next = [...cur];
+                    next.splice(next.findIndex((x) => x.id === r.id) + 1, 0, copy);
+                    return next;
+                  });
+                }}
+                onPreview={() => runPreview(r.enabled ? { ruleId: r.id } : { rule: r })}
+                onMove={(d) => reorder(r.id, d)}
+                onDelete={() => deleteRule(i)} />
+            ))}
+          </div>
+          <div className="ao-note">
+            Every rule is one sentence. Tap a sentence to edit it. Last run, undo and errors live under each rule.
+            <button className="ao-tip" title="Document rules run top to bottom: a document is claimed by the first rule that matches it in each check. Page rules run independently. A document a rule moved out of a folder in the last 24 h is never moved back into it, so two opposite rules can ping-pong at most once. Documents tagged “no automation” are always skipped.">?</button>
           </div>
         </div>
 
-        {(pipeline && (pipeline.enabled || rules.some(isPipeline))) && (
-          <PipelinePanel pipeline={pipeline} live={live} busy={busy} onRun={runPipeline} />
-        )}
-
-        {/* activity */}
+        {/* history */}
         <div className="ao-card" ref={activityRef}>
           <div className="ao-tabs" role="tablist">
-            {[["preview", "Preview"], ["moves", "Moves"], ["runs", "Runs"]].map(([k, l]) => (
+            {[["preview", "Preview"], ["moves", "Moves"], ["runs", "Runs"], ["pages", "Page checks"]].map(([k, l]) => (
               <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
             ))}
             <span className="right">
@@ -614,12 +647,13 @@ export default function AutoOrganize() {
               onPreviewAll={() => runPreview()} onReapply={reapply} />}
             {tab === "moves" && <MovesPane moves={log.moves} busy={busy} onUndo={undo} onReapply={reapply} />}
             {tab === "runs" && <RunsPane runs={log.runs} />}
+            {tab === "pages" && <PageRunsPane pipeline={pipeline} />}
           </div>
         </div>
       </div>
 
-      <RuleDrawer open={drawer.open} initial={drawer.rule} isNew={drawer.index < 0} folders={folders}
-        watchables={watchables} pipelineDefaults={pipeline && pipeline.defaults}
+      <RuleEditor open={drawer.open} initial={drawer.rule} isNew={drawer.index < 0} folders={folders}
+        watchables={watchables} pageTags={pageTags} pipelineDefaults={pipeline && pipeline.defaults}
         otherRules={otherRules} onCancel={closeDrawer} onSave={saveRule}
         onDelete={() => deleteRule(drawer.index)}
         onShowPreview={(p) => {

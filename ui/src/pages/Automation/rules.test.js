@@ -1,7 +1,7 @@
 // Run: cd ui && npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ACTIONS, forSave, missingFor, pendingText, runCounts, newPipelineRule, newRule, pipelineSummary, switchAction, triggerPhrase } from "./rules.js";
+import { forSave, missingFor, pendingText, runCounts, newPipelineRule, newRule, switchAction } from "./rules.js";
 
 test("newPipelineRule has page_changed and empty watch", () => {
   const r = newPipelineRule({ prompt: "P", model: "m/x" });
@@ -12,20 +12,6 @@ test("newPipelineRule has page_changed and empty watch", () => {
   assert.equal(r.action.model, "m/x");
   assert.equal(r.scope, "all");
   assert.equal(r.enabled, true);
-});
-
-test("triggerPhrase(page_changed)", () => {
-  assert.equal(triggerPhrase({ type: "page_changed" }), "a watched page changes");
-});
-
-test("pipelineSummary counts watched items", () => {
-  assert.equal(pipelineSummary({ watch: [] }), "Watching 0 items → pipeline");
-  assert.equal(pipelineSummary({ watch: [{ id: "a" }] }), "Watching 1 item → pipeline");
-  assert.equal(pipelineSummary({ watch: [{ id: "a" }, { id: "b" }] }), "Watching 2 items → pipeline");
-});
-
-test("ACTIONS lists move and pipeline", () => {
-  assert.deepEqual(ACTIONS.map((a) => a.type), ["move", "pipeline"]);
 });
 
 const FOLDERS = [{ id: "", name: "My files", path: "My files" }, { id: "f1", name: "Work", path: "Work" }];
@@ -63,6 +49,26 @@ test("forSave trims prompt and model; whitespace-only becomes empty", () => {
   assert.equal("watch" in forSave({ ...newRule(FOLDERS), watch: [] }), false);
 });
 
+test("forSave: anywhere is the root folder entry for both page triggers", () => {
+  const root = [{ id: "", kind: "folder", name: "My files" }];
+  const pc = forSave(newPipelineRule(DEFAULTS));
+  assert.deepEqual(pc.watch, root);
+  const pt = forSave({ ...newPipelineRule(DEFAULTS), trigger: { type: "page_tagged", tag: " todo " }, watch: [] });
+  assert.deepEqual(pt.watch, root);
+  assert.equal(pt.trigger.tag, "todo");
+  const some = forSave({ ...newPipelineRule(DEFAULTS), watch: [{ id: "", kind: "folder" }, { id: "d1", kind: "document", name: "Notes" }] });
+  assert.deepEqual(some.watch, [{ id: "d1", kind: "document", name: "Notes" }]);
+});
+
+test("forSave: tasks false is kept, true is dropped, never on a move rule", () => {
+  const notes = forSave({ ...newPipelineRule(DEFAULTS), action: { type: "pipeline", tasks: false } });
+  assert.equal(notes.action.tasks, false);
+  const extract = forSave({ ...newPipelineRule(DEFAULTS), action: { type: "pipeline", tasks: true } });
+  assert.equal("tasks" in extract.action, false);
+  const move = forSave({ ...newRule(FOLDERS), action: { type: "move", tasks: false } });
+  assert.equal("tasks" in move.action, false);
+});
+
 test("missingFor filters by rule", () => {
   const p = { missingWatches: [{ ruleId: "a", watchId: "x" }, { ruleId: "b", watchId: "y" }] };
   assert.deepEqual(missingFor(p, "a"), [{ ruleId: "a", watchId: "x" }]);
@@ -73,12 +79,12 @@ test("missingFor filters by rule", () => {
 test("pendingText says Dry-run holds the changes in dry mode", () => {
   assert.equal(pendingText(0, false), "");
   assert.match(pendingText(3, false), /^3 page changes held by Dry-run mode/);
-  assert.doesNotMatch(pendingText(3, false), /rm-pages/);
-  assert.equal(pendingText(1, true), "1 page change waiting to be accepted by rm-pages.");
+  assert.doesNotMatch(pendingText(3, false), /rm-pages|pipeline/i);
+  assert.equal(pendingText(1, true), "1 page change waiting to be accepted.");
 });
 
-test("runCounts never counts feed events as pipeline sent", () => {
-  assert.equal(runCounts({ mode: "live", accepted: 5, pipelineAccepted: 2, pipeline: 2 }), "3 page changes sent, 2 to the pipeline");
-  assert.equal(runCounts({ mode: "dry", accepted: 1, pipelineAccepted: 0, pipeline: 4 }), "1 page change sent, 0 to the pipeline (4 held by Dry-run)");
-  assert.equal(runCounts({ mode: "live", accepted: 0, pipeline: 0 }), "0 page changes sent, 0 to the pipeline");
+test("runCounts never counts feed events as rule events", () => {
+  assert.equal(runCounts({ mode: "live", accepted: 5, pipelineAccepted: 2, pipeline: 2 }), "3 page changes to the timeline, 2 to your rules");
+  assert.equal(runCounts({ mode: "dry", accepted: 1, pipelineAccepted: 0, pipeline: 4 }), "1 page change to the timeline, 0 to your rules (4 held by Dry-run)");
+  assert.equal(runCounts({ mode: "live", accepted: 0, pipeline: 0 }), "0 page changes to the timeline, 0 to your rules");
 });

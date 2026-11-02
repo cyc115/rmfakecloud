@@ -1,5 +1,5 @@
 import {useEffect} from "react";
-import { BrowserRouter as Router, Route, Switch } from "react-router-dom";
+import { BrowserRouter as Router, Redirect, Route, Switch } from "react-router-dom";
 import { ToastContainer } from 'react-toastify';
 
 import apiService from "./services/api.service";
@@ -17,7 +17,7 @@ import Integrations from "./pages/Integrations";
 import Profile from "./pages/Profile";
 import Admin from "./pages/Admin";
 import ScreenShare from "./pages/ScreenShare";
-import AutoOrganize from "./pages/AutoOrganize";
+import Automation from "./pages/Automation";
 import NoMatch from "./pages/404";
 
 import "react-toastify/dist/ReactToastify.css";
@@ -53,7 +53,8 @@ export default function App() {
                 <PrivateRoute path="/integrations" component={Integrations} />
                 <PrivateRoute path="/profile" component={Profile} />
                 <PrivateRoute path="/screenshare" component={ScreenShare} />
-                <PrivateRoute path="/auto-organize" component={AutoOrganize} />
+                <PrivateRoute path="/automation" component={Automation} />
+                <Redirect from="/auto-organize" to="/automation" />
                 <PrivateRoute path="/admin" roles={[Role.Admin]} component={Admin} />
 
                 <Route path="/login" component={Login} />

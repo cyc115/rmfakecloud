@@ -9,7 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --test src/common/glitchtip.test.js src/pages/Documents/pseudoTree.test.js src/pages/Documents/pageParam.test.js src/pages/AutoOrganize/rules.test.js"
+    "test": "node --test src/common/glitchtip.test.js src/pages/Documents/pseudoTree.test.js src/pages/Documents/pageParam.test.js src/pages/Automation/rules.test.js src/pages/Automation/sentence.test.js"
   },
   "dependencies": {
     "@tanstack/react-table": "^8.21.3",

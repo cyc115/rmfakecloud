@@ -49,8 +49,8 @@ const NavigationBar = () => {
                   </Nav.Link>
                 </Nav.Item>
                 <Nav.Item>
-                  <Nav.Link as={NavLink} to="/auto-organize" eventKey="/auto-organize">
-                    Auto-organize
+                  <Nav.Link as={NavLink} to="/automation" eventKey="/automation">
+                    Automation
                   </Nav.Link>
                 </Nav.Item>
 				{ isAdmin() &&

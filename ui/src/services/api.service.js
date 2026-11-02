@@ -254,6 +254,9 @@ class ApiServices {
   getWatchables() {
     return this.autoOrganize("GET", "/watchables");
   }
+  getPageTags() {
+    return this.autoOrganize("GET", "/page-tags");
+  }
   getPipeline() {
     return this.autoOrganize("GET", "/pipeline");
   }
