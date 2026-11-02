@@ -23,6 +23,7 @@ func (app *ReactAppWrapper) registerAutoOrganizeRoutes(auth *gin.RouterGroup) {
 	ao.POST("preview", app.autoOrganizePreview)
 	ao.POST("run-now", app.autoOrganizeRunNow)
 	ao.GET("watchables", app.autoOrganizeWatchables)
+	ao.GET("page-tags", app.autoOrganizePageTags)
 	ao.GET("pipeline", app.pipelineStatus)
 	ao.POST("pipeline/run-now", app.pipelineRunNow)
 	ao.GET("log", app.autoOrganizeLog)

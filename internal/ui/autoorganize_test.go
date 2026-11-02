@@ -61,7 +61,7 @@ func newAOAPI(t *testing.T) *aoAPI {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &ReactAppWrapper{cfg: cfg, organizer: autoorganize.NewService(storage, hub.NewHub(), 0)}
+	app := &ReactAppWrapper{cfg: cfg, organizer: autoorganize.NewService(storage, hub.NewHub(), 0), blobs: storage}
 	router := gin.New()
 	auth := router.Group("/ui/api").Group("")
 	auth.Use(app.authMiddleware())
@@ -142,6 +142,7 @@ func TestAutoOrganizeAPIRefusesSync10AndAnonymous(t *testing.T) {
 		{"GET", "/ui/api/auto-organize/log?tab=moves"},
 		{"POST", "/ui/api/auto-organize/undo/x"},
 		{"POST", "/ui/api/auto-organize/reapply/x"},
+		{"GET", "/ui/api/auto-organize/page-tags"},
 	} {
 		code, body := a.do(ep.method, ep.path, old, nil)
 		if code != http.StatusBadRequest || body["error"] != "auto-organize requires sync15" {

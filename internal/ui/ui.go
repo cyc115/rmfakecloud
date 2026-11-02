@@ -83,6 +83,8 @@ type ReactAppWrapper struct {
 	mqtt          mqttBridge
 	organizer     *autoorganize.Service
 	pageWatch     *pagewatch.Service
+	// blobs the sync15 tree and blobs, read by the page-tags endpoint
+	blobs renderSource
 }
 
 // hack for serving index.html on /
@@ -131,6 +133,9 @@ func New(cfg *config.Config,
 		mqtt:        mqttBroker,
 		organizer:   organizer,
 		pageWatch:   pageWatch,
+	}
+	if blobHandler != nil {
+		staticWrapper.blobs = blobHandler
 	}
 	return &staticWrapper
 }
