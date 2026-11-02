@@ -18,6 +18,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {"status": "ok"})
 
     def do_POST(self):
+        if self.path != "/api/events":
+            # /api/render/doc is not stubbed: rmfakecloud falls back to its own exporter
+            return self._send(404, {"error": "not stubbed"})
         raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         try:
             events = json.loads(raw or b"{}").get("events") or []

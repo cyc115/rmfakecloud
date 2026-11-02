@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { useHistory, useLocation } from "react-router-dom";
+import { parsePageParam, clampPage, withPageParam } from "./pageParam";
 import { Button, ButtonGroup, Dropdown } from "react-bootstrap";
 import Navbar from 'react-bootstrap/Navbar';
 import { FaChevronRight, FaChevronLeft, } from "react-icons/fa6";
@@ -25,27 +27,38 @@ export default function FileViewer({ file, onSelect }) {
 
   const downloadUrl = `${constants.ROOT_URL}/documents/${file.id}`;
 
-  const [page, setPage] = useState(1);
+  const history = useHistory();
+  const location = useLocation();
+  // the URL's ?page=N; read through a ref so onLoadSuccess sees the current one
+  const wantedPage = useRef(null);
+  wantedPage.current = parsePageParam(location.search);
+
+  const [page, setPage] = useState(() => wantedPage.current || 1);
   const [pages, setPages] = useState(1);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(100);
   // Desktop fits the page to the pane's height; on phones the page scrolls,
   // so fit to the width instead.
   const isMobile = useIsMobile();
+  // set the page and keep the address in step (replace: paging adds no history)
+  const goTo = (n) => {
+    setPage(n);
+    history.replace({ search: withPageParam(history.location.search, n) });
+  };
   const onLoadSuccess = (pdf) => {
-    setPage(1);
     setPages(pdf.numPages);
+    if (wantedPage.current === null) {
+      setPage(1);
+      return;
+    }
+    const n = clampPage(wantedPage.current, pdf.numPages);
+    setPage(n);
+    if (n !== wantedPage.current) {
+      history.replace({ search: withPageParam(history.location.search, n) });
+    }
   };
-  const onPrev = () => {
-    setPage((p) => {
-      return Math.max(p - 1, 1);
-    });
-  };
-  const onNext = () => {
-    setPage((p) => {
-      return Math.min(p + 1, pages);
-    });
-  };
+  const onPrev = () => goTo(Math.max(page - 1, 1));
+  const onNext = () => goTo(Math.min(page + 1, pages));
   const parent = useRef(null);
   useEffect(() => {
     const resizeObserver = new ResizeObserver((event) => {
@@ -96,8 +109,8 @@ export default function FileViewer({ file, onSelect }) {
         {pages > 1 && (
           <div>
             <ButtonGroup aria-label="Basic example">
-              <Button size="sm" variant="outline-secondary" onClick={onPrev}><FaChevronLeft /></Button>
-              <Button size="sm" variant="outline-secondary" onClick={onNext}><FaChevronRight /></Button>
+              <Button size="sm" variant="outline-secondary" aria-label="Previous page" onClick={onPrev}><FaChevronLeft /></Button>
+              <Button size="sm" variant="outline-secondary" aria-label="Next page" onClick={onNext}><FaChevronRight /></Button>
             </ButtonGroup>
             <span style={{ margin: '0 10px' }}>
               Page: {page} of {pages}

@@ -18,6 +18,17 @@ PDF = (
     b"trailer<</Root 1 0 R>>\n%%EOF\n"
 )
 
+MULTI_PAGES = 5
+
+
+def multi_pdf(n=MULTI_PAGES):
+    kids = " ".join(f"{3 + i} 0 R" for i in range(n))
+    objs = [b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj ",
+            f"2 0 obj<</Type/Pages/Kids[{kids}]/Count {n}>>endobj ".encode()]
+    objs += [f"{3 + i} 0 obj<</Type/Page/MediaBox[0 0 200 200]/Parent 2 0 R>>endobj ".encode() for i in range(n)]
+    return b"%PDF-1.4\n" + b"".join(objs) + b"\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+
+
 LOGIN_JS = """async ([user, password]) => {
   const r = await fetch('/ui/api/login', {method: 'POST',
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify({email: user, password})});
@@ -83,11 +94,12 @@ def seed_pdf(browser, base_url):
     docs = api.get("/ui/api/documents").json()
     inbox = find(docs["Entries"], "Inbox")
     assert inbox, "seed missing: Inbox folder"
-    if not any(c["name"] == "Paper" for c in inbox.get("children") or []):
-        r = api.post("/ui/api/documents/upload", multipart={
-            "parent": inbox["id"],
-            "file": {"name": "Paper.pdf", "mimeType": "application/pdf", "buffer": PDF}})
-        assert r.ok, r.text()
+    for name, buf in (("Paper", PDF), ("Multi", multi_pdf())):
+        if not any(c["name"] == name for c in inbox.get("children") or []):
+            r = api.post("/ui/api/documents/upload", multipart={
+                "parent": inbox["id"],
+                "file": {"name": name + ".pdf", "mimeType": "application/pdf", "buffer": buf}})
+            assert r.ok, r.text()
     ctx.close()
 
 

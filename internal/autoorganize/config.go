@@ -59,10 +59,9 @@ const DefaultPipelineModel = "deepseek/deepseek-v4.1-flash"
 // DefaultPipelinePrompt the extraction intent a pipeline rule carries to rm-pages
 // when it names none. rm-pages adds the fixed output contract on its side.
 const DefaultPipelinePrompt = `Compare the BEFORE and AFTER images of one handwritten notebook page.
-List only the action items that are new in AFTER: things Mike intends to do. Ignore anything already present in BEFORE.
-Skip anything marked "-inbox": on a line, skip that line; on a heading, skip the block under it until the next heading or a clear gap; at the top of the page, skip the whole page. Put skipped items in "skipped".
-Write each task as one short line that starts with a verb. Fix obvious handwriting misreads.
-`
+List only the to-do items that are new in AFTER: lines Mike wrote as a checkbox ("- [ ]", "- []", "[ ]", "☐"). Do not turn prose, notes, questions without a checkbox, margin comments or diagrams into tasks. Ignore anything already present in BEFORE.
+Keep each task close to Mike's own words; fix only obvious handwriting misreads and read carefully (e.g. "measure" is not "find out"). Drop the checkbox and labels like "TODO:".
+Skip anything marked "-inbox": on a line, skip that line; on a heading, skip the block under it until the next heading or a clear gap; at the top of the page, skip the whole page. Put skipped items in "skipped".`
 
 // ParentSource createIfMissing parent meaning "the rule's source folder"
 const ParentSource = "source"
