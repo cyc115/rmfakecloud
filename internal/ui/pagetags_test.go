@@ -86,9 +86,10 @@ func TestPageTagsWithoutBlobStorageIs503(t *testing.T) {
 	a := newAOAPI(t)
 	app := &ReactAppWrapper{cfg: a.cfg, organizer: autoorganize.NewService(a.storage, hub.NewHub(), 0)}
 	router := gin.New()
-	auth := router.Group("/ui/api").Group("")
+	api := router.Group("/ui/api")
+	auth := api.Group("")
 	auth.Use(app.authMiddleware())
-	app.registerAutomationRoutes(auth)
+	app.registerAutomationRoutes(api, auth)
 	a.router = router
 	if code, body := a.do("GET", "/ui/api/automation/page-tags", a.token("mike", true), nil); code != http.StatusServiceUnavailable {
 		t.Fatalf("nil blobs: %d %v", code, body)

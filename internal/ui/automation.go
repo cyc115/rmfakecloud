@@ -18,12 +18,22 @@ const autoOrganizeLogger = "[automation] "
 // registerAutomationRoutes the rules API (R-B6). The old auto-organize paths
 // answer 410 with a pointer; they are registered first, outside the sync15
 // check, and do no work.
-func (app *ReactAppWrapper) registerAutomationRoutes(auth *gin.RouterGroup) {
+//
+// The automation group takes the web UI's login or the AUTOMATION_API_TOKEN
+// bearer (automationAuth); its OpenAPI description is GET /openapi.json.
+func (app *ReactAppWrapper) registerAutomationRoutes(api, auth *gin.RouterGroup) {
 	auth.Any("auto-organize", movedToAutomation)
 	auth.Any("auto-organize/*rest", movedToAutomation)
 
-	ao := auth.Group("automation")
-	ao.Use(app.requireSync15())
+	ao := api.Group("automation")
+	ao.Use(app.automationAuth(), app.requireSync15())
+	ao.GET("catalogue", automationCatalogue)
+	ao.GET("rules", app.listRules)
+	ao.POST("rules", app.createRule)
+	ao.GET("rules/:ruleId", app.getRule)
+	ao.PUT("rules/:ruleId", app.replaceRule)
+	ao.PATCH("rules/:ruleId", app.patchRule)
+	ao.DELETE("rules/:ruleId", app.deleteRule)
 	ao.GET("", app.getAutomation)
 	ao.PUT("", app.putAutomation)
 	ao.GET("state", app.autoOrganizeState)

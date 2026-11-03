@@ -18,6 +18,8 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	router.GET("/robots.txt", func(c *gin.Context) {
 		c.FileFromFS("/robots.txt", app.fs)
 	})
+	// the automation API's OpenAPI description; no auth (it holds no data)
+	router.GET("/openapi.json", serveAutomationOpenAPI)
 
 	//hack for index.html
 	router.NoRoute(func(c *gin.Context) {
@@ -91,7 +93,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	auth.GET("integrations/:intid/metadata/*path", app.getMetadataIntegration)
 	auth.GET("integrations/:intid/download/*path", app.downloadThroughIntegration)
 
-	app.registerAutomationRoutes(auth)
+	app.registerAutomationRoutes(r, auth)
 
 	ss := auth.Group("screenshare")
 	ss.GET("room", app.screenshareJoinActive)

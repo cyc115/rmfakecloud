@@ -1,0 +1,2274 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "rmfakecloud automation API",
+    "version": "1.0.0",
+    "description": "**What it is.** The automation API of Mike's rmfakecloud (his self-hosted reMarkable cloud, `http://remarkable.svc`): IFTTT-style rules that act on his reMarkable documents and handwritten pages. A rule is one sentence: **WHEN** a *subject* (`document` or `page`) **IN** *places* meets a *trigger* **AND** every *condition*, **THEN** do its one *action*. Examples: \"IF a document was created in the last 24 hours anywhere THEN add tag “new”\"; \"IF I finish reading a PDF in Research Reports THEN move it to Research Reports/Read\"; \"IF I write on a page of my inbox notebook THEN extract new to-dos to my vault inbox\".\n\n**Two engines read the same rules.** Document rules run in the *sweep* (every `settings.intervalMinutes`, after each tablet sync, and on `POST /run-now`): triggers and conditions read document metadata and tags; actions `move`, `add_tag`, `remove_tag` change the document on the server and the tablet picks the change up on its next sync. Page rules run in the *page watch*: new or changed handwriting (or a page tag) sends the page to rm-pages (`extract_tasks`, `save_notes`), which transcribes it with an LLM into Mike's Obsidian vault.\n\n**How to change rules.** Use the per-rule endpoints (`/rules`, `/rules/{ruleId}`); they reload, edit and save atomically and retry when the config changed underneath. `GET /catalogue` lists every trigger, condition and action with its fields, subjects and defaults: read it before writing a rule. `POST /preview` with `{\"rule\": ...}` shows what a draft rule would do right now without saving or changing anything; do that first, then create. `PUT /` replaces the whole config and needs the current `revision` (409 when stale).\n\n**Rule shape rules (validated on every save; a 400 names the rule).** Exactly one action per rule. A document rule has exactly one folder in `when.in` (`{\"id\": \"\", \"kind\": \"folder\"}` is My files); a **move** rule covers the documents directly in that folder, a **tag** rule covers that folder and every folder inside it (My files = everywhere except Trash). Page rules list folders and/or documents in `when.in`. Triggers and actions must fit the subject (`move`/`add_tag`/`remove_tag` need a document trigger; `extract_tasks`/`save_notes` a page trigger). Documents tagged “no automation” are always skipped, by every rule, and that tag can't be used in rules. Rules run top to bottom; the first move rule that matches a document claims it; tag rules claim nothing.\n\n**Data about Mike.** Rule configs and, in responses, names and folder paths of his reMarkable documents, his document and page tags, and logs of what rules did (document names, folders, times). Not the documents' contents or handwriting.\n\n**Writes, cost, speed.** Writes: `PUT /`, `POST|PUT|PATCH|DELETE /rules…` (config only; a new or changed rule acts from the next sweep), `POST /run-now` (in live mode moves/tags documents now), `POST /undo/{entryId}`, `POST /reapply/{holdId}`, `POST /pipeline/run-now` (sends changed pages to rm-pages: **paid LLM calls**, one per page). Everything else is a read; `/state`, `/preview` and `/watchables` evaluate the whole tree (a second or so). In `settings.mode` `dry` nothing is changed, only logged.\n\n**Units and time zones.** Times in responses are Unix epoch milliseconds (UTC); convert to America/Chicago for Mike. Durations: `intervalMinutes` minutes, `settleHours` hours, `days` days, `amount`+`unit` as stated. The tablet's created/modified times come from its own clock.\n\n**Access.** Tailnet only (no public route). Every path except `/openapi.json` needs auth: `Authorization: Bearer <AUTOMATION_API_TOKEN>` (acts as one user, `admin`; the token is in `~/rmfakecloud/.env` on the services VM, `ssh mike@10.0.0.11 grep AUTOMATION_API_TOKEN rmfakecloud/.env`), or the web UI's login cookie. Base URL `http://remarkable.svc` (also `http://10.0.0.11:3000`). Errors are JSON `{\"error\": message}`; validation errors add `ruleIndex` (0-based) and `ruleId`."
+  },
+  "servers": [
+    {
+      "url": "http://remarkable.svc",
+      "description": "tailnet"
+    },
+    {
+      "url": "http://10.0.0.11:3000",
+      "description": "LAN / tailnet subnet route"
+    }
+  ],
+  "security": [
+    {
+      "bearer": []
+    },
+    {
+      "cookie": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "rules",
+      "description": "Read and change rules."
+    },
+    {
+      "name": "read",
+      "description": "Read-only evaluation and logs."
+    },
+    {
+      "name": "run",
+      "description": "Run rules now, undo, reapply."
+    },
+    {
+      "name": "meta",
+      "description": "This description."
+    }
+  ],
+  "paths": {
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPI",
+        "summary": "This description",
+        "description": "The OpenAPI 3.1 description of the automation API. No auth.",
+        "tags": [
+          "meta"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The spec",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                },
+                "example": {
+                  "openapi": "3.1.0"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/api/automation": {
+      "get": {
+        "operationId": "getConfig",
+        "summary": "The whole rules config",
+        "description": "Settings and every rule in order, with the revision a full PUT must send.",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "The config",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                },
+                "example": {
+                  "version": 2,
+                  "revision": 22,
+                  "settings": {
+                    "enabled": true,
+                    "mode": "live",
+                    "intervalMinutes": 60
+                  },
+                  "rules": [
+                    {
+                      "name": "",
+                      "enabled": true,
+                      "when": {
+                        "subject": "document",
+                        "in": [
+                          {
+                            "id": "",
+                            "kind": "folder",
+                            "name": "My files"
+                          }
+                        ],
+                        "trigger": {
+                          "type": "created_time",
+                          "compare": "within",
+                          "amount": 24,
+                          "unit": "hours"
+                        }
+                      },
+                      "conditions": [],
+                      "actions": [
+                        {
+                          "type": "add_tag",
+                          "tag": "new"
+                        }
+                      ],
+                      "id": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putConfig",
+        "summary": "Replace the whole config",
+        "description": "Writes settings and all rules at once (writes data). `revision` must equal the stored one, else 409 with the current revision. Prefer the /rules endpoints for single-rule edits.",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved; revision bumped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Config"
+              },
+              "example": {
+                "version": 2,
+                "revision": 22,
+                "settings": {
+                  "enabled": true,
+                  "mode": "live",
+                  "intervalMinutes": 60
+                },
+                "rules": [
+                  {
+                    "name": "",
+                    "enabled": true,
+                    "when": {
+                      "subject": "document",
+                      "in": [
+                        {
+                          "id": "",
+                          "kind": "folder",
+                          "name": "My files"
+                        }
+                      ],
+                      "trigger": {
+                        "type": "created_time",
+                        "compare": "within",
+                        "amount": 24,
+                        "unit": "hours"
+                      }
+                    },
+                    "conditions": [],
+                    "actions": [
+                      {
+                        "type": "add_tag",
+                        "tag": "new"
+                      }
+                    ],
+                    "id": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/api/automation/catalogue": {
+      "get": {
+        "operationId": "getCatalogue",
+        "summary": "Triggers, conditions and actions",
+        "description": "Every trigger, condition and action type: description, subjects, fields and defaults. Read it before writing a rule.",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalogue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalogue"
+                },
+                "example": {
+                  "triggers": [
+                    {
+                      "type": "created_time",
+                      "description": "Created in the last (compare within) or more than (older) amount unit ago…",
+                      "subjects": [
+                        "document"
+                      ],
+                      "fields": [
+                        "compare",
+                        "amount",
+                        "unit"
+                      ],
+                      "defaults": {
+                        "compare": "within",
+                        "amount": 24,
+                        "unit": "hours"
+                      }
+                    }
+                  ],
+                  "conditions": [],
+                  "actions": [
+                    {
+                      "type": "add_tag",
+                      "description": "Add the document tag tag…",
+                      "subjects": [
+                        "document"
+                      ],
+                      "fields": [
+                        "tag"
+                      ],
+                      "defaults": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ui/api/automation/rules": {
+      "get": {
+        "operationId": "listRules",
+        "summary": "List rules",
+        "description": "Every rule in order (rule numbers in the UI and logs are 1-based positions).",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "Rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "revision": {
+                      "type": "integer"
+                    },
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Rule"
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "revision": 22,
+                  "rules": [
+                    {
+                      "name": "",
+                      "enabled": true,
+                      "when": {
+                        "subject": "document",
+                        "in": [
+                          {
+                            "id": "",
+                            "kind": "folder",
+                            "name": "My files"
+                          }
+                        ],
+                        "trigger": {
+                          "type": "created_time",
+                          "compare": "within",
+                          "amount": 24,
+                          "unit": "hours"
+                        }
+                      },
+                      "conditions": [],
+                      "actions": [
+                        {
+                          "type": "add_tag",
+                          "tag": "new"
+                        }
+                      ],
+                      "id": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRule",
+        "summary": "Create a rule",
+        "description": "Validates and saves a new rule (writes data); it acts from the next sweep. The server assigns the id. Unknown fields are refused. Preview it first with POST /preview.",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleResponse"
+                },
+                "example": {
+                  "revision": 23,
+                  "rule": {
+                    "name": "",
+                    "enabled": true,
+                    "when": {
+                      "subject": "document",
+                      "in": [
+                        {
+                          "id": "",
+                          "kind": "folder",
+                          "name": "My files"
+                        }
+                      ],
+                      "trigger": {
+                        "type": "created_time",
+                        "compare": "within",
+                        "amount": 24,
+                        "unit": "hours"
+                      }
+                    },
+                    "conditions": [],
+                    "actions": [
+                      {
+                        "type": "add_tag",
+                        "tag": "new"
+                      }
+                    ],
+                    "id": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+                  },
+                  "position": 5
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "position",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "1-based position to insert at; default the end."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              },
+              "example": {
+                "name": "",
+                "enabled": true,
+                "when": {
+                  "subject": "document",
+                  "in": [
+                    {
+                      "id": "",
+                      "kind": "folder",
+                      "name": "My files"
+                    }
+                  ],
+                  "trigger": {
+                    "type": "created_time",
+                    "compare": "within",
+                    "amount": 24,
+                    "unit": "hours"
+                  }
+                },
+                "conditions": [],
+                "actions": [
+                  {
+                    "type": "add_tag",
+                    "tag": "new"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/api/automation/rules/{ruleId}": {
+      "get": {
+        "operationId": "getRule",
+        "summary": "Get one rule",
+        "description": "One rule by id.",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "The rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleResponse"
+                },
+                "example": {
+                  "revision": 22,
+                  "rule": {
+                    "name": "",
+                    "enabled": true,
+                    "when": {
+                      "subject": "document",
+                      "in": [
+                        {
+                          "id": "",
+                          "kind": "folder",
+                          "name": "My files"
+                        }
+                      ],
+                      "trigger": {
+                        "type": "created_time",
+                        "compare": "within",
+                        "amount": 24,
+                        "unit": "hours"
+                      }
+                    },
+                    "conditions": [],
+                    "actions": [
+                      {
+                        "type": "add_tag",
+                        "tag": "new"
+                      }
+                    ],
+                    "id": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The rule's id (a UUID the server assigned).",
+            "example": "95317999-7cad-44d8-9bfb-ba54153204ea"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "replaceRule",
+        "summary": "Replace one rule",
+        "description": "Replaces the rule, keeping its id and position (writes data). Send the full rule.",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The rule's id (a UUID the server assigned).",
+            "example": "95317999-7cad-44d8-9bfb-ba54153204ea"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleInput"
+              },
+              "example": {
+                "name": "",
+                "enabled": true,
+                "when": {
+                  "subject": "document",
+                  "in": [
+                    {
+                      "id": "",
+                      "kind": "folder",
+                      "name": "My files"
+                    }
+                  ],
+                  "trigger": {
+                    "type": "created_time",
+                    "compare": "older",
+                    "amount": 24,
+                    "unit": "hours"
+                  }
+                },
+                "conditions": [
+                  {
+                    "type": "tag_is",
+                    "tag": "new"
+                  }
+                ],
+                "actions": [
+                  {
+                    "type": "remove_tag",
+                    "tag": "new"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patchRule",
+        "summary": "Rename or enable/disable a rule",
+        "description": "Changes only `name` and/or `enabled` (writes data).",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The rule's id (a UUID the server assigned).",
+            "example": "95317999-7cad-44d8-9bfb-ba54153204ea"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "example": {
+                "enabled": false
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteRule",
+        "summary": "Delete a rule",
+        "description": "Removes the rule (writes data). Its log entries stay.",
+        "tags": [
+          "rules"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "revision": {
+                      "type": "integer"
+                    },
+                    "deleted": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "revision": 24,
+                  "deleted": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "ruleId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The rule's id (a UUID the server assigned).",
+            "example": "95317999-7cad-44d8-9bfb-ba54153204ea"
+          }
+        ]
+      }
+    },
+    "/ui/api/automation/preview": {
+      "post": {
+        "operationId": "preview",
+        "summary": "What rules would do now",
+        "description": "A dry evaluation that changes nothing. Body `{}` = every document rule; `{\"ruleId\": id}` = one saved rule; `{\"rule\": {...}}` = a draft (not saved). A page rule answers a PagePreview, anything else a Plan.",
+        "tags": [
+          "read"
+        ],
+        "responses": {
+          "200": {
+            "description": "Plan or page preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Plan"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PagePreview"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ruleId": {
+                    "type": "string"
+                  },
+                  "rule": {
+                    "$ref": "#/components/schemas/RuleInput"
+                  }
+                }
+              },
+              "example": {
+                "rule": {
+                  "name": "",
+                  "enabled": true,
+                  "when": {
+                    "subject": "document",
+                    "in": [
+                      {
+                        "id": "",
+                        "kind": "folder",
+                        "name": "My files"
+                      }
+                    ],
+                    "trigger": {
+                      "type": "created_time",
+                      "compare": "within",
+                      "amount": 24,
+                      "unit": "hours"
+                    }
+                  },
+                  "conditions": [],
+                  "actions": [
+                    {
+                      "type": "add_tag",
+                      "tag": "new"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/api/automation/state": {
+      "get": {
+        "operationId": "getState",
+        "summary": "Sweep status and per-rule view",
+        "description": "Settings, sweep status (last run, next run), every folder (id, path) and per rule its matches now, problems, holds and loop warnings. Read-only; evaluates the tree.",
+        "tags": [
+          "read"
+        ],
+        "responses": {
+          "200": {
+            "description": "State",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "revision": {
+                      "type": "integer"
+                    },
+                    "settings": {
+                      "$ref": "#/components/schemas/Settings"
+                    },
+                    "status": {
+                      "type": "object"
+                    },
+                    "folders": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "parent": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "depth": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RuleResult"
+                      }
+                    },
+                    "createdFolders": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ui/api/automation/watchables": {
+      "get": {
+        "operationId": "listWatchables",
+        "summary": "Folders and documents",
+        "description": "Every folder (except My files) and document outside the Trash with id and path: the places a rule's `when.in` can name.",
+        "tags": [
+          "read"
+        ],
+        "responses": {
+          "200": {
+            "description": "Items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "folder",
+                              "document"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "docType": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "8ba040dd-f104-4473-a029-fa810576cc9d",
+                      "kind": "folder",
+                      "name": "Research Reports",
+                      "path": "Research Reports"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ui/api/automation/page-tags": {
+      "get": {
+        "operationId": "listPageTags",
+        "summary": "Page tags in use",
+        "description": "Every page tag on Mike's pages, with the documents (and page counts) carrying it.",
+        "tags": [
+          "read"
+        ],
+        "responses": {
+          "200": {
+            "description": "Tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "docs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ui/api/automation/run-now": {
+      "post": {
+        "operationId": "runNow",
+        "summary": "Run the document rules now",
+        "description": "One sweep in the configured mode. In live mode it moves and tags documents now (writes data); in dry mode it only logs. 409 when a sweep is running or the sweep is paused.",
+        "tags": [
+          "run"
+        ],
+        "responses": {
+          "200": {
+            "description": "The run and its plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "run": {
+                      "$ref": "#/components/schemas/RunEntry"
+                    },
+                    "plan": {
+                      "$ref": "#/components/schemas/Plan"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ui/api/automation/pipeline": {
+      "get": {
+        "operationId": "getPipeline",
+        "summary": "Page watch status",
+        "description": "Whether the page watch is on, its last runs, pending page events and the default prompt/model of page actions.",
+        "tags": [
+          "read"
+        ],
+        "responses": {
+          "200": {
+            "description": "Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "lastRun": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "nextAt": {
+                      "type": "integer"
+                    },
+                    "pendingPipeline": {
+                      "type": "integer"
+                    },
+                    "lastError": {
+                      "type": "string"
+                    },
+                    "missingWatches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "defaults": {
+                      "type": "object",
+                      "properties": {
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "model": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ui/api/automation/pipeline/run-now": {
+      "post": {
+        "operationId": "runPipelineNow",
+        "summary": "Run the page watch now",
+        "description": "Checks for changed pages and sends them to rm-pages per the page rules: paid LLM calls (one per changed page) and vault writes. 503 when the page watch is off.",
+        "tags": [
+          "run"
+        ],
+        "responses": {
+          "200": {
+            "description": "The run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/ui/api/automation/log": {
+      "get": {
+        "operationId": "getLog",
+        "summary": "What rules did",
+        "description": "The last 50 moves and tag changes (live and dry) and the last runs, newest first.",
+        "tags": [
+          "read"
+        ],
+        "responses": {
+          "200": {
+            "description": "Log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "moves": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LogEntry"
+                      }
+                    },
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RunEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "tab",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "moves",
+                "runs"
+              ]
+            },
+            "description": "Only the moves log or only the runs."
+          }
+        ]
+      }
+    },
+    "/ui/api/automation/runs": {
+      "get": {
+        "operationId": "getRuns",
+        "summary": "What rules did (alias)",
+        "description": "Same as GET /log.",
+        "tags": [
+          "read"
+        ],
+        "responses": {
+          "200": {
+            "description": "Log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "moves": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LogEntry"
+                      }
+                    },
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RunEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "tab",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "moves",
+                "runs"
+              ]
+            },
+            "description": "Only the moves log or only the runs."
+          }
+        ]
+      }
+    },
+    "/ui/api/automation/undo/{entryId}": {
+      "post": {
+        "operationId": "undoMove",
+        "summary": "Undo a move",
+        "description": "Moves the document back and sets a hold so the rule leaves it alone while its inputs are unchanged (writes data). Only the newest live move of a document; tag changes cannot be undone.",
+        "tags": [
+          "run"
+        ],
+        "responses": {
+          "200": {
+            "description": "The log entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "entryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A log entry id (GET /log)."
+          }
+        ]
+      }
+    },
+    "/ui/api/automation/reapply/{holdId}": {
+      "post": {
+        "operationId": "reapplyHeld",
+        "summary": "Perform a held move",
+        "description": "Moves a document a hold is keeping in place and clears the hold (writes data).",
+        "tags": [
+          "run"
+        ],
+        "responses": {
+          "200": {
+            "description": "The new log entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "holdId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A hold id (GET /log or a preview skip)."
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Params": {
+        "description": "Trigger and condition parameters. Which ones a type uses is in GET /catalogue (`fields`); others are ignored and not stored.",
+        "type": "object",
+        "properties": {
+          "minPages": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "finished_reading: at least this many pages."
+          },
+          "settleHours": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "finished_reading, read_progress: hours since last opened."
+          },
+          "percent": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "read_progress."
+          },
+          "days": {
+            "type": "integer",
+            "description": "not_opened_for_days, not_modified_for_days, age_since_created (>=1), min_age_days (>=0)."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "name_matches: case-insensitive glob (* ?) or /RE2 regex/."
+          },
+          "tag": {
+            "type": "string",
+            "description": "tag_is, tag_is_not (document tag); page_tagged, page_tag_is (page tag). Matching ignores case, spaces, - and _."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "notebooks",
+              "pdf_epub"
+            ],
+            "description": "kind_is."
+          },
+          "pinned": {
+            "type": "boolean",
+            "description": "pinned_is."
+          },
+          "compare": {
+            "type": "string",
+            "enum": [
+              "within",
+              "older"
+            ],
+            "description": "created_time, modified_time: within = in the last amount unit; older = more than amount unit ago."
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "created_time, modified_time."
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "hours",
+              "days",
+              "weeks"
+            ],
+            "description": "created_time, modified_time."
+          }
+        }
+      },
+      "Trigger": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "A trigger type from GET /catalogue.",
+                "enum": [
+                  "finished_reading",
+                  "read_progress",
+                  "not_opened_for_days",
+                  "not_modified_for_days",
+                  "name_matches",
+                  "tag_is",
+                  "age_since_created",
+                  "pinned_is",
+                  "created_time",
+                  "modified_time",
+                  "page_changed",
+                  "page_tagged"
+                ]
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Params"
+          }
+        ],
+        "example": {
+          "type": "created_time",
+          "compare": "within",
+          "amount": 24,
+          "unit": "hours"
+        }
+      },
+      "Condition": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "A condition type from GET /catalogue.",
+                "enum": [
+                  "kind_is",
+                  "tag_is",
+                  "tag_is_not",
+                  "not_opened_for_days",
+                  "min_age_days",
+                  "name_matches",
+                  "pinned_is",
+                  "page_tag_is",
+                  "created_time",
+                  "modified_time"
+                ]
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Params"
+          }
+        ],
+        "example": {
+          "type": "tag_is",
+          "tag": "new"
+        }
+      },
+      "Place": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Folder or document UUID; \"\" (with kind folder) is My files. Ids come from GET /watchables or GET /state (folders)."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "folder",
+              "document"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Display cache only; the id is the key."
+          }
+        }
+      },
+      "Destination": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Destination folder UUID (\"\" = My files). Ignored with createIfMissing."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display cache."
+          },
+          "createIfMissing": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "parent": {
+                "type": "string",
+                "description": "\"source\" (the rule's folder, default) or a folder UUID."
+              }
+            },
+            "description": "Use (or create on the first live move) a subfolder of this name."
+          }
+        }
+      },
+      "Action": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "move",
+              "add_tag",
+              "remove_tag",
+              "extract_tasks",
+              "save_notes"
+            ]
+          },
+          "to": {
+            "$ref": "#/components/schemas/Destination"
+          },
+          "tag": {
+            "type": "string",
+            "description": "add_tag, remove_tag: the document tag."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "extract_tasks, save_notes: extraction prompt; empty = the server default."
+          },
+          "model": {
+            "type": "string",
+            "description": "extract_tasks, save_notes: OpenRouter model; empty = the server default."
+          }
+        },
+        "example": {
+          "type": "add_tag",
+          "tag": "new"
+        }
+      },
+      "When": {
+        "type": "object",
+        "required": [
+          "subject",
+          "in",
+          "trigger"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "document",
+              "page"
+            ]
+          },
+          "in": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Place"
+            },
+            "description": "Document rule: exactly one folder. Page rule: folders and/or documents."
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/Trigger"
+          }
+        }
+      },
+      "RuleInput": {
+        "type": "object",
+        "required": [
+          "when",
+          "actions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Leave empty on create; on PUT /rules/{ruleId} omit it or send the same id."
+          },
+          "name": {
+            "type": "string",
+            "description": "\"\" = named by its sentence in the UI."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "when": {
+            "$ref": "#/components/schemas/When"
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "description": "All must hold (AND). Order matters only for reporting."
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            },
+            "minItems": 1,
+            "maxItems": 1
+          }
+        },
+        "example": {
+          "name": "",
+          "enabled": true,
+          "when": {
+            "subject": "document",
+            "in": [
+              {
+                "id": "",
+                "kind": "folder",
+                "name": "My files"
+              }
+            ],
+            "trigger": {
+              "type": "created_time",
+              "compare": "within",
+              "amount": 24,
+              "unit": "hours"
+            }
+          },
+          "conditions": [],
+          "actions": [
+            {
+              "type": "add_tag",
+              "tag": "new"
+            }
+          ]
+        }
+      },
+      "Rule": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/RuleInput"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "enabled",
+              "conditions"
+            ]
+          }
+        ],
+        "example": {
+          "name": "",
+          "enabled": true,
+          "when": {
+            "subject": "document",
+            "in": [
+              {
+                "id": "",
+                "kind": "folder",
+                "name": "My files"
+              }
+            ],
+            "trigger": {
+              "type": "created_time",
+              "compare": "within",
+              "amount": 24,
+              "unit": "hours"
+            }
+          },
+          "conditions": [],
+          "actions": [
+            {
+              "type": "add_tag",
+              "tag": "new"
+            }
+          ],
+          "id": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+        }
+      },
+      "Settings": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "false pauses the sweep."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "live",
+              "dry"
+            ],
+            "description": "dry: log what would happen, change nothing."
+          },
+          "intervalMinutes": {
+            "type": "integer",
+            "enum": [
+              5,
+              10,
+              15,
+              30,
+              60
+            ]
+          }
+        }
+      },
+      "Config": {
+        "type": "object",
+        "required": [
+          "version",
+          "revision",
+          "settings",
+          "rules"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 2
+          },
+          "revision": {
+            "type": "integer",
+            "description": "Bumped by every save; PUT / must send the current one."
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            }
+          }
+        }
+      },
+      "RuleResponse": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/Rule"
+          },
+          "position": {
+            "type": "integer",
+            "description": "1-based position (create only)."
+          }
+        }
+      },
+      "CatalogueEntry": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "document",
+                "page"
+              ]
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The Params (or Action) fields this type reads."
+          },
+          "defaults": {
+            "type": "object",
+            "description": "Values filled in on save when a field is left 0/empty."
+          },
+          "pageBased": {
+            "type": "boolean",
+            "description": "Needs a page count: the rule is locked to PDF & EPUB (kind_is pdf_epub is added)."
+          },
+          "repeatable": {
+            "type": "boolean",
+            "description": "Conditions: may appear more than once in a rule."
+          },
+          "beforeTrigger": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Catalogue": {
+        "type": "object",
+        "properties": {
+          "triggers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntry"
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntry"
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogueEntry"
+            }
+          }
+        }
+      },
+      "PlannedChange": {
+        "type": "object",
+        "description": "One document one rule would change: a move (action absent) or a tag change (action add_tag/remove_tag, from == to).",
+        "properties": {
+          "ruleId": {
+            "type": "string"
+          },
+          "ruleNumber": {
+            "type": "integer"
+          },
+          "ruleName": {
+            "type": "string"
+          },
+          "docId": {
+            "type": "string"
+          },
+          "docName": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "fromName": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "toName": {
+            "type": "string"
+          },
+          "createFolder": {
+            "type": "object"
+          },
+          "detail": {
+            "type": "string",
+            "description": "Why it matched, e.g. \"created 3 h ago\"."
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "add_tag",
+              "remove_tag"
+            ]
+          },
+          "tag": {
+            "type": "string"
+          }
+        }
+      },
+      "Skip": {
+        "type": "object",
+        "properties": {
+          "ruleId": {
+            "type": "string"
+          },
+          "ruleNumber": {
+            "type": "integer"
+          },
+          "docId": {
+            "type": "string"
+          },
+          "docName": {
+            "type": "string"
+          },
+          "folder": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "in_trash",
+              "content_unreadable",
+              "no_automation",
+              "pinned",
+              "already_in_destination",
+              "out_of_scope",
+              "page_count_unknown",
+              "time_unknown",
+              "held",
+              "cycle_guard",
+              "claimed",
+              "invalid_rule"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "holdId": {
+            "type": "string"
+          }
+        }
+      },
+      "RuleResult": {
+        "type": "object",
+        "properties": {
+          "ruleId": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "sourceName": {
+            "type": "string"
+          },
+          "destId": {
+            "type": "string"
+          },
+          "destName": {
+            "type": "string",
+            "description": "Destination path, or for a tag rule what it does (\"add tag “new”\")."
+          },
+          "destWillCreate": {
+            "type": "boolean"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checked": {
+            "type": "integer"
+          },
+          "matches": {
+            "type": "integer"
+          },
+          "notMatching": {
+            "type": "integer"
+          },
+          "optedOut": {
+            "type": "integer"
+          },
+          "held": {
+            "type": "integer"
+          }
+        }
+      },
+      "Plan": {
+        "type": "object",
+        "description": "What the document rules would do now.",
+        "properties": {
+          "at": {
+            "type": "integer",
+            "description": "epoch ms"
+          },
+          "scanned": {
+            "type": "integer"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuleResult"
+            }
+          },
+          "moves": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedChange"
+            },
+            "description": "Every planned move and tag change."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Skip"
+            }
+          }
+        }
+      },
+      "PagePreview": {
+        "type": "object",
+        "description": "What a page rule covers now.",
+        "properties": {
+          "subject": {
+            "const": "page"
+          },
+          "pages": {
+            "type": "integer"
+          },
+          "docs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "pages": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "missingWatches": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "RunEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "at": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "LIVE",
+              "DRY"
+            ]
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "scanned": {
+            "type": "integer"
+          },
+          "moved": {
+            "type": "integer"
+          },
+          "tagged": {
+            "type": "integer"
+          },
+          "planned": {
+            "type": "integer",
+            "description": "Dry runs: changes it would have made."
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "errors": {
+            "type": "integer"
+          },
+          "durationMs": {
+            "type": "integer"
+          },
+          "errorDetails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "LogEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "at": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "LIVE",
+              "DRY"
+            ]
+          },
+          "docId": {
+            "type": "string"
+          },
+          "docName": {
+            "type": "string"
+          },
+          "ruleId": {
+            "type": "string"
+          },
+          "ruleName": {
+            "type": "string"
+          },
+          "ruleNumber": {
+            "type": "integer"
+          },
+          "from": {
+            "type": "string"
+          },
+          "fromName": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "toName": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "rule",
+              "reapply",
+              "undo"
+            ]
+          },
+          "undoneAt": {
+            "type": "integer"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "add_tag",
+              "remove_tag"
+            ],
+            "description": "Absent for a move."
+          },
+          "tag": {
+            "type": "string"
+          },
+          "holdId": {
+            "type": "string"
+          },
+          "canUndo": {
+            "type": "boolean",
+            "description": "Only the newest live move of a document; never a tag change."
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "ruleIndex": {
+            "type": "integer"
+          },
+          "ruleId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "AUTOMATION_API_TOKEN from the server's .env; acts as AUTOMATION_API_USER (admin)."
+      },
+      "cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": ".Authrmfakecloud",
+        "description": "The web UI's login."
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Refused; see error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "rule 3: tag cannot be empty",
+              "ruleIndex": 2,
+              "ruleId": "0c4b7a52-58f1-4f2e-9e0c-3f1f1b1d2a77"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "No valid token or login",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "missing or incorrect token"
+            }
+          }
+        }
+      }
+    }
+  }
+}

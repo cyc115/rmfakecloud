@@ -25,6 +25,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// apiToken the AUTOMATION_API_TOKEN of the test server
+const apiToken = "test-automation-token-0123456789abcdef"
+
 type aoAPI struct {
 	t       *testing.T
 	router  *gin.Engine
@@ -66,11 +69,14 @@ func newAOAPI(t *testing.T) *aoAPI {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &ReactAppWrapper{cfg: cfg, organizer: autoorganize.NewService(storage, hub.NewHub(), 0), blobs: storage}
+	cfg.AutomationAPIToken, cfg.AutomationAPIUser = apiToken, "mike"
+	app := &ReactAppWrapper{cfg: cfg, organizer: autoorganize.NewService(storage, hub.NewHub(), 0), blobs: storage, userStorer: storage}
 	router := gin.New()
-	auth := router.Group("/ui/api").Group("")
+	router.GET("/openapi.json", serveAutomationOpenAPI)
+	api := router.Group("/ui/api")
+	auth := api.Group("")
 	auth.Use(app.authMiddleware())
-	app.registerAutomationRoutes(auth)
+	app.registerAutomationRoutes(api, auth)
 	return &aoAPI{t: t, router: router, cfg: cfg, storage: storage, inbox: inbox.ID, news: news.ID, doc: doc.ID}
 }
 
@@ -95,7 +101,9 @@ func (a *aoAPI) do(method, path, token string, body any) (int, map[string]any) {
 		rdr = bytes.NewReader(b)
 	}
 	req := httptest.NewRequest(method, path, rdr)
-	if token != "" {
+	if bearer, ok := strings.CutPrefix(token, "Bearer "); ok {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	} else if token != "" {
 		req.AddCookie(&http.Cookie{Name: cookieName, Value: token})
 	}
 	if body != nil {
@@ -516,9 +524,10 @@ func TestPreviewPageRule(t *testing.T) {
 	// no blob storage: 503
 	app := &ReactAppWrapper{cfg: a.cfg, organizer: autoorganize.NewService(a.storage, hub.NewHub(), 0)}
 	router := gin.New()
-	auth := router.Group("/ui/api").Group("")
+	api := router.Group("/ui/api")
+	auth := api.Group("")
 	auth.Use(app.authMiddleware())
-	app.registerAutomationRoutes(auth)
+	app.registerAutomationRoutes(api, auth)
 	a.router = router
 	if code, _ := a.do("POST", "/ui/api/automation/preview", tok, a.pageDraft(map[string]any{"type": "page_changed"})); code != http.StatusServiceUnavailable {
 		t.Fatalf("nil blobs: %d", code)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ddvk/rmfakecloud/internal/email"
@@ -95,7 +96,15 @@ const (
 	envGlitchtipDSN = "GLITCHTIP_DSN"
 	// envGlitchtipBrowserDSN DSN handed to the web UI, when browsers reach GlitchTip by another host
 	envGlitchtipBrowserDSN = "GLITCHTIP_BROWSER_DSN"
+
+	// envAutomationAPIToken bearer token for the automation API, for agents and scripts
+	envAutomationAPIToken = "AUTOMATION_API_TOKEN"
+	// envAutomationAPIUser the user the automation API token acts as
+	envAutomationAPIUser = "AUTOMATION_API_USER"
 )
+
+// MinAutomationAPITokenLen a shorter AUTOMATION_API_TOKEN is ignored (and logged)
+const MinAutomationAPITokenLen = 32
 
 // Config config
 type Config struct {
@@ -130,6 +139,11 @@ type Config struct {
 	GlitchtipDSN string
 	// GlitchtipBrowserDSN DSN handed to the web UI, defaults to GlitchtipDSN
 	GlitchtipBrowserDSN string
+	// AutomationAPIToken bearer token accepted on /ui/api/automation*, "" = only
+	// the web UI's login cookie
+	AutomationAPIToken string
+	// AutomationAPIUser the user id the token acts as
+	AutomationAPIUser string
 	// Version build version, the release tag on error reports
 	Version string
 }
@@ -293,6 +307,12 @@ func FromEnv() *Config {
 
 	glitchtipDSN := os.Getenv(envGlitchtipDSN)
 	glitchtipBrowserDSN := os.Getenv(envGlitchtipBrowserDSN)
+	automationAPIToken := strings.TrimSpace(os.Getenv(envAutomationAPIToken))
+	automationAPIUser := strings.TrimSpace(os.Getenv(envAutomationAPIUser))
+	if automationAPIToken != "" && (len(automationAPIToken) < MinAutomationAPITokenLen || automationAPIUser == "") {
+		log.Warnf("%s ignored: it needs at least %d characters and %s set", envAutomationAPIToken, MinAutomationAPITokenLen, envAutomationAPIUser)
+		automationAPIToken = ""
+	}
 	if glitchtipBrowserDSN == "" {
 		glitchtipBrowserDSN = glitchtipDSN
 	}
@@ -335,6 +355,8 @@ func FromEnv() *Config {
 		PageWatchMinAge:      pageWatchMinAge,
 		GlitchtipDSN:         glitchtipDSN,
 		GlitchtipBrowserDSN:  glitchtipBrowserDSN,
+		AutomationAPIToken:   automationAPIToken,
+		AutomationAPIUser:    automationAPIUser,
 	}
 	return &cfg
 }
@@ -449,6 +471,8 @@ General:
 	%s	Page watch skips page blobs younger than this Go duration, for tests; 0s = no skip window (default: 10m)
 	%s	Sentry/GlitchTip DSN the server reports its errors to (default: off)
 	%s	DSN the web UI reports to, if browsers reach GlitchTip by another host (default: GLITCHTIP_DSN)
+	%s	Bearer token for the automation API (/ui/api/automation*, spec at /openapi.json), at least 32 chars (default: off)
+	%s	User the automation API token acts as (required with the token)
 
 MQTT (for screenshare):
 	%s	MQTT TCP port (default: 8883)
@@ -491,6 +515,8 @@ myScript hwr (needs a developer account):
 		envPageWatchMinAge,
 		envGlitchtipDSN,
 		envGlitchtipBrowserDSN,
+		envAutomationAPIToken,
+		envAutomationAPIUser,
 
 		envMQTTPort,
 		envICEServers,
