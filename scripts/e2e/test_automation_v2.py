@@ -85,7 +85,7 @@ def test_two_condition_page_rule(page, api):
     drawer.get_by_role("button", name="named like …").click()
     drawer.get_by_label(re.compile(r"condition \d pattern")).fill("*Notes")
     expect(summary(drawer)).to_have_text(
-        "IF I write on a page anywhere (only notebooks) AND named like “*Notes” THEN extract tasks to my inbox")
+        "IF I write on a page anywhere (only notebooks) AND named like “*Notes” THEN extract tasks & annotations")
     # the seeded notebook "E2E Notes" has pages and the glob is anchored, so it matches
     expect(drawer.get_by_text("Matches now:")).to_contain_text(re.compile(r"[1-9]\d* pages? in [1-9]\d* documents?"))
     # a pattern that matches no notebook shows none
@@ -99,7 +99,7 @@ def test_two_condition_page_rule(page, api):
     fits_viewport(page)
     save_rule(page, drawer)
     sentence = page.locator(".ao-rule .ao-sentence")
-    want = "IF I write on a page anywhere (only notebooks) AND named like “*Notes” THEN extract tasks to my inbox"
+    want = "IF I write on a page anywhere (only notebooks) AND named like “*Notes” THEN extract tasks & annotations"
     expect(sentence).to_have_text(want)
     page.reload()
     expect(page.locator(".ao-rule .ao-sentence")).to_have_text(want)

@@ -22,7 +22,7 @@ export const PAGE_TAGGED = "page_tagged";
 // stopped on, which only PDFs and books report, so their kind_is is fixed.
 export const TRIGGER_CARDS = [
   { type: PAGE_CHANGED, group: "page", icon: "✍️", title: "I write on a page", sub: "new or changed handwriting" },
-  { type: PAGE_TAGGED, group: "page", icon: "🏷️", title: "I tag a page", sub: "with a page tag you choose" },
+  { type: PAGE_TAGGED, group: "page", icon: "🏷️", title: "I tag a page, or the whole document", sub: "with a tag you choose" },
   { type: "finished_reading", group: "document", icon: "📖", title: "I finish reading", sub: "read to the last page", pdfOnly: true },
   { type: "read_progress", group: "document", icon: "📊", title: "I've read X%", sub: "part of the way through", pdfOnly: true },
   { type: "not_opened_for_days", group: "document", icon: "💤", title: "It sits unopened", sub: "for N days" },
@@ -40,8 +40,8 @@ export const PDF_ONLY_BADGE = "PDFs & books";
 // The THEN cards: one per rule (R-B2). "for" is the subject the action works
 // on; "type" is the stored action type.
 export const ACTION_CARDS = [
-  { key: "extract", type: "extract_tasks", for: "page", icon: "✅", title: "Extract tasks to my inbox", sub: "+ save the page to its note" },
-  { key: "notes", type: "save_notes", for: "page", icon: "📝", title: "Just save notes", sub: "transcribe, no tasks" },
+  { key: "extract", type: "extract_tasks", for: "page", icon: "✅", title: "Extract tasks & annotations", sub: "tasks to my inbox, highlights and notes to the page's note" },
+  { key: "notes", type: "save_notes", for: "page", icon: "📝", title: "Save notes & annotations", sub: "highlights and notes to the note, no tasks" },
   { key: "move", type: "move", for: "document", icon: "📂", title: "Move it to…", sub: "works on documents" },
   { key: "addtag", type: "add_tag", for: "document", icon: "🏷️", title: "Add a tag", sub: "a document tag you choose" },
   { key: "rmtag", type: "remove_tag", for: "document", icon: "🧽", title: "Remove a tag", sub: "a document tag you choose" },
@@ -263,8 +263,8 @@ export function sentence(rule, ctx) {
   const key = actionKey(rule);
   if (key === "move") parts.push(tok(`move it to ${destinationName(rule, ctx)}`));
   else if (key === "addtag" || key === "rmtag") parts.push(tok(tagActionText(actionOf(rule))));
-  else if (key === "notes") parts.push(tok("just save notes"));
-  else parts.push(tok("extract tasks to my inbox"));
+  else if (key === "notes") parts.push(tok("save notes & annotations"));
+  else parts.push(tok("extract tasks & annotations"));
   return parts;
 }
 

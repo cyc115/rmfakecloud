@@ -47,7 +47,7 @@ def test_card_catalogue_matches_the_mock(page):
 def test_page_tagged_just_save_notes(page, api):
     open_page(page)
     drawer = start_pipeline_rule(page)
-    card(drawer, "I tag a page").click()
+    card(drawer, "I tag a page, or the whole document").click()
     expect(drawer.get_by_text("Pick or type a page tag.")).to_be_visible()
     expect(drawer.get_by_role("button", name="Save", exact=True)).to_be_disabled()
     expect(drawer.get_by_text("your tags: todo")).to_be_visible()  # suggested from GET page-tags
@@ -55,9 +55,9 @@ def test_page_tagged_just_save_notes(page, api):
     expect(drawer.get_by_text("0 pages are tagged “to do” now")).to_be_visible()
     drawer.get_by_label("page tag").fill("todo")
     expect(drawer.get_by_text("1 page is tagged “todo” now")).to_be_visible()
-    card(drawer, "Just save notes").click()
-    expect(card(drawer, "Just save notes")).to_have_attribute("aria-checked", "true")
-    expect(summary(drawer)).to_have_text("IF I tag a page “todo” anywhere THEN just save notes")
+    card(drawer, "Save notes & annotations").click()
+    expect(card(drawer, "Save notes & annotations")).to_have_attribute("aria-checked", "true")
+    expect(summary(drawer)).to_have_text("IF I tag a page “todo” anywhere THEN save notes & annotations")
     expect(drawer.get_by_text("Applies from your next change")).to_be_visible()
     # the In places narrow the count: Inbox holds no tagged page
     watch(drawer, "Inbox")
@@ -65,7 +65,7 @@ def test_page_tagged_just_save_notes(page, api):
     drawer.get_by_role("button", name="Stop watching Inbox").click()
     fits_viewport(page)
     save_rule(page, drawer)
-    expect(page.locator(".ao-rule .ao-sentence")).to_have_text("IF I tag a page “todo” anywhere THEN just save notes")
+    expect(page.locator(".ao-rule .ao-sentence")).to_have_text("IF I tag a page “todo” anywhere THEN save notes & annotations")
     (r,) = api.get("/ui/api/automation").json()["rules"]
     assert r["when"]["subject"] == "page", r
     assert r["when"]["trigger"]["type"] == "page_tagged" and r["when"]["trigger"]["tag"] == "todo", r
@@ -85,10 +85,10 @@ def test_invalid_actions_are_disabled_with_the_reason(page):
     expect(drawer.locator(".ao-callout")).to_contain_text("Moving and tagging work on whole documents")
     card(drawer, "It sits unopened").click()
     expect(move).to_have_attribute("aria-checked", "true")
-    for title in ("Extract tasks to my inbox", "Just save notes"):
+    for title in ("Extract tasks & annotations", "Save notes & annotations"):
         expect(card(drawer, title)).to_be_disabled()
     expect(drawer.locator(".ao-callout")).to_have_count(1)
-    expect(drawer.locator(".ao-callout")).to_contain_text("Extract tasks to my inbox, Just save notes are not offered here. Works on pages")
+    expect(drawer.locator(".ao-callout")).to_contain_text("Extract tasks & annotations, Save notes & annotations are not offered here. Works on pages")
     expect(drawer.get_by_text("Move rules work on the documents directly in one folder.")).to_be_visible()
     fits_viewport(page)
     assert_healthy(page)
@@ -205,7 +205,7 @@ def test_live_like_rules_render_as_sentences(page, api):
     sentences = page.locator(".ao-rule .ao-sentence")
     expect(sentences).to_have_text([
         "IF I finish reading a document in Inbox THEN move it to Read",
-        "IF I write on a page in E2E Notes or Paper THEN extract tasks to my inbox",
+        "IF I write on a page in E2E Notes or Paper THEN extract tasks & annotations",
     ])
     expect(page.locator(".ao-rule").nth(1).locator(".ao-rname")).to_have_text("capture journal pages")
     # editing the page rule shows its parts; Cancel leaves it untouched
@@ -256,7 +256,7 @@ def test_screenshots(page, api, request):
     unroll(page)
     page.screenshot(path=f"{out}/list-{kind}.png", full_page=True)
     drawer = start_pipeline_rule(page)
-    card(drawer, "I tag a page").click()
+    card(drawer, "I tag a page, or the whole document").click()
     drawer.get_by_label("page tag").fill("todo")
     watch(drawer, "Projects")
     drawer.get_by_role("button", name="done", exact=True).click()
@@ -292,7 +292,7 @@ def test_page_tags_load_only_for_page_tagged_and_failures_offer_retry(page):
     card(drawer, "Its name matches").click()
     page.wait_for_timeout(300)
     assert calls == [], "page tags fetched without page_tagged"
-    card(drawer, "I tag a page").click()
+    card(drawer, "I tag a page, or the whole document").click()
     expect(drawer.get_by_text("Couldn't load your page tags")).to_be_visible()
     page.unroute("**/automation/page-tags")
     drawer.get_by_role("button", name="(retry)").click()

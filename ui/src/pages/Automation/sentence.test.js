@@ -52,8 +52,8 @@ test("golden move rule renders", () => {
 });
 
 test("golden page rule renders", () => {
-  assert.equal(sentenceText(GOLDEN_PAGE, CTX), "IF I write on a page in Journal or Ideas THEN extract tasks to my inbox");
-  assert.equal(sentenceText(GOLDEN_PAGE), "IF I write on a page in Journal or Ideas THEN extract tasks to my inbox");
+  assert.equal(sentenceText(GOLDEN_PAGE, CTX), "IF I write on a page in Journal or Ideas THEN extract tasks & annotations");
+  assert.equal(sentenceText(GOLDEN_PAGE), "IF I write on a page in Journal or Ideas THEN extract tasks & annotations");
 });
 
 test("multi-condition document sentence", () => {
@@ -75,14 +75,14 @@ test("multi-condition page sentence", () => {
     conditions: [{ type: "kind_is", kind: "notebooks" }, { type: "name_matches", pattern: "Journal*" }],
     actions: [{ type: "save_notes", prompt: "", model: "" }],
   };
-  assert.equal(sentenceText(r, CTX), "IF I write on a page anywhere (only notebooks) AND named like “Journal*” THEN just save notes");
+  assert.equal(sentenceText(r, CTX), "IF I write on a page anywhere (only notebooks) AND named like “Journal*” THEN save notes & annotations");
 });
 
 test("sentence parts mark IF, THEN and the tokens", () => {
   const parts = sentence(GOLDEN_PAGE, CTX);
   assert.deepEqual(parts[0], { t: "if", s: "IF" });
   assert.ok(parts.some((p) => p.t === "then"));
-  assert.deepEqual(parts.filter((p) => p.t === "tok").map((p) => p.s), ["write on a page", "Journal", "Ideas", "extract tasks to my inbox"]);
+  assert.deepEqual(parts.filter((p) => p.t === "tok").map((p) => p.s), ["write on a page", "Journal", "Ideas", "extract tasks & annotations"]);
 });
 
 function moveRule(trigger, kind = "", extra = {}) {
@@ -138,20 +138,20 @@ test("move destinations: nested folder by name, root, new subfolder", () => {
 test("page triggers × page actions × places", () => {
   const base = newPageRule(DEFAULTS);
   const withWhen = (r, patch) => ({ ...r, when: { ...r.when, ...patch } });
-  assert.equal(sentenceText(base, CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
-  assert.equal(sentenceText(withWhen(base, { in: [{ id: "", kind: "folder", name: "My files" }] }), CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
+  assert.equal(sentenceText(base, CTX), "IF I write on a page anywhere THEN extract tasks & annotations");
+  assert.equal(sentenceText(withWhen(base, { in: [{ id: "", kind: "folder", name: "My files" }] }), CTX), "IF I write on a page anywhere THEN extract tasks & annotations");
   const tagged = { ...withWhen(base, { trigger: { type: "page_tagged", tag: "todo" } }), actions: [{ type: "save_notes" }] };
-  assert.equal(sentenceText(tagged, CTX), "IF I tag a page “todo” anywhere THEN just save notes");
+  assert.equal(sentenceText(tagged, CTX), "IF I tag a page “todo” anywhere THEN save notes & annotations");
   const three = { ...withWhen(tagged, { in: [
     { id: "d-ideas", kind: "document", name: "Ideas" }, { id: "proj", kind: "folder", name: "Projects" }, { id: "x", kind: "folder", name: "Gone" }] }),
   actions: [{ type: "extract_tasks" }] };
-  assert.equal(sentenceText(three, CTX), "IF I tag a page “todo” in Ideas, Projects or Gone THEN extract tasks to my inbox");
+  assert.equal(sentenceText(three, CTX), "IF I tag a page “todo” in Ideas, Projects or Gone THEN extract tasks & annotations");
   const onlyNb = { ...withWhen(base, { in: [{ id: "proj", kind: "folder" }] }), conditions: [{ type: "kind_is", kind: "notebooks" }] };
-  assert.equal(sentenceText(onlyNb, CTX), "IF I write on a page in Projects (only notebooks) THEN extract tasks to my inbox");
+  assert.equal(sentenceText(onlyNb, CTX), "IF I write on a page in Projects (only notebooks) THEN extract tasks & annotations");
   const noTag = withWhen(base, { trigger: { type: "page_tagged", tag: "" } });
-  assert.equal(sentenceText(noTag, CTX), "IF I tag a page “…” anywhere THEN extract tasks to my inbox");
+  assert.equal(sentenceText(noTag, CTX), "IF I tag a page “…” anywhere THEN extract tasks & annotations");
   const twoTags = { ...tagged, conditions: [{ type: "page_tag_is", tag: "urgent" }] };
-  assert.equal(sentenceText(twoTags, CTX), "IF I tag a page “todo” anywhere AND on pages tagged “urgent” THEN just save notes");
+  assert.equal(sentenceText(twoTags, CTX), "IF I tag a page “todo” anywhere AND on pages tagged “urgent” THEN save notes & annotations");
 });
 
 test("action cards fit only their trigger group, with a reason", () => {
@@ -234,7 +234,7 @@ test("a root entry among other places renders as anywhere and stays editable as 
   const base = newPageRule(DEFAULTS);
   const places = [{ id: "", kind: "folder", name: "My files" }, { id: "d-ideas", kind: "document", name: "Ideas" }];
   const r = { ...base, when: { ...base.when, in: places } };
-  assert.equal(sentenceText(r, CTX), "IF I write on a page anywhere THEN extract tasks to my inbox");
+  assert.equal(sentenceText(r, CTX), "IF I write on a page anywhere THEN extract tasks & annotations");
   assert.deepEqual(editableIn(r), places);
   assert.deepEqual(editableIn({ ...r, when: { ...r.when, in: [{ id: "", kind: "folder" }] } }), []);
   const tags = [{ name: "todo", docs: [{ id: "x", folders: ["other", ""], kind: "notebooks", pages: 3 }] }];

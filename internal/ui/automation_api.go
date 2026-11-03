@@ -301,7 +301,7 @@ var catalogueDocs = map[string]string{
 	"trigger:" + automation.TriggerCreatedTime:     "Created in the last (compare within) or more than (older) amount unit ago; unit hours, days or weeks. Documents without a created time are skipped.",
 	"trigger:" + automation.TriggerModifiedTime:    "Last changed in the last (within) or more than (older) amount unit ago; unit hours, days or weeks.",
 	"trigger:" + automation.TriggerPageChanged:     "A page got new or changed handwriting (page rules).",
-	"trigger:" + automation.TriggerPageTagged:      "A page carries the page tag tag (page rules).",
+	"trigger:" + automation.TriggerPageTagged:      "A page carries the tag tag, as a page tag or as a tag of its document (page rules). A document tag sends older writing to the note without tasks.",
 	"condition:" + automation.CondKindIs:           "Only notebooks (kind notebooks) or only PDFs and EPUBs (pdf_epub).",
 	"condition:" + automation.CondTagIs:            "The document carries tag.",
 	"condition:" + automation.CondTagIsNot:         "The document does not carry tag.",
@@ -315,8 +315,8 @@ var catalogueDocs = map[string]string{
 	"action:" + automation.ActionMove:              "Move the document to the folder in to: {id} of an existing folder (\"\" = My files), or {createIfMissing: {name, parent: \"source\" or a folder id}}.",
 	"action:" + automation.ActionAddTag:            "Add the document tag tag (written to the document; the tablet gets it on its next sync).",
 	"action:" + automation.ActionRemoveTag:         "Remove the document tag tag.",
-	"action:" + automation.ActionExtractTasks:      "Send the changed page to rm-pages: save it to its vault note and add new to-dos to the inbox (paid LLM call per page). prompt and model are optional.",
-	"action:" + automation.ActionSaveNotes:         "Send the changed page to rm-pages: save it to its vault note, no tasks (paid LLM call per page).",
+	"action:" + automation.ActionExtractTasks:      "Send the changed page to rm-pages: save it and its annotations (highlights with context, margin notes, crops) to its vault note and add new to-dos to the inbox (paid LLM call per page with handwriting). prompt is optional; model is ignored (rm-pages uses its flash profile).",
+	"action:" + automation.ActionSaveNotes:         "Send the changed page to rm-pages: save it and its annotations (highlights with context, margin notes, crops) to its vault note, no tasks (paid LLM call per page with handwriting).",
 }
 
 // catalogueActions the actions, with the subject each works on and its fields

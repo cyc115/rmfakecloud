@@ -13,10 +13,10 @@ ROOT = [{"id": "", "kind": "folder", "name": "My files"}]
 
 
 def start_pipeline_rule(page):
-    """+ New starts as I write on a page → Extract tasks to my inbox."""
+    """+ New starts as I write on a page → Extract tasks & annotations."""
     drawer = new_rule(page)
     expect(card(drawer, "I write on a page")).to_have_attribute("aria-checked", "true")
-    expect(card(drawer, "Extract tasks to my inbox")).to_have_attribute("aria-checked", "true")
+    expect(card(drawer, "Extract tasks & annotations")).to_have_attribute("aria-checked", "true")
     return drawer
 
 
@@ -44,7 +44,7 @@ def test_create_pipeline_rule_with_folder_and_document(page, api):
     expect(drawer.get_by_role("listbox", name="destination folder")).to_have_count(0)
     watch(drawer, "Inbox")
     watch(drawer, "Projects / E2E Notes")
-    want = "IF I write on a page in Inbox or E2E Notes THEN extract tasks to my inbox"
+    want = "IF I write on a page in Inbox or E2E Notes THEN extract tasks & annotations"
     expect(drawer.get_by_label("Summary").locator(".ao-sentence")).to_have_text(want)
     expect(drawer.get_by_text("Applies from your next change")).to_be_visible()
     fits_viewport(page)
@@ -70,7 +70,7 @@ def test_empty_in_means_anywhere(page, api):
     expect(drawer.locator(".ao-any")).to_have_text("anywhere")
     expect(drawer.get_by_role("button", name="Save", exact=True)).to_be_enabled()
     save_rule(page, drawer)
-    expect(page.locator(".ao-rule .ao-sentence")).to_have_text("IF I write on a page anywhere THEN extract tasks to my inbox")
+    expect(page.locator(".ao-rule .ao-sentence")).to_have_text("IF I write on a page anywhere THEN extract tasks & annotations")
     (r,) = api.get("/ui/api/automation").json()["rules"]
     assert r["when"]["in"] == ROOT, r["when"]["in"]
     assert_healthy(page)
@@ -139,7 +139,7 @@ def test_rule_watching_a_deleted_folder_warns(page, api):
     assert [m["watchId"] for m in missing] == [gone], missing
     open_page(page)
     rule = page.locator(".ao-rule")
-    expect(rule.locator(".ao-sentence")).to_have_text("IF I write on a page in Old projects THEN extract tasks to my inbox")
+    expect(rule.locator(".ao-sentence")).to_have_text("IF I write on a page in Old projects THEN extract tasks & annotations")
     expect(rule.locator(".ao-ms.warn")).to_contain_text("Old projects: watched item no longer exists")
     fits_viewport(page)
     assert_healthy(page)
