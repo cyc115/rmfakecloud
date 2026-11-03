@@ -47,6 +47,10 @@ TESTDATA = "/src/internal/testkit/tablet/testdata"  # in the rmseed container
 USER = "e2e"
 DOC = "55555555-5555-4555-8555-555555555555"  # "E2E Notes" in Projects, seeded by run.sh
 
+# writer.py imports scripts/common (llmconfig, statefile): on the host they ship next to it
+WRITER_ENV = {**os.environ, "RM_PAGES_URL": API,
+              "PYTHONPATH": os.path.join(os.path.dirname(os.path.dirname(WRITER)), "common")}
+
 REAL_RUN = bool(RM_PAGES_URL) and os.environ.get("E2E_STUB_RMPAGES", "0") != "1"
 
 pytestmark = pytest.mark.skipif(
@@ -192,8 +196,8 @@ def test_page_change_to_vault_note_and_staged_task(desktop, tmp_path):
     (vault / "inbox.md").write_text(INBOX)
     (vault / "project-tags.md").write_text(PROJECT_TAGS)
     out = subprocess.run(
-        ["python3", WRITER, "--once", "--user", USER, "--vault", str(vault), "--state", str(state)],
-        env={**os.environ, "RM_PAGES_URL": API}, capture_output=True, text=True, timeout=300)
+        ["python3", WRITER, "--user", USER, "--vault", str(vault), "--state", str(state)],
+        env=WRITER_ENV, capture_output=True, text=True, timeout=300)
     print("writer:", out.returncode, out.stdout, out.stderr)
     assert out.returncode == 0, out.stderr
     note = (vault / "personal" / "handwritten" / "E2E Notes.md").read_text()
@@ -312,8 +316,8 @@ def test_extract_doc_tag_inserted_page_and_typed_hashtag(desktop, tmp_path):
     (vault / "inbox.md").write_text(INBOX)
     (vault / "project-tags.md").write_text(PROJECT_TAGS)
     out = subprocess.run(
-        ["python3", WRITER, "--once", "--user", USER, "--vault", str(vault), "--state", str(state)],
-        env={**os.environ, "RM_PAGES_URL": API}, capture_output=True, text=True, timeout=300)
+        ["python3", WRITER, "--user", USER, "--vault", str(vault), "--state", str(state)],
+        env=WRITER_ENV, capture_output=True, text=True, timeout=300)
     assert out.returncode == 0, out.stderr
     note = (vault / "personal" / "handwritten" / "E2E Report.md").read_text()
     print("NOTE:\n" + note)
