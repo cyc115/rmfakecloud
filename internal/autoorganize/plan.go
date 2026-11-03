@@ -238,7 +238,17 @@ func BuildPlan(in PlanInput) *Plan {
 			continue
 		}
 
-		for _, d := range in.Snap.Children(src.ID) {
+		// a move covers the documents directly in its folder; a tag rule the
+		// folder and every folder inside it ("My files" = everywhere but Trash)
+		docs := in.Snap.Children(src.ID)
+		if tagAct != nil {
+			docs = in.Snap.Descendants(src.ID)
+		}
+		for _, d := range docs {
+			folder := rr.SourceName
+			if d.Parent != src.ID {
+				folder = in.Snap.PathName(d.Parent)
+			}
 			if d.IsFolder() {
 				// guard 1: only documents are ever candidates
 				continue
@@ -247,7 +257,7 @@ func BuildPlan(in PlanInput) *Plan {
 			rr.Checked++
 			skip := func(reason, detail, holdID string) {
 				p.Skipped = append(p.Skipped, Skip{RuleID: r.ID, RuleNumber: num, DocID: d.ID, DocName: d.Name,
-					Folder: rr.SourceName, Reason: reason, Detail: detail, HoldID: holdID})
+					Folder: folder, Reason: reason, Detail: detail, HoldID: holdID})
 			}
 			if by, ok := claimedBy[d.ID]; ok && tagAct == nil {
 				skip(SkipClaimed, fmt.Sprintf("claimed by rule %d", by), "")
@@ -275,7 +285,7 @@ func BuildPlan(in PlanInput) *Plan {
 				p.Moves = append(p.Moves, PlannedMove{
 					RuleID: r.ID, RuleNumber: num, RuleName: label,
 					DocID: d.ID, DocName: d.Name,
-					From: d.Parent, FromName: rr.SourceName, To: d.Parent, ToName: rr.SourceName,
+					From: d.Parent, FromName: folder, To: d.Parent, ToName: folder,
 					Detail: chk.ev.detail, Inputs: chk.ev.inputs, Fingerprint: d.Fingerprint,
 					Action: tagAct.Type, Tag: tagAct.Tag,
 				})

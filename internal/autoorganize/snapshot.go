@@ -198,6 +198,35 @@ func (s *Snapshot) Children(folderID string) []*DocSnap {
 	return s.children[folderID]
 }
 
+// Descendants the documents in a folder and in every folder inside it, in
+// tree order (a folder's own documents, then each subfolder's). Folders are
+// walked once each, so a parent cycle cannot loop; the Trash is never
+// entered (nothing in the tree has it as an ancestor but its own items).
+func (s *Snapshot) Descendants(folderID string) []*DocSnap {
+	var out []*DocSnap
+	visited := map[string]bool{}
+	var walk func(id string)
+	walk = func(id string) {
+		if visited[id] || id == trashID {
+			return
+		}
+		visited[id] = true
+		var sub []string
+		for _, d := range s.children[id] {
+			if d.IsFolder() {
+				sub = append(sub, d.ID)
+			} else {
+				out = append(out, d)
+			}
+		}
+		for _, f := range sub {
+			walk(f)
+		}
+	}
+	walk(folderID)
+	return out
+}
+
 // Location of an item, found by walking parents up to the root
 type Location int
 

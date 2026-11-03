@@ -87,7 +87,7 @@ func (r *Rule) validatePlaces() error {
 	in := r.When.In
 	if r.IsDocument() {
 		if len(in) != 1 || in[0].Kind != PlaceFolder {
-			return errors.New("a document rule watches exactly one folder (the documents directly inside it)")
+			return errors.New("a document rule watches exactly one folder (a move: the documents directly inside it; a tag rule: every folder inside it too)")
 		}
 		if in[0].ID == trashID {
 			return errors.New("source cannot be the trash")

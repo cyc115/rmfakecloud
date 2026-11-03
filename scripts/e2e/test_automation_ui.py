@@ -89,7 +89,7 @@ def test_invalid_actions_are_disabled_with_the_reason(page):
         expect(card(drawer, title)).to_be_disabled()
     expect(drawer.locator(".ao-callout")).to_have_count(1)
     expect(drawer.locator(".ao-callout")).to_contain_text("Extract tasks to my inbox, Just save notes are not offered here. Works on pages")
-    expect(drawer.get_by_text("Document rules work on exactly one folder.")).to_be_visible()
+    expect(drawer.get_by_text("Move rules work on the documents directly in one folder.")).to_be_visible()
     fits_viewport(page)
     assert_healthy(page)
 

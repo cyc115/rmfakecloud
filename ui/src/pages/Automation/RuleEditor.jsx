@@ -419,7 +419,9 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
           <span aria-hidden="true">📁</span><span className="n">{srcName}</span>
         </button>
         <button type="button" className="ao-link" aria-expanded={srcOpen} onClick={() => setSrcOpen(!srcOpen)}>{srcOpen ? "done" : "change"}</button>
-        <span className="ao-hint">Document rules work on exactly one folder.</span>
+        <span className="ao-hint">{isTagAction(actionOf(rule).type)
+          ? "Tag rules cover this folder and every folder inside it; My files = everywhere."
+          : "Move rules work on the documents directly in one folder."}</span>
       </div>
       {srcOpen && (
         <FolderPicker label="source folder" folders={folders} selected={src.id}

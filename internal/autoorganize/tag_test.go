@@ -159,6 +159,43 @@ func TestTagRulePlan(t *testing.T) {
 	}
 }
 
+// TestTagRuleCoversSubfolders a tag rule on a folder covers every folder
+// inside it ("My files" = everywhere but Trash); a move rule only the
+// documents directly in its folder
+func TestTagRuleCoversSubfolders(t *testing.T) {
+	now := time.Now()
+	m := newMemTree()
+	m.folder("a", "A", "")
+	m.folder("b", "B", "a")
+	m.folder("dest", "Dest", "")
+	created := func(md *models.MetadataFile) { md.CreatedTime = hoursAgo(now, 1) }
+	m.doc("top", "At the root", "", ContentInfo{FileType: "notebook"}, created)
+	m.doc("ina", "In A", "a", ContentInfo{FileType: "notebook"}, created)
+	m.doc("inb", "In A / B", "b", ContentInfo{FileType: "notebook"}, created)
+	m.doc("bin", "Trashed", "trash", ContentInfo{FileType: "notebook"}, created)
+	within := trig(TriggerCreatedTime, timeP(automation.CompareWithin, 1, automation.UnitDays))
+
+	p := m.plan(t, now, nil, tagRule("t", RootID, automation.ActionAddTag, "new", within))
+	ids := movedIDs(p)
+	sortStrings(ids)
+	if got := strings.Join(ids, ","); got != "ina,inb,top" {
+		t.Fatalf("root tag rule: %s", got)
+	}
+	for _, x := range p.Moves {
+		if x.DocID == "inb" && x.FromName != "A / B" {
+			t.Errorf("folder of a nested doc = %q", x.FromName)
+		}
+	}
+	p = m.plan(t, now, nil, tagRule("t", "a", automation.ActionAddTag, "new", within))
+	if got := strings.Join(movedIDs(p), ","); got != "ina,inb" {
+		t.Fatalf("folder tag rule: %s", got)
+	}
+	p = m.plan(t, now, nil, moveRule("m", "a", "dest", within))
+	if got := strings.Join(movedIDs(p), ","); got != "ina" {
+		t.Fatalf("move rule must stay one level: %s", got)
+	}
+}
+
 func TestPatchContentTags(t *testing.T) {
 	const now = int64(1762000000000)
 	cases := []struct {

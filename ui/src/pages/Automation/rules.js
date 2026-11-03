@@ -247,7 +247,11 @@ export function sentence(rule, ctx) {
     else parts.push(" anywhere");
   } else {
     const src = sourceOf(rule);
-    parts.push(" in ", tok(folderName(ctx, src.id, src.name)));
+    // a tag rule covers its folder and every folder inside it
+    if (isTagAction(actionOf(rule).type)) {
+      if (src.id === ROOT_ID) parts.push(" anywhere");
+      else parts.push(" in ", tok(folderName(ctx, src.id, src.name)), " or its subfolders");
+    } else parts.push(" in ", tok(folderName(ctx, src.id, src.name)));
   }
   const kind = conditionsOf(rule).find((c) => c.type === "kind_is");
   const kindText = kind ? conditionPhrase(kind) : "";

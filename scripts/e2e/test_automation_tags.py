@@ -37,7 +37,7 @@ def test_tag_new_documents_then_untag(page, api):
     card(drawer, "Add a tag").click()
     expect(drawer.get_by_text("Enter the tag to add.")).to_be_visible()
     drawer.get_by_label("tag to change").fill(" new ")
-    want = "IF a document was created in the last 2 days in Inbox THEN add tag “new”"
+    want = "IF a document was created in the last 2 days in Inbox or its subfolders THEN add tag “new”"
     expect(summary(drawer)).to_have_text(want)
     # the PDFs conftest uploads to Inbox were created this session
     expect(drawer.get_by_text("Matches now:")).to_contain_text(re.compile(r"[1-9]\d* documents?"))
@@ -87,7 +87,7 @@ def test_tag_new_documents_then_untag(page, api):
     assert r.ok, r.text()
     page.reload()
     expect(page.locator(".ao-rule .ao-sentence")).to_have_text(
-        "IF a document was created in the last 2 days in Inbox AND tagged “new” THEN remove tag “new”")
+        "IF a document was created in the last 2 days in Inbox or its subfolders AND tagged “new” THEN remove tag “new”")
     page.once("dialog", lambda d: d.accept())
     page.get_by_role("button", name="Run now").click()
     expect(page.get_by_text(re.compile(r"[1-9]\d* tagged, 0 errors"))).to_be_visible()

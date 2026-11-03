@@ -241,7 +241,9 @@ test("tag actions: chooseAction keeps the destination, forSave sends only the tr
   assert.deepEqual(tagged.actions, [{ type: "add_tag", to: { id: "f2", name: "Done" }, tag: "" }]);
   tagged.actions[0].tag = "  new ";
   assert.deepEqual(forSave(tagged).actions, [{ type: "add_tag", tag: "new" }]);
-  assert.equal(sentenceText(forSave(tagged), { folders: FOLDERS }), "IF a document was created in the last 24 hours in Work THEN add tag “new”");
+  assert.equal(sentenceText(forSave(tagged), { folders: FOLDERS }), "IF a document was created in the last 24 hours in Work or its subfolders THEN add tag “new”");
+  const everywhere = { ...tagged, when: { ...tagged.when, in: [{ id: "", kind: "folder", name: "My files" }] } };
+  assert.equal(sentenceText(everywhere, { folders: FOLDERS }), "IF a document was created in the last 24 hours anywhere THEN add tag “new”");
   const removing = chooseAction(tagged, "rmtag");
   assert.deepEqual(removing.actions[0], { type: "remove_tag", to: { id: "f2", name: "Done" }, tag: "  new " });
   // back to move: the destination is still there
