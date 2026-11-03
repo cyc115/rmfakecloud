@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useHistory, useLocation } from "react-router-dom";
 import { parsePageParam, clampPage, withPageParam, parsePageInput } from "./pageParam";
-import { Button, ButtonGroup, Dropdown } from "react-bootstrap";
+import { pageTagsAt, taggedPages } from "./docTags";
+import { Badge, Button, ButtonGroup, Dropdown } from "react-bootstrap";
 import Navbar from 'react-bootstrap/Navbar';
 import { FaChevronRight, FaChevronLeft, } from "react-icons/fa6";
 import { AiOutlineDownload } from "react-icons/ai";
@@ -72,6 +73,20 @@ export default function FileViewer({ file, onSelect }) {
     if (e.key === "Enter") { e.preventDefault(); commitDraft(); e.currentTarget.blur(); }
     else if (e.key === "Escape") { setDraft(String(page)); e.currentTarget.blur(); }
   };
+  // document and page tags; null until loaded, or when they cannot be read
+  const [docTags, setDocTags] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setDocTags(null);
+    apiservice.documentTags(file.id)
+      .then((t) => { if (live) setDocTags(t); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [file.id]);
+  const pageTags = loaded ? pageTagsAt(docTags, page, pages) : null;
+  const tagged = loaded ? taggedPages(docTags, pages) : [];
+  const docTagList = (docTags && docTags.tags) || [];
+
   const onPrev = () => goTo(Math.max(page - 1, 1));
   const onNext = () => goTo(Math.min(page + 1, pages));
   const parent = useRef(null);
@@ -152,6 +167,28 @@ export default function FileViewer({ file, onSelect }) {
 
       </Navbar>
 
+      {(docTagList.length > 0 || tagged.length > 0) && (
+        <div className="doc-tags" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+          {docTagList.length > 0 && <span className="text-secondary">Document:</span>}
+          {docTagList.map((t) => <Badge key={"d" + t} bg="secondary">{t}</Badge>)}
+          {pageTags && pageTags.length > 0 && <span className="text-secondary" style={{ marginLeft: '8px' }}>Page {page}:</span>}
+          {pageTags && pageTags.map((t) => <Badge key={"p" + t} bg="info" text="dark">{t}</Badge>)}
+          {tagged.length > 0 && (
+            <Dropdown style={{ marginLeft: 'auto' }}>
+              <Dropdown.Toggle size="sm" variant="outline-secondary">
+                Tagged pages ({tagged.length})
+              </Dropdown.Toggle>
+              <Dropdown.Menu>
+                {tagged.map((p) => (
+                  <Dropdown.Item key={p.page} active={p.page === page} onClick={() => goTo(p.page)}>
+                    Page {p.page}: {p.tags.join(", ")}
+                  </Dropdown.Item>
+                ))}
+              </Dropdown.Menu>
+            </Dropdown>
+          )}
+        </div>
+      )}
 
       {file && (
         <div ref={parent} style={{height: isMobile ? "auto" : "95%"}}>

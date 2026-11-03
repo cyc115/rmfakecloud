@@ -141,6 +141,18 @@ class ApiServices {
       return r.blob();
     });
   }
+  // the document's tags and its pages' tags, pages in display order
+  documentTags(id) {
+    return fetch(`${constants.ROOT_URL}/documents/${encodeURIComponent(id)}/tags`, {
+      method: "GET",
+    }).then((r) => {
+      if (!r.ok) {
+        handleError(r);
+        return Promise.reject(r.status);
+      }
+      return r.json();
+    });
+  }
 
   createFolder(data) {
     return fetch(`${constants.ROOT_URL}/folders`, {

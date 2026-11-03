@@ -81,6 +81,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	auth.PUT("documents", app.updateDocument)
 	auth.POST("folders", app.createFolder)
 	auth.GET("documents/:docid/metadata", app.getDocumentMetadata)
+	app.registerDocTagsRoute(auth)
 
 	// integrations
 	auth.GET("integrations", app.listIntegrations)

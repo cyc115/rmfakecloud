@@ -77,6 +77,7 @@ func newAOAPI(t *testing.T) *aoAPI {
 	auth := api.Group("")
 	auth.Use(app.authMiddleware())
 	app.registerAutomationRoutes(api, auth)
+	app.registerDocTagsRoute(auth)
 	return &aoAPI{t: t, router: router, cfg: cfg, storage: storage, inbox: inbox.ID, news: news.ID, doc: doc.ID}
 }
 
