@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -149,20 +150,25 @@ func (fs *FileSystemStorage) Export(uid, docid string) (r io.ReadCloser, err err
 func (fs *FileSystemStorage) UpdateBlobDocument(uid, docID, name, parent string) (err error) {
 	tree, err := fs.GetCachedTree(uid)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	log.Info("updateBlobDocument: ", docID, "new name:", name)
 	blobStorage := fs.BlobStorage(uid)
 
 	err = updateTree(tree, blobStorage, func(t *models.HashTree) error {
-		hashDoc, err := tree.FindDoc(docID)
+		hashDoc, err := t.FindDoc(docID)
 		if err != nil {
 			return err
 		}
 		log.Info("updateBlobDocument: ", hashDoc.DocumentName)
+		if err := checkParent(t, docID, parent); err != nil {
+			return err
+		}
 
-		hashDoc.DocumentName = name
+		if name != "" {
+			hashDoc.DocumentName = name
+		}
 		hashDoc.Parent = parent
 		hashDoc.Version++
 
@@ -175,6 +181,37 @@ func (fs *FileSystemStorage) UpdateBlobDocument(uid, docID, name, parent string)
 	})
 
 	return err
+}
+
+// ErrBadParent the new parent is not the root, the trash or a folder outside
+// the moved item
+var ErrBadParent = errors.New("cannot move there")
+
+// trashParent the parent of a document in the Trash
+const trashParent = "trash"
+
+// checkParent parent is "" (root), "trash" or a folder that is neither docID
+// nor inside it (a folder moved into itself would leave the tree)
+func checkParent(t *models.HashTree, docID, parent string) error {
+	if parent == "" || parent == trashParent {
+		return nil
+	}
+	seen := map[string]bool{}
+	for id := parent; id != "" && id != trashParent && !seen[id]; {
+		seen[id] = true
+		if id == docID {
+			return fmt.Errorf("%w: a folder cannot go inside itself", ErrBadParent)
+		}
+		d, err := t.FindDoc(id)
+		if err != nil {
+			return fmt.Errorf("%w: no folder %s", ErrBadParent, id)
+		}
+		if id == parent && d.CollectionType != common.CollectionType {
+			return fmt.Errorf("%w: %s is not a folder", ErrBadParent, d.DocumentName)
+		}
+		id = d.Parent
+	}
+	return nil
 }
 
 // CommitDocMetadata stores a new metadata blob for hashDoc, points the doc's

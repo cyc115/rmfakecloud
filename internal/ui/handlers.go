@@ -317,6 +317,7 @@ func (app *ReactAppWrapper) updateDocument(c *gin.Context) {
 		badReq(c, err.Error())
 		return
 	}
+	backend.Sync(uid) // the tablet picks the move up now, not at its next own sync
 
 	c.Status(http.StatusOK)
 }

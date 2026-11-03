@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Navbar from 'react-bootstrap/Navbar';
 import { Button, InputGroup, Form } from "react-bootstrap";
 import Modal from 'react-bootstrap/Modal';
@@ -14,13 +14,23 @@ import FileList from "./FileList";
 import NameTag from "../../components/NameTag"
 import { toast } from "react-toastify";
 
-export default function Folder({ selection, onSelect, onUpdate }) {
+export default function Folder({ selection, onSelect, onUpdate, onMove, findNode }) {
   const [listStyle, setListStyle] = useState("list");
   const [folderName, setFolderName] = useState("");
   const [showCreateFileModal, setShowCreateFolder] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
 
   const folder = selection
+
+  // ids that left this folder (moved, deleted) must not stay selected: Delete would act on them
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => folder?.children?.some((c) => c.id === id)));
+  }, [folder, folder?.children]);
+
+  const moveSelected = async (ids, target) => {
+    await onMove(ids, target);
+    setSelectedIds([]);
+  };
 
   const onCreateFolderClick = async () => {
     const res = await apiservice.createFolder({ name: folderName, parentId: selection.id });
@@ -89,6 +99,8 @@ export default function Folder({ selection, onSelect, onUpdate }) {
         onSelect={onSelect}
         selectedIds={selectedIds}
         onSelectItem={handleSelectItem}
+        onMove={onMove ? moveSelected : undefined}
+        findNode={findNode}
       />
 
       <Modal show={showCreateFileModal} onHide={() => setShowCreateFolder(false)}>

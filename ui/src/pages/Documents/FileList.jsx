@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Stack } from "react-bootstrap";
 import {
   useReactTable,
@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-table";
 import FileIcon from "./FileIcon";
 import moment from "moment";
+import { MOVE_TYPE, canDrop, dragIds, movedIds } from "./move";
 
 // optional: load user-specific locale from config
 // moment.locale(locale); // eg. 'de' or 'fr'
@@ -20,7 +21,41 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-export default function FileListViewer({ listStyle, files, onSelect, counter, selectedIds = [], onSelectItem }) {
+export default function FileListViewer({ listStyle, files, onSelect, counter, selectedIds = [], onSelectItem, onMove, findNode }) {
+  // drag and drop: any row drags (with the selection when it is part of it); folders take drops
+  const [dropId, setDropId] = useState(null);
+  const dragProps = (node) => {
+    if (!onMove) return {};
+    const props = {
+      draggable: true,
+      onDragStart: (e) => {
+        e.dataTransfer.setData(MOVE_TYPE, JSON.stringify(dragIds(node.id, selectedIds)));
+        e.dataTransfer.effectAllowed = "move";
+      },
+    };
+    if (!node.data?.isFolder) return props;
+    return {
+      ...props,
+      onDragOver: (e) => {
+        if (!Array.from(e.dataTransfer.types || []).includes(MOVE_TYPE)) return;
+        e.preventDefault();
+        e.stopPropagation(); // not the upload drop zone
+        e.dataTransfer.dropEffect = "move";
+        setDropId(node.id);
+      },
+      onDragLeave: () => setDropId((id) => (id === node.id ? null : id)),
+      onDrop: (e) => {
+        setDropId(null);
+        const ids = movedIds(e);
+        if (!ids) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (canDrop(node, ids, findNode)) onMove(ids, node);
+      },
+    };
+  };
+  const dropClass = (node) => (dropId === node.id ? " drop-target" : "");
+
   const onClickItem = (file) => {
     onSelect(file);
   }
@@ -130,7 +165,7 @@ export default function FileListViewer({ listStyle, files, onSelect, counter, se
   });
 
   const gridFolderItems = files.filter(file => !file.isLeaf).map(file =>
-    <div className="filegrid-folder-item" key={file.id}>
+    <div className={"filegrid-folder-item" + dropClass(file)} key={file.id} {...dragProps(file)}>
       <input
         type="checkbox"
         checked={selectedIds.includes(file.id)}
@@ -146,7 +181,7 @@ export default function FileListViewer({ listStyle, files, onSelect, counter, se
   );
 
   const gridFileItems = files.filter(file => file.isLeaf).map(file =>
-    <div className="filegrid-file-item" key={file.id}>
+    <div className="filegrid-file-item" key={file.id} {...dragProps(file)}>
       <input
         type="checkbox"
         checked={selectedIds.includes(file.id)}
@@ -207,8 +242,9 @@ export default function FileListViewer({ listStyle, files, onSelect, counter, se
               {table.getRowModel().rows.map(row => (
                 <div
                   key={row.id}
-                  className="filelist-item p-2"
+                  className={"filelist-item p-2" + dropClass(row.original)}
                   onClick={() => onClickItem(row.original)}
+                  {...dragProps(row.original)}
                 >
                   <Stack direction="horizontal">
                     {row.getVisibleCells().map(cell => (

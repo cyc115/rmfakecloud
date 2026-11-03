@@ -6,6 +6,7 @@ import { Container, Row, Col } from "react-bootstrap";
 import File from "./File";
 import Folder from "./Folder";
 import { findPseudoNode } from "./pseudoTree";
+import { parentIdOf } from "./move";
 import Navbar from 'react-bootstrap/Navbar';
 import { BsSearch, BsFolder2Open } from "react-icons/bs";
 import Form from 'react-bootstrap/Form';
@@ -107,6 +108,25 @@ export default function DocumentList() {
 
   const onUpdate = () => {
     setCounter(prev => prev+1);
+  };
+
+  // the tree node of an id (react-arborist), for drop checks
+  const findNode = (id) => (treeRef.current && typeof treeRef.current.get === "function" ? treeRef.current.get(id) : null);
+
+  // drag and drop: move ids into the target folder, one request each
+  const onMove = async (ids, target) => {
+    let moved = 0;
+    for (const id of ids) {
+      const name = findNode(id)?.data?.name || id;
+      try {
+        await apiservice.moveDocument(id, parentIdOf(target.id));
+        moved++;
+      } catch (e) {
+        toast.error(`Could not move ${name}: ${e.message || e}`);
+      }
+    }
+    if (moved) toast.success(`Moved ${moved} item${moved > 1 ? "s" : ""} to ${target.data?.name || target.id}`);
+    onUpdate();
   };
 
   useEffect(() => {
@@ -229,13 +249,13 @@ export default function DocumentList() {
             </div>}
 
             <div ref={treeContainerRef} className={`${styles.treeContainer} ${treeVisible ? "" : "d-none"}`}>
-              <DocumentTree selection={selected} onSelect={onTreeSelect} treeRef={treeRef} term={term} entries={entries} height={treeHeight} />
+              <DocumentTree selection={selected} onSelect={onTreeSelect} treeRef={treeRef} term={term} entries={entries} height={treeHeight} onMove={onMove} findNode={findNode} />
             </div>
           </Col>
           <Col md={8} className={styles.col}>
             <div className={styles.pane}>
               {selected && selected.isLeaf && <File key={selected.id} file={selected} onSelect={onSelect} />}
-              {selected && !selected.isLeaf && <Folder selection={selected} onSelect={onSelect} onUpdate={onUpdate} counter={counter} />}
+              {selected && !selected.isLeaf && <Folder selection={selected} onSelect={onSelect} onUpdate={onUpdate} counter={counter} onMove={onMove} findNode={findNode} />}
             </div>
           </Col>
         </Row>

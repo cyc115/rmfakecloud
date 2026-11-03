@@ -154,6 +154,19 @@ class ApiServices {
     });
   }
 
+  // move a document or folder: parentId "" = My Files, "trash" = Trash; the name is kept
+  moveDocument(id, parentId) {
+    return fetch(`${constants.ROOT_URL}/documents`, {
+      method: "PUT",
+      headers: this.header(),
+      body: JSON.stringify({ documentId: id, parentId, name: "" }),
+    }).then((r) => {
+      if (!r.ok) {
+        return r.text().then((t) => { throw new Error(t || r.statusText); });
+      }
+    });
+  }
+
   createFolder(data) {
     return fetch(`${constants.ROOT_URL}/folders`, {
       method: "POST",
