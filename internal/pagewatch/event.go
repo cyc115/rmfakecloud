@@ -59,6 +59,9 @@ type Event struct {
 	// (Action.Tasks false): rm-pages saves the note and extracts no tasks.
 	// Absent otherwise, so other payloads are unchanged.
 	Tasks *bool `json:"tasks,omitempty"`
+	// KnownTags the tags a handwritten #tag may become (autoorganize.KnownTags),
+	// on feed edits only: rm-pages turns matching hashtags into page tags
+	KnownTags []string `json:"known_tags,omitempty"`
 }
 
 // Skip reasons

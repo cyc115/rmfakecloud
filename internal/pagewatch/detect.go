@@ -114,6 +114,14 @@ type docView struct {
 	order []string
 }
 
+// knownTags computed once per sweep, on the first feed edit
+func (d *detector) knownTags() []string {
+	if d.known == nil {
+		d.known = autoorganize.KnownTags(d.in.Config, d.in.Snap, d.in.Content)
+	}
+	return d.known
+}
+
 // pdfPage the PDF page pageID shows, nil for notebooks or without a redir
 func (v *docView) pdfPage(pageID string) *int {
 	if v.docType == DocNotebook || pageID == "" {
@@ -155,6 +163,7 @@ type detector struct {
 	leftAlone map[string]bool
 	mtimes    map[string]mtime
 	feedEvs   []Event
+	known     []string
 	pipeEvs   []Event
 	skips     []SkipNote
 	seenSkip  map[SkipNote]bool
@@ -527,6 +536,7 @@ func (d *detector) feedEdits(v *docView) {
 		ev := d.event(KindEdit, v, p.ID, at)
 		ev.PageIndex, ev.BeforeHash, ev.AfterHash = p.Index, prev, p.Hash
 		ev.TraceID = TraceID("feed", "edit", v.snap.ID, p.ID, prev, p.Hash)
+		ev.KnownTags = d.knownTags()
 		d.feedEvs = append(d.feedEvs, ev)
 		hash := p.Hash
 		d.onAccept(ev.TraceID, func(s *State) { s.Feed[key] = hash })
