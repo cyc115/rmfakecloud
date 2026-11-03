@@ -38,6 +38,8 @@ const (
 	TriggerReadProgress    = automation.TriggerReadProgress
 	TriggerAgeSinceCreated = automation.TriggerAgeSinceCreated
 	TriggerPinnedIs        = automation.TriggerPinnedIs
+	TriggerCreatedTime     = automation.TriggerCreatedTime
+	TriggerModifiedTime    = automation.TriggerModifiedTime
 	// TriggerPageChanged belongs to pipeline rules only; the move planner never evaluates it
 	TriggerPageChanged = automation.TriggerPageChanged
 	// TriggerPageTagged belongs to pipeline rules only: pages carrying Trigger.Tag

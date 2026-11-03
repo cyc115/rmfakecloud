@@ -106,6 +106,9 @@ test("every document trigger with Move renders", () => {
     [{ ...makeTrigger("name_matches"), pattern: "WSJ*" }, "IF a document named like “WSJ*” is in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("pinned_is"), pinned: true }, "IF a document is pinned in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("pinned_is"), pinned: false }, "IF a document is unpinned in Inbox THEN move it to Archive"],
+    [makeTrigger("created_time"), "IF a document was created in the last 24 hours in Inbox THEN move it to Archive"],
+    [{ ...makeTrigger("modified_time"), compare: "older", amount: 3, unit: "days" },
+      "IF a document was changed more than 3 days ago in Inbox THEN move it to Archive"],
   ];
   for (const [trigger, want] of cases) assert.equal(sentenceText(moveRule(trigger), CTX), want);
   // every document card is covered

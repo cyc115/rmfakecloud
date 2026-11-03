@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  actionKey, chooseTrigger, forSave, isPageRule, missingFor, newPageRule, newRule, pendingText, runCounts, taggedCount, taggedNow, withDisplayNames,
+  actionFit, actionKey, chooseAction, chooseTrigger, forSave, sentenceText, isPageRule, missingFor, newPageRule, newRule, pendingText, runCounts, taggedCount, taggedNow, withDisplayNames,
 } from "./rules.js";
 import { readFileSync } from "node:fs";
 
@@ -230,4 +230,30 @@ test("api.service paths start with /automation", async () => {
   for (const u of urls) assert.match(u, /^\/ui\/api\/automation(\/|$)/, u);
   assert.ok(urls.includes("/ui/api/automation/undo/e1"));
   assert.ok(urls.includes("/ui/api/automation/pipeline/run-now"));
+});
+
+test("tag actions: chooseAction keeps the destination, forSave sends only the trimmed tag", () => {
+  const rule = newRule(FOLDERS);
+  rule.when.trigger = { type: "created_time", compare: "within", amount: 24, unit: "hours" };
+  rule.actions = [{ type: "move", to: { id: "f2", name: "Done" } }];
+  const tagged = chooseAction(rule, "addtag");
+  assert.equal(actionKey(tagged), "addtag");
+  assert.deepEqual(tagged.actions, [{ type: "add_tag", to: { id: "f2", name: "Done" }, tag: "" }]);
+  tagged.actions[0].tag = "  new ";
+  assert.deepEqual(forSave(tagged).actions, [{ type: "add_tag", tag: "new" }]);
+  assert.equal(sentenceText(forSave(tagged), { folders: FOLDERS }), "IF a document was created in the last 24 hours in Work THEN add tag “new”");
+  const removing = chooseAction(tagged, "rmtag");
+  assert.deepEqual(removing.actions[0], { type: "remove_tag", to: { id: "f2", name: "Done" }, tag: "  new " });
+  // back to move: the destination is still there
+  assert.deepEqual(forSave(chooseAction(removing, "move")).actions, [{ type: "move", to: { id: "f2", name: "Done" } }]);
+  // same card: unchanged
+  assert.equal(chooseAction(removing, "rmtag"), removing);
+});
+
+test("tag actions do not fit page triggers", () => {
+  assert.equal(actionFit("addtag", "page_changed").ok, false);
+  assert.match(actionFit("rmtag", "page_tagged").reason, /whole documents/);
+  assert.equal(actionFit("rmtag", "page_tagged").reason, actionFit("move", "page_changed").reason);
+  assert.equal(actionFit("addtag", "created_time").ok, true);
+  assert.equal(chooseAction(newPageRule(DEFAULTS), "addtag").actions[0].type, "extract_tasks");
 });

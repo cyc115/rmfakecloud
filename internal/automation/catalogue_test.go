@@ -23,7 +23,7 @@ func paramsTags() map[string]bool {
 // (TestCatalogueComplete there), because the evaluators are package-private.
 func TestCatalogueComplete(t *testing.T) {
 	tags := paramsTags()
-	want := []string{"days", "kind", "minPages", "pattern", "percent", "pinned", "settleHours", "tag"}
+	want := []string{"amount", "compare", "days", "kind", "minPages", "pattern", "percent", "pinned", "settleHours", "tag", "unit"}
 	var got []string
 	for k := range tags {
 		got = append(got, k)
@@ -63,6 +63,8 @@ func TestCatalogueValues(t *testing.T) {
 		TriggerPinnedIs:        {"pinned"},
 		TriggerPageChanged:     {},
 		TriggerPageTagged:      {"tag"},
+		TriggerCreatedTime:     {"compare", "amount", "unit"},
+		TriggerModifiedTime:    {"compare", "amount", "unit"},
 	}
 	if len(Triggers) != len(fields) {
 		t.Errorf("%d triggers, want %d", len(Triggers), len(fields))
@@ -96,14 +98,16 @@ func TestCatalogueValues(t *testing.T) {
 		fields   []string
 		subjects []string
 	}{
-		CondKindIs:      {[]string{"kind"}, both},
-		CondTagIs:       {[]string{"tag"}, both},
-		CondTagIsNot:    {[]string{"tag"}, both},
-		CondNameMatches: {[]string{"pattern"}, both},
-		CondNotOpened:   {[]string{"days"}, doc},
-		CondMinAgeDays:  {[]string{"days"}, doc},
-		CondPinnedIs:    {[]string{"pinned"}, doc},
-		CondPageTagIs:   {[]string{"tag"}, page},
+		CondKindIs:       {[]string{"kind"}, both},
+		CondTagIs:        {[]string{"tag"}, both},
+		CondTagIsNot:     {[]string{"tag"}, both},
+		CondNameMatches:  {[]string{"pattern"}, both},
+		CondNotOpened:    {[]string{"days"}, doc},
+		CondMinAgeDays:   {[]string{"days"}, doc},
+		CondPinnedIs:     {[]string{"pinned"}, doc},
+		CondPageTagIs:    {[]string{"tag"}, page},
+		CondCreatedTime:  {[]string{"compare", "amount", "unit"}, both},
+		CondModifiedTime: {[]string{"compare", "amount", "unit"}, both},
 	}
 	if len(Conditions) != len(conds) {
 		t.Errorf("%d conditions, want %d", len(Conditions), len(conds))
@@ -118,7 +122,8 @@ func TestCatalogueValues(t *testing.T) {
 			t.Errorf("condition %s = fields %v subjects %v, want %v %v", typ, s.Fields, s.Subjects, w.fields, w.subjects)
 		}
 		before := typ == CondKindIs
-		repeat := typ == CondTagIs || typ == CondTagIsNot || typ == CondPageTagIs
+		repeat := typ == CondTagIs || typ == CondTagIsNot || typ == CondPageTagIs ||
+			typ == CondCreatedTime || typ == CondModifiedTime
 		if s.BeforeTrigger != before || s.Repeatable != repeat || s.PageBased {
 			t.Errorf("condition %s flags = %+v", typ, s)
 		}

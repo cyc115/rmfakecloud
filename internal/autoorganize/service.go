@@ -378,8 +378,10 @@ func (s *Service) recheckFor(uid string, r *automation.Rule, dest string, st *St
 		if !ok {
 			return ErrVanished
 		}
-		if err := destinationUsable(cur, dest); err != nil {
-			return err
+		if dest != "" || r.TagAction() == nil {
+			if err := destinationUsable(cur, dest); err != nil {
+				return err
+			}
 		}
 		ci := cache.Get(snap)
 		chk := checkDoc(r, dest, snap, &ci, st.FirstSeen[d.EntryName], cur.Locate, s.Now())
@@ -492,13 +494,18 @@ func (s *Service) sweepLocked(ctx context.Context, ul *userLoop, trigger string,
 		}
 		entry := MoveEntry{At: s.Now().UnixMilli(), Mode: EntryDry, DocID: mv.DocID, DocName: mv.DocName,
 			RuleID: mv.RuleID, RuleName: mv.RuleName, RuleNumber: mv.RuleNumber,
-			From: mv.From, FromName: mv.FromName, To: mv.To, ToName: mv.ToName, Detail: mv.Detail, Kind: "rule"}
+			From: mv.From, FromName: mv.FromName, To: mv.To, ToName: mv.ToName, Detail: mv.Detail, Kind: "rule",
+			Action: mv.Action, Tag: mv.Tag}
 		if !live {
 			if mv.CreateFolder != nil {
 				entry.ToName += " (new folder)"
 			}
 			st.AppendMove(entry)
 			run.Planned++
+			continue
+		}
+		if entry.IsTag() {
+			s.applyTag(sw, mv, entry)
 			continue
 		}
 		s.applyMove(sw, mv, entry)
@@ -591,6 +598,40 @@ func (s *Service) applyMove(sw *sweep, mv PlannedMove, entry MoveEntry) {
 	log.Info(logPrefix, sw.uid, ": moved ", mv.DocName, " ", mv.FromName, " -> ", entry.ToName, " (rule ", mv.RuleNumber, ")")
 }
 
+// applyTag performs one planned tag change of a LIVE sweep under the
+// re-check (recheckFor with no destination) and records it in the moves log.
+// A tag already as wanted at write time is no change and leaves no entry.
+func (s *Service) applyTag(sw *sweep, mv PlannedMove, entry MoveEntry) {
+	run := sw.run
+	rule, _ := findRule(sw.cfg, mv.RuleID)
+	var inputs map[string]string
+	fresh, err := s.storage.GetCachedTree(sw.uid)
+	changed := false
+	if err == nil {
+		changed, err = tagDoc(fresh, s.storage.BlobStorage(sw.uid), mv.DocID, mv.Tag, mv.Action == automation.ActionAddTag,
+			s.Now().UnixMilli(), s.recheckFor(sw.uid, rule, "", sw.st, sw.cache, &inputs))
+	}
+	if err != nil {
+		if IsNotQualified(err) {
+			run.Skipped++
+			run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("%s: skipped at tag time, %v", mv.DocName, err))
+			return
+		}
+		run.Errors++
+		run.ErrorDetails = append(run.ErrorDetails, fmt.Sprintf("%s: could not tag after retries: %v", mv.DocName, err))
+		return
+	}
+	if !changed {
+		return
+	}
+	sw.treeChanged = true
+	run.Tagged++
+	entry.Mode = EntryLive
+	entry.At = s.Now().UnixMilli()
+	sw.st.AppendMove(entry)
+	log.Info(logPrefix, sw.uid, ": ", entry.Action, " “", mv.Tag, "” on ", mv.DocName, " (rule ", mv.RuleNumber, ")")
+}
+
 func (s *Service) finishRun(uid string, st *State, run *RunEntry, start time.Time, plan *Plan) {
 	run.DurationMs = s.Now().Sub(start).Milliseconds()
 	st.LastSweep = run
@@ -678,6 +719,9 @@ func (s *Service) Undo(uid, moveID string) (*MoveEntry, error) {
 	entry := st.MoveByID(moveID)
 	if entry == nil || entry.Mode != EntryLive || entry.Kind == "undo" {
 		return nil, ErrNoEntry
+	}
+	if entry.IsTag() {
+		return nil, &NotQualifiedError{Reason: "a tag change cannot be undone here; change the tag on the tablet"}
 	}
 	if entry.UndoneAt != 0 {
 		return nil, ErrAlreadyUndone
@@ -884,7 +928,7 @@ func (s *Service) Log(uid string) (*Log, error) {
 	}
 	for _, m := range st.Moves {
 		lm := LogMove{MoveEntry: m}
-		if m.Mode == EntryLive {
+		if m.Mode == EntryLive && !m.IsTag() {
 			key := m.RuleID + "|" + m.DocID
 			if !newest[key] {
 				newest[key] = true

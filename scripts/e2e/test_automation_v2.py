@@ -68,7 +68,7 @@ def test_two_condition_document_rule(page, api):
     expect(page.locator(".ao-row .doc", has_text="Paper")).to_be_visible()
     # run now (dry mode): succeeds and plans the moves
     page.get_by_role("button", name="Run now").click()
-    expect(page.get_by_text(re.compile(r"Dry run: \d+ would move"))).to_be_visible()
+    expect(page.get_by_text(re.compile(r"Dry run: \d+ would change"))).to_be_visible()
     assert_healthy(page)
 
 
@@ -95,7 +95,7 @@ def test_two_condition_page_rule(page, api):
     expect(drawer.get_by_text("Matches now:")).to_contain_text(re.compile(r"[1-9]\d* pages? in"))
     # no way to add a second action: the THEN cards are single-choice
     assert page.get_by_role("button", name=re.compile("add an action", re.I)).count() == 0
-    expect(drawer.get_by_role("radiogroup", name="Action").get_by_role("radio")).to_have_count(3)
+    expect(drawer.get_by_role("radiogroup", name="Action").get_by_role("radio")).to_have_count(5)
     fits_viewport(page)
     save_rule(page, drawer)
     sentence = page.locator(".ao-rule .ao-sentence")

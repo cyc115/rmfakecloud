@@ -6,7 +6,7 @@ import (
 )
 
 // MsgOneAction the R-B2 rule: exactly one action per rule
-const MsgOneAction = "a rule has exactly one action for now: extract tasks already saves the note, and move is the only document action"
+const MsgOneAction = "a rule has exactly one action for now: extract tasks already saves the note; use one rule per document action (move, add tag, remove tag)"
 
 // ValidationError a config validation failure, per rule when RuleIndex >= 0
 type ValidationError struct {
@@ -139,7 +139,8 @@ func (r *Rule) validateConditions() error {
 }
 
 // actionLabels the page actions as the UI names them
-var actionLabels = map[string]string{ActionExtractTasks: "extract tasks", ActionSaveNotes: "save notes"}
+var actionLabels = map[string]string{ActionExtractTasks: "extract tasks", ActionSaveNotes: "save notes",
+	ActionAddTag: "add tag", ActionRemoveTag: "remove tag"}
 
 func (r *Rule) validateActions() error {
 	if len(r.Actions) != 1 {
@@ -157,6 +158,11 @@ func (r *Rule) validateActions() error {
 			return fmt.Errorf("%s works on pages, which a document rule does not see; use a page trigger", actionLabels[a.Type])
 		}
 		return nil
+	case ActionAddTag, ActionRemoveTag:
+		if r.IsPage() {
+			return fmt.Errorf("%s works on whole documents, so a page rule cannot %s; use a document trigger", actionLabels[a.Type], actionLabels[a.Type])
+		}
+		return validDocTag(&Params{Tag: a.Tag})
 	default:
 		return fmt.Errorf("unknown action %q", a.Type)
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Subjects: what a trigger or condition looks at
@@ -31,19 +32,47 @@ const (
 	TriggerPageChanged = "page_changed"
 	// TriggerPageTagged pages carrying Params.Tag (page watch)
 	TriggerPageTagged = "page_tagged"
+	// TriggerCreatedTime created in the last / more than Amount Unit ago
+	TriggerCreatedTime = "created_time"
+	// TriggerModifiedTime changed in the last / more than Amount Unit ago
+	TriggerModifiedTime = "modified_time"
 )
 
 // Condition types
 const (
-	CondKindIs      = "kind_is"
-	CondTagIs       = "tag_is"
-	CondTagIsNot    = "tag_is_not"
-	CondNotOpened   = "not_opened_for_days"
-	CondMinAgeDays  = "min_age_days"
-	CondNameMatches = "name_matches"
-	CondPinnedIs    = "pinned_is"
-	CondPageTagIs   = "page_tag_is"
+	CondKindIs       = "kind_is"
+	CondTagIs        = "tag_is"
+	CondTagIsNot     = "tag_is_not"
+	CondNotOpened    = "not_opened_for_days"
+	CondMinAgeDays   = "min_age_days"
+	CondNameMatches  = "name_matches"
+	CondPinnedIs     = "pinned_is"
+	CondPageTagIs    = "page_tag_is"
+	CondCreatedTime  = "created_time"
+	CondModifiedTime = "modified_time"
 )
+
+// Time comparisons of created_time and modified_time
+const (
+	// CompareWithin in the last Amount Unit
+	CompareWithin = "within"
+	// CompareOlder more than Amount Unit ago
+	CompareOlder = "older"
+)
+
+// Time units of created_time and modified_time
+const (
+	UnitHours = "hours"
+	UnitDays  = "days"
+	UnitWeeks = "weeks"
+)
+
+// unitDurations the length of one Unit
+var unitDurations = map[string]time.Duration{
+	UnitHours: time.Hour,
+	UnitDays:  24 * time.Hour,
+	UnitWeeks: 7 * 24 * time.Hour,
+}
 
 // Kinds, read from the .content fileType
 const (
@@ -63,6 +92,16 @@ type Params struct {
 	Tag         string `json:"tag"`
 	Kind        string `json:"kind"`
 	Pinned      bool   `json:"pinned"`
+	// Compare, Amount and Unit: created_time and modified_time
+	Compare string `json:"compare"`
+	Amount  int    `json:"amount"`
+	Unit    string `json:"unit"`
+}
+
+// Window Amount Unit as a duration (created_time, modified_time); 0 for an
+// unknown unit
+func (p *Params) Window() time.Duration {
+	return time.Duration(p.Amount) * unitDurations[p.Unit]
 }
 
 // Spec everything known about one trigger or condition type
@@ -127,6 +166,35 @@ func trimTag(p *Params) {
 func validPageTag(p *Params) error {
 	if NormalizePageTag(p.Tag) == "" {
 		return errors.New("tag cannot be empty")
+	}
+	return nil
+}
+
+// timeFields the parameters of created_time and modified_time
+var timeFields = []string{"compare", "amount", "unit"}
+
+// defaultTime in the last 24 hours
+func defaultTime(p *Params) {
+	if p.Compare == "" {
+		p.Compare = CompareWithin
+	}
+	if p.Amount == 0 {
+		p.Amount = 24
+	}
+	if p.Unit == "" {
+		p.Unit = UnitHours
+	}
+}
+
+func validTime(p *Params) error {
+	if p.Compare != CompareWithin && p.Compare != CompareOlder {
+		return fmt.Errorf("compare must be %s or %s", CompareWithin, CompareOlder)
+	}
+	if p.Amount < 1 {
+		return errors.New("the amount of time must be at least 1")
+	}
+	if _, ok := unitDurations[p.Unit]; !ok {
+		return fmt.Errorf("unit must be %s, %s or %s", UnitHours, UnitDays, UnitWeeks)
 	}
 	return nil
 }
@@ -207,6 +275,18 @@ var Triggers = map[string]*Spec{
 		Defaults: trimTag,
 		Validate: validPageTag,
 	},
+	TriggerCreatedTime: {
+		Subjects: []string{SubjectDocument},
+		Fields:   timeFields,
+		Defaults: defaultTime,
+		Validate: validTime,
+	},
+	TriggerModifiedTime: {
+		Subjects: []string{SubjectDocument},
+		Fields:   timeFields,
+		Defaults: defaultTime,
+		Validate: validTime,
+	},
 }
 
 // Conditions the condition catalogue, by type. A condition that shares a
@@ -268,5 +348,21 @@ var Conditions = map[string]*Spec{
 		Repeatable: true,
 		Defaults:   trimTag,
 		Validate:   validPageTag,
+	},
+	// the document's times; on a page rule, the times of the page's document.
+	// Repeatable, so a rule can hold a window (older than 1 day AND within 7).
+	CondCreatedTime: {
+		Subjects:   []string{SubjectDocument, SubjectPage},
+		Fields:     timeFields,
+		Repeatable: true,
+		Defaults:   defaultTime,
+		Validate:   validTime,
+	},
+	CondModifiedTime: {
+		Subjects:   []string{SubjectDocument, SubjectPage},
+		Fields:     timeFields,
+		Repeatable: true,
+		Defaults:   defaultTime,
+		Validate:   validTime,
 	},
 }

@@ -70,6 +70,15 @@ type MoveEntry struct {
 	// Kind "rule", "reapply" or "undo"
 	Kind     string `json:"kind"`
 	UndoneAt int64  `json:"undoneAt,omitempty"`
+	// Action "" for a move; add_tag or remove_tag for a tag change, which
+	// leaves the document where it is (From == To) and cannot be undone here
+	Action string `json:"action,omitempty"`
+	Tag    string `json:"tag,omitempty"`
+}
+
+// IsTag the entry is a tag change, not a move
+func (m *MoveEntry) IsTag() bool {
+	return m.Action == automation.ActionAddTag || m.Action == automation.ActionRemoveTag
 }
 
 // RunEntry one line of the Runs tab
@@ -80,6 +89,7 @@ type RunEntry struct {
 	Trigger      string   `json:"trigger"`
 	Scanned      int      `json:"scanned"`
 	Moved        int      `json:"moved"`
+	Tagged       int      `json:"tagged"`
 	Planned      int      `json:"planned"`
 	Skipped      int      `json:"skipped"`
 	Errors       int      `json:"errors"`
@@ -228,7 +238,7 @@ func (st *State) AppendMove(m MoveEntry) {
 // newestLiveMove the most recent LIVE sweeper move of a document
 func (st *State) newestLiveMove(docID string) *MoveEntry {
 	for i := range st.Moves {
-		if st.Moves[i].DocID == docID && st.Moves[i].Mode == EntryLive {
+		if st.Moves[i].DocID == docID && st.Moves[i].Mode == EntryLive && !st.Moves[i].IsTag() {
 			return &st.Moves[i]
 		}
 	}

@@ -304,6 +304,45 @@ func evalAgeSinceCreated(p *automation.Params, d *DocSnap, _ *ContentInfo, fs *F
 	return ev
 }
 
+// evalTime created_time and modified_time: the time field is in the last
+// Amount Unit (compare within) or more than Amount Unit ago (older). A
+// missing or invalid time is a skip, never a guess: created_time does not
+// fall back to lastModified or first-seen the way the age anchor does, since
+// either would make an old document look new.
+func evalTime(p *automation.Params, raw, key, verb string, now time.Time) evaluation {
+	ev := evaluation{inputs: map[string]string{key: raw}}
+	at, ok := parseMillis(raw)
+	if !ok {
+		ev.skip = SkipTimeUnknown
+		ev.skipDetail = key + " missing or invalid"
+		return ev
+	}
+	win := p.Window()
+	if win <= 0 {
+		ev.skip = SkipInvalidRule
+		ev.skipDetail = "unknown time unit “" + p.Unit + "”"
+		return ev
+	}
+	age := now.Sub(at)
+	ev.detail = fmt.Sprintf("%s %s ago", verb, humanDuration(age))
+	if p.Compare == automation.CompareOlder {
+		ev.match = age > win
+	} else {
+		ev.match = age <= win
+	}
+	return ev
+}
+
+// evalCreatedTime created_time, from createdTime
+func evalCreatedTime(p *automation.Params, d *DocSnap, _ *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
+	return evalTime(p, d.CreatedTime, "createdTime", "created", now)
+}
+
+// evalModifiedTime modified_time, from lastModified
+func evalModifiedTime(p *automation.Params, d *DocSnap, _ *ContentInfo, _ *FirstSeen, now time.Time) evaluation {
+	return evalTime(p, d.LastModified, "lastModified", "changed", now)
+}
+
 // evalNotAMoveTrigger the evaluator of triggers the move planner does not own
 // (page_changed, page_tagged): a skip, never a match
 func evalNotAMoveTrigger(typ string) evalFunc {

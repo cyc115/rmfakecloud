@@ -1,6 +1,6 @@
-// Package autoorganize moves documents between folders on the server
-// according to the document rules of automation.json: folder -> trigger +
-// conditions -> action (move). One sweeper loop per sync15 user evaluates the
+// Package autoorganize moves and tags documents on the server according to
+// the document rules of automation.json: folder -> trigger + conditions ->
+// action (move, add_tag, remove_tag). One sweeper loop per sync15 user evaluates the
 // rules against a snapshot of the tree, in dry (log only) or live mode, on a
 // timer, after a tablet sync, or on request. Page rules (When.Subject "page")
 // belong to internal/pagewatch; the sweeper skips them, keeping their config
@@ -26,9 +26,12 @@
 //     paths and locations; ContentInfo read from .content blobs and the
 //     per-blob ContentCache.
 //   - plan.go      BuildPlan, the pure planner: document rules top to bottom,
-//     first match claims a document; destination resolution; LoopWarnings.
-//   - move.go      moveDoc, the one write path: re-checks inside the
+//     the first move that matches claims a document (tag rules claim
+//     nothing); destination resolution; LoopWarnings.
+//   - move.go      moveDoc, the move write path: re-checks inside the
 //     generation-conflict retry, patches only parent/version.
+//   - tag.go       tagDoc, the tag write path: the same retry and re-check,
+//     patches only the .content "tags" list and the metadata version.
 //   - state.go     the sweeper-owned state: holds, cycle-guard history,
 //     first-seen, created folders, moves/runs logs.
 //   - store.go     the per-user files and their atomic writes: automation.json
@@ -88,20 +91,26 @@
 //
 // # Adding an action
 //
-// There are three actions. "move" is run by the sweeper (service.go) over the
-// plan from BuildPlan; "extract_tasks" and "save_notes" are run by
-// internal/pagewatch and are invisible to the planner. Where an action lives:
+// There are five actions. "move", "add_tag" and "remove_tag" are run by the
+// sweeper (service.go) over the plan from BuildPlan; "extract_tasks" and
+// "save_notes" are run by internal/pagewatch and are invisible to the
+// planner. Where an action lives:
 //
 //   - internal/automation: the Action* constant, any Action fields (To for
 //     move; Prompt and Model for the page actions), the Normalize defaults,
-//     the accessor (Rule.Move, Rule.PageAction) and validateActions. A rule
-//     has exactly one action for now (R-B2).
+//     the accessor (Rule.Move, Rule.TagAction, Rule.PageAction) and
+//     validateActions. A rule has exactly one action for now (R-B2).
 //   - plan.go: BuildPlan and LoopWarnings consider document rules with a
 //     move only; rule numbers keep the config position.
 //   - move: PlannedMove (plan.go), applyMove and recordLiveMove (service.go),
 //     Undo and Reapply, and moveDoc (move.go). The holds/cycle guard are
-//     move-specific. A further document action adds its own plan entry type
-//     and a sibling of applyMove, with its own undo semantics.
+//     move-specific.
+//   - tags: a PlannedMove and MoveEntry with Action/Tag set and To == From,
+//     so Preview, the log and Runs show them without a second entry type;
+//     applyTag (service.go) and tagDoc (tag.go) write them. They set no hold
+//     and no history, cannot be undone (Undo refuses, Log gives no canUndo),
+//     and newestLiveMove skips them. A further document action follows the
+//     same shape.
 //   - page actions: pagewatch.pipelineEvent reads the prompt and model from
 //     Rule.PageAction; save_notes sets the event's tasks false.
 //   - migrate.go: ToV1 must refuse (RuleIssue) an action v1 cannot express.

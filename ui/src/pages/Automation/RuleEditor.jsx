@@ -3,10 +3,10 @@ import apiService from "../../services/api.service";
 import FolderPicker from "./FolderPicker";
 import PlacesPicker from "./PlacesPicker";
 import Sentence from "./Sentence";
-import { KIND_LABELS, conditionFit, conditionPhrase, conditionSpec, conditionsFor, makeCondition } from "./conditions";
+import { KIND_LABELS, TIME_UNITS, conditionFit, conditionPhrase, conditionSpec, conditionsFor, makeCondition } from "./conditions";
 import {
   ACTION_CARDS, NO_AUTOMATION_TAG, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
-  actionFit, actionKey, actionOf, chooseAction, chooseTrigger, conditionLock, destinationName, editableIn, forSave, isPageRule,
+  actionFit, actionKey, actionOf, chooseAction, chooseTrigger, conditionLock, destinationName, editableIn, forSave, isPageRule, isTagAction, tagActionText,
   moveTo, normalizePageTag, pageTagsOf, patternError, placesOf, plural, ruleLabel, sentenceText, sourceOf, tagSuggestions, taggedNow,
 } from "./rules";
 
@@ -16,6 +16,29 @@ function num(v) {
 }
 
 const isNoAutomation = (tag) => (tag || "").trim().toLowerCase().replace(/[\s_-]+/g, " ") === NO_AUTOMATION_TAG;
+
+const isTimeType = (type) => type === "created_time" || type === "modified_time";
+
+// TimeInputs "in the last / more than" N hours|days|weeks (ago), for the
+// created_time and modified_time trigger and conditions
+function TimeInputs({ value, label, focus, onChange }) {
+  return (
+    <>
+      <select className="ao-inline-sel" value={value.compare} aria-label={`${label} compare`} autoFocus={focus}
+        onChange={(e) => onChange({ compare: e.target.value })}>
+        <option value="within">in the last</option>
+        <option value="older">more than</option>
+      </select>
+      <input type="number" min={1} value={value.amount} aria-label={`${label} amount`}
+        onChange={(e) => onChange({ amount: num(e.target.value) })} />
+      <select className="ao-inline-sel" value={value.unit} aria-label={`${label} unit`}
+        onChange={(e) => onChange({ unit: e.target.value })}>
+        {TIME_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+      </select>
+      {value.compare === "older" && <span className="n">ago</span>}
+    </>
+  );
+}
 
 // conditionError the inline error for one condition, or null
 function conditionError(c) {
@@ -30,6 +53,8 @@ function conditionError(c) {
     case "name_matches": return patternError(c.pattern);
     case "not_opened_for_days": return c.days < 1 ? "Days must be at least 1." : null;
     case "min_age_days": return c.days < 0 ? "Minimum age cannot be negative." : null;
+    case "created_time":
+    case "modified_time": return c.amount < 1 ? "The amount of time must be at least 1." : null;
     default: return null;
   }
 }
@@ -48,10 +73,15 @@ function validate(rule, otherRules, folders) {
   const src = sourceOf(rule);
   const to = moveTo(rule);
   const cm = to.createIfMissing;
+  const act = actionOf(rule);
+  const tagging = isTagAction(act.type);
   // the pickers list only folders outside the Trash
   const exists = (id) => (folders || []).some((f) => f.id === id);
   if (!exists(src.id)) add("The folder in “In” is missing or in the Trash. Pick a folder.");
-  if (cm) {
+  if (tagging) {
+    if (!(act.tag || "").trim()) add(`Enter the tag to ${act.type === "add_tag" ? "add" : "remove"}.`);
+    else if (isNoAutomation(act.tag)) add("“no automation” documents are always skipped; pick another tag.");
+  } else if (cm) {
     if (!cm.name.trim()) add("Name the new subfolder.");
   } else if (!exists(to.id)) {
     add("Destination folder missing or in Trash. Pick a folder.");
@@ -66,8 +96,9 @@ function validate(rule, otherRules, folders) {
   if (["not_opened_for_days", "not_modified_for_days", "age_since_created"].includes(t.type) && t.days < 1) {
     add("Days must be at least 1.");
   }
+  if (isTimeType(t.type) && t.amount < 1) add("The amount of time must be at least 1.");
   (rule.conditions || []).forEach((c) => add(conditionError(c)));
-  if (!cm) {
+  if (!cm && !tagging) {
     const loops = otherRules.filter((o) => o.enabled && sourceOf(o).id === to.id &&
       !moveTo(o).createIfMissing && moveTo(o).id === src.id);
     if (loops.length) {
@@ -110,6 +141,15 @@ function ConditionChip({ cond, index, focus, onChange, onRemove }) {
     case "min_age_days": body = <><span className="n">at least</span>{days(0)}<span className="n">days old</span></>; break;
     case "name_matches": body = <><span className="n">named like</span>{text("pattern", "glob or /regex/")}</>; break;
     case "page_tag_is": body = <><span className="n">on pages tagged</span>{text("tag", "page tag", "ao-page-tags")}</>; break;
+    case "created_time":
+    case "modified_time":
+      body = (
+        <>
+          <span className="n">{cond.type === "created_time" ? "created" : "changed"}</span>
+          <TimeInputs value={cond} label={`condition ${index + 1}`} focus={focus} onChange={onChange} />
+        </>
+      );
+      break;
     case "pinned_is":
       body = (
         <select className="ao-inline-sel" value={cond.pinned ? "1" : "0"} aria-label={lbl("pinned")}
@@ -198,7 +238,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   // document rule answers a Plan, a page rule a PagePreview. Keyed on what
   // the preview reads: places, trigger and conditions, plus the destination of
   // a document rule (a page rule's prompt and model never change it)
-  const previewKey = rule ? JSON.stringify([rule.when, rule.conditions, page ? null : moveTo(rule)]) : "";
+  const previewKey = rule ? JSON.stringify([rule.when, rule.conditions, page ? null : actionOf(rule)]) : "";
   useEffect(() => {
     if (!open || !rule || errors.length) {
       setMatches(null);
@@ -342,6 +382,17 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
       {t.type === "age_since_created" && (
         <div className="ao-frow">at least {numInput("days", 1)} days ago <span className="ao-hint">created time, else last modified, else first seen</span></div>
       )}
+      {isTimeType(t.type) && (
+        <div className="ao-frow">
+          {t.type === "created_time" ? "created" : "changed"}{" "}
+          <TimeInputs value={t} label="trigger" onChange={updateTrigger} />
+          <span className="ao-hint">
+            {t.type === "created_time"
+              ? "the tablet's created time; documents without one are skipped"
+              : "last edit on the tablet (writing counts); tags added by a rule do not"}
+          </span>
+        </div>
+      )}
       {t.type === "pinned_is" && (
         <div className="ao-frow">
           <label className="chk"><input type="radio" name="ao-pin" checked={t.pinned} onChange={() => updateTrigger({ pinned: true })} /> is pinned</label>
@@ -441,7 +492,15 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     </details>
   );
 
-  const disabledActions = ACTION_CARDS.filter((a) => !actionFit(a.key, t.type).ok);
+  // the cards not offered, one callout per reason: [{titles, reason}]
+  const notOffered = [];
+  for (const a of ACTION_CARDS) {
+    const fit = actionFit(a.key, t.type);
+    if (fit.ok) continue;
+    const same = notOffered.find((n) => n.reason === fit.reason);
+    if (same) same.titles.push(a.title);
+    else notOffered.push({ titles: [a.title], reason: fit.reason });
+  }
 
   const matchesNow = matchesError ? (
     <span className="ao-hint bad" role="status">Couldn&apos;t load the preview{" "}
@@ -477,7 +536,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     preview = (
       <div className="ao-matches">
         Matches now: {matchesNow} {show}
-        <span className="ao-hint">→ {destinationName(rule, ctx)}</span>
+        <span className="ao-hint">{isTagAction(action.type) ? tagActionText(action) : `→ ${destinationName(rule, ctx)}`}</span>
       </div>
     );
   }
@@ -529,8 +588,10 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
                     onPick={() => setRule(chooseAction(rule, a.key))} />
                 ))}
               </div>
-              {disabledActions.map((a) => (
-                <div className="ao-callout" key={a.key}><b>{a.title}</b> is not offered here. {actionFit(a.key, t.type).reason}</div>
+              {notOffered.map((n) => (
+                <div className="ao-callout" key={n.reason}>
+                  <b>{n.titles.join(", ")}</b> {n.titles.length === 1 ? "is" : "are"} not offered here. {n.reason}
+                </div>
               ))}
               <div className="ao-fill">
                 {key === "move" && (
@@ -552,6 +613,17 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
                       </div>
                     )}
                   </>
+                )}
+                {isTagAction(action.type) && (
+                  <div className="ao-frow">
+                    <span className="ao-lbl">Tag</span>
+                    <input type="text" value={action.tag || ""} placeholder="e.g. new" aria-label="tag to change"
+                      onChange={(e) => updateAction({ tag: e.target.value })} />
+                    <span className="ao-hint">
+                      {action.type === "add_tag" ? "Added on the tablet when the rule matches." : "Taken off on the tablet when the rule matches."}
+                      {" "}Document tag; case, spaces, - and _ don&apos;t matter.
+                    </span>
+                  </div>
                 )}
                 {key === "extract" && (
                   <div className="ao-frow"><span className="ao-hint">Skips anything marked -inbox. Tasks land in inbox-remarkable.md, notes in personal/handwritten/.</span></div>

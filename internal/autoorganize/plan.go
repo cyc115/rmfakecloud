@@ -24,6 +24,9 @@ type PlannedMove struct {
 	Detail       string            `json:"detail"`
 	Inputs       map[string]string `json:"inputs"`
 	Fingerprint  string            `json:"-"`
+	// Action "" for a move; add_tag or remove_tag for a tag change (To == From)
+	Action string `json:"action,omitempty"`
+	Tag    string `json:"tag,omitempty"`
 }
 
 // Skip a document a rule did not act on, with the reason
@@ -163,9 +166,21 @@ func ruleLabel(r *automation.Rule, srcName, destName string) string {
 	return srcName + " → " + destName
 }
 
+// tagLabel what a tag rule does, in place of a destination: add tag “new”
+func tagLabel(a *automation.Action) string {
+	verb := "add tag"
+	if a.Type == automation.ActionRemoveTag {
+		verb = "remove tag"
+	}
+	return fmt.Sprintf("%s “%s”", verb, a.Tag)
+}
+
 // BuildPlan evaluates the enabled rules top to bottom in one pass (R1, R2)
-// against the snapshot (R3). The first rule that matches a document claims
-// it; a document appears in at most one planned move.
+// against the snapshot (R3). The first move rule that matches a document
+// claims it; a document appears in at most one planned move. A tag rule
+// claims nothing and ignores claims: a document can be tagged and moved in
+// the same sweep. It plans a change only where the tag is not already as
+// wanted, and has no holds (nothing to undo).
 func BuildPlan(in PlanInput) *Plan {
 	p := &Plan{At: in.Now.UnixMilli(), Rules: []RuleResult{}, Moves: []PlannedMove{}, Skipped: []Skip{}}
 	claimedBy := map[string]int{}
@@ -197,7 +212,13 @@ func BuildPlan(in PlanInput) *Plan {
 				srcOK = false
 			}
 		}
-		dest := ResolveDestination(r, in.Snap, in.State)
+		tagAct := r.TagAction()
+		var dest resolvedDest
+		if tagAct != nil {
+			dest.name = tagLabel(tagAct)
+		} else {
+			dest = ResolveDestination(r, in.Snap, in.State)
+		}
 		rr.DestID, rr.DestName, rr.DestWillCreate = dest.id, dest.name, dest.create != nil
 		if to := moveTo(r); to != nil && to.CreateIfMissing == nil && dest.problem == "" && to.Name != "" && to.Name != lastName(dest.name) && dest.id != RootID {
 			rr.DestRenamedFrom = to.Name
@@ -228,7 +249,7 @@ func BuildPlan(in PlanInput) *Plan {
 				p.Skipped = append(p.Skipped, Skip{RuleID: r.ID, RuleNumber: num, DocID: d.ID, DocName: d.Name,
 					Folder: rr.SourceName, Reason: reason, Detail: detail, HoldID: holdID})
 			}
-			if by, ok := claimedBy[d.ID]; ok {
+			if by, ok := claimedBy[d.ID]; ok && tagAct == nil {
 				skip(SkipClaimed, fmt.Sprintf("claimed by rule %d", by), "")
 				continue
 			}
@@ -239,6 +260,25 @@ func BuildPlan(in PlanInput) *Plan {
 					rr.OptedOut++
 				}
 				skip(chk.skip, chk.detail, "")
+				continue
+			}
+			if tagAct != nil {
+				if !chk.ev.match {
+					rr.NotMatching++
+					continue
+				}
+				if ci.HasTag(tagAct.Tag) == (tagAct.Type == automation.ActionAddTag) {
+					// already as wanted: nothing to do
+					continue
+				}
+				rr.Matches++
+				p.Moves = append(p.Moves, PlannedMove{
+					RuleID: r.ID, RuleNumber: num, RuleName: label,
+					DocID: d.ID, DocName: d.Name,
+					From: d.Parent, FromName: rr.SourceName, To: d.Parent, ToName: rr.SourceName,
+					Detail: chk.ev.detail, Inputs: chk.ev.inputs, Fingerprint: d.Fingerprint,
+					Action: tagAct.Type, Tag: tagAct.Tag,
+				})
 				continue
 			}
 			hold := in.State.FindHold(r.ID, d.ID)

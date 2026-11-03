@@ -22,6 +22,10 @@ const (
 	// ActionSaveNotes sends changed pages to rm-pages, which saves the note
 	// and extracts no tasks (page rules)
 	ActionSaveNotes = "save_notes"
+	// ActionAddTag adds a document tag to a matching document (document rules)
+	ActionAddTag = "add_tag"
+	// ActionRemoveTag removes a document tag from a matching document (document rules)
+	ActionRemoveTag = "remove_tag"
 )
 
 // Place kinds
@@ -178,12 +182,18 @@ func (c *Condition) UnmarshalJSON(b []byte) error {
 }
 
 // Action what a rule does; To is used by move, Prompt and Model by
-// extract_tasks and save_notes
+// extract_tasks and save_notes, Tag by add_tag and remove_tag
 type Action struct {
 	Type   string       `json:"type"`
 	To     *Destination `json:"to,omitempty"`
 	Prompt string       `json:"prompt,omitempty"`
 	Model  string       `json:"model,omitempty"`
+	Tag    string       `json:"tag,omitempty"`
+}
+
+// IsTag an add_tag or remove_tag action
+func (a *Action) IsTag() bool {
+	return a.Type == ActionAddTag || a.Type == ActionRemoveTag
 }
 
 // When the rule's subject, where it looks and what starts it
@@ -266,6 +276,11 @@ func (r *Rule) Move() *Action {
 	return r.firstAction(ActionMove)
 }
 
+// TagAction the rule's add_tag or remove_tag action, nil when it has none
+func (r *Rule) TagAction() *Action {
+	return r.firstAction(ActionAddTag, ActionRemoveTag)
+}
+
 // PageAction the rule's extract_tasks or save_notes action, nil when it has none
 func (r *Rule) PageAction() *Action {
 	return r.firstAction(ActionExtractTasks, ActionSaveNotes)
@@ -305,9 +320,13 @@ func (r *Rule) PageTags() []string {
 	return out
 }
 
-// SkipsPinned the default pinned guard applies unless the trigger or a
-// condition is about pinning
+// SkipsPinned the default pinned guard applies to move rules unless the
+// trigger or a condition is about pinning
 func (r *Rule) SkipsPinned() bool {
+	// the guard keeps favourites where they are; a tag moves nothing
+	if r.TagAction() != nil {
+		return false
+	}
 	if r.When.Trigger.Type == TriggerPinnedIs {
 		return false
 	}
@@ -405,6 +424,8 @@ func (r *Rule) normalize() {
 			if a.Model == "" {
 				a.Model = DefaultPipelineModel
 			}
+		case ActionAddTag, ActionRemoveTag:
+			a.Tag = strings.TrimSpace(a.Tag)
 		}
 		if a.To != nil && a.To.CreateIfMissing != nil {
 			cm := a.To.CreateIfMissing

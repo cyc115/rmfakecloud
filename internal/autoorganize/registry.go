@@ -22,6 +22,8 @@ var evaluators = map[string]evalFunc{
 	TriggerTagIs:           evalTagIs,
 	TriggerAgeSinceCreated: evalAgeSinceCreated,
 	TriggerPinnedIs:        evalPinnedIs,
+	TriggerCreatedTime:     evalCreatedTime,
+	TriggerModifiedTime:    evalModifiedTime,
 	// page_changed and page_tagged are evaluated by internal/pagewatch, never
 	// by the move planner
 	TriggerPageChanged: evalNotAMoveTrigger(TriggerPageChanged),
@@ -32,12 +34,14 @@ var evaluators = map[string]evalFunc{
 // none: checkDoc runs it (evalKind) before the trigger. A condition named like
 // a trigger shares the trigger's evaluator.
 var conditionEvaluators = map[string]evalFunc{
-	automation.CondTagIs:       evalTagIs,
-	automation.CondTagIsNot:    evalTagIsNot,
-	automation.CondNotOpened:   evalNotOpened,
-	automation.CondMinAgeDays:  evalMinAge,
-	automation.CondNameMatches: evalNameMatches,
-	automation.CondPinnedIs:    evalPinnedIs,
+	automation.CondTagIs:        evalTagIs,
+	automation.CondTagIsNot:     evalTagIsNot,
+	automation.CondNotOpened:    evalNotOpened,
+	automation.CondMinAgeDays:   evalMinAge,
+	automation.CondNameMatches:  evalNameMatches,
+	automation.CondPinnedIs:     evalPinnedIs,
+	automation.CondCreatedTime:  evalCreatedTime,
+	automation.CondModifiedTime: evalModifiedTime,
 }
 
 // params the catalogue parameters of a v1 trigger (migration)

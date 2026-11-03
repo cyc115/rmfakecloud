@@ -5,7 +5,7 @@ import Spinner from "../../components/Spinner";
 import RuleEditor from "./RuleEditor";
 import Sentence from "./Sentence";
 import {
-  INTERVALS, SKIP_CHIP, SKIP_LABELS, exampleRule, fmtAgo, fmtTime, isPageRule, missingFor, newPageRule,
+  INTERVALS, SKIP_CHIP, SKIP_LABELS, actionOf, changeText, changeVerb, exampleRule, fmtAgo, fmtTime, isPageRule, isTagAction, missingFor, newPageRule,
   pendingText, plural, ruleLabel, runCounts, sentenceText, sourceOf, withDisplayNames,
 } from "./rules";
 import "./Automation.scss";
@@ -62,7 +62,11 @@ function ruleStatus({ rule, view, moves, pipeline, sweep, missing, sharesSource 
   }
   if (view) {
     for (const p of view.problems) out.push({ cls: "bad", text: p });
-    if (rule.enabled && view.problems.length === 0) out.push({ text: view.matches > 0 ? `${view.matches} would move now` : "nothing to move now" });
+    if (rule.enabled && view.problems.length === 0) {
+      const tagging = isTagAction(actionOf(rule).type);
+      if (tagging) out.push({ text: view.matches > 0 ? `${view.matches} to ${actionOf(rule).type === "add_tag" ? "tag" : "untag"} now` : "nothing to tag now" });
+      else out.push({ text: view.matches > 0 ? `${view.matches} would move now` : "nothing to move now" });
+    }
     if (view.holds > 0) out.push({ text: `${view.holds} held` });
     if (view.optedOut > 0) out.push({ cls: "tag", text: `${view.optedOut} opted out` });
     if (view.destWillCreate) out.push({ text: "folder created on first live move" });
@@ -73,7 +77,7 @@ function ruleStatus({ rule, view, moves, pipeline, sweep, missing, sharesSource 
   const last = moves.find((m) => m.ruleId === rule.id && m.kind !== "undo");
   if (last) {
     out.push({
-      text: `${last.mode === "LIVE" ? "moved" : "would have moved"} ${last.docName} ${fmtAgo(last.at)}${last.undoneAt ? " · undone" : ""}`,
+      text: `${changeVerb(last)} ${last.docName} ${fmtAgo(last.at)}${last.undoneAt ? " · undone" : ""}`,
       undo: !last.holdId && last.canUndo && !last.undoneAt ? last : null,
     });
   }
@@ -190,7 +194,7 @@ function PreviewPane({ plan, planLabel, partial, live, onApply, onPreviewAll, on
       {groups.map((r) => {
         const moves = plan.moves.filter((m) => m.ruleId === r.ruleId);
         const label = labelOf(r.ruleId, r.name) || `${r.sourceName} → ${r.destName}`;
-        let hint = moves.length ? `${moves.length} would move` : "nothing qualifies";
+        let hint = moves.length ? `${moves.length} would ${moves.some((m) => m.action) ? "change" : "move"}` : "nothing qualifies";
         if (r.problems.length) hint = r.problems.join(" · ");
         return (
           <div key={r.ruleId}>
@@ -198,7 +202,9 @@ function PreviewPane({ plan, planLabel, partial, live, onApply, onPreviewAll, on
             {moves.map((m) => (
               <div className="ao-row" key={m.docId}>
                 <div><div className="doc">{m.docName}</div><div className="d">{m.detail}</div></div>
-                <div className="to"><span className="arr">→</span>{m.toName}{m.createFolder ? " (new folder)" : ""}</div>
+                {m.action
+                  ? <div className="to">{changeText(m)}</div>
+                  : <div className="to"><span className="arr">→</span>{m.toName}{m.createFolder ? " (new folder)" : ""}</div>}
               </div>
             ))}
           </div>
@@ -230,10 +236,10 @@ function PreviewPane({ plan, planLabel, partial, live, onApply, onPreviewAll, on
         ) : (
           <>
             <button className="ao-btn primary" disabled={!live || plan.moves.length === 0 || busy} onClick={onApply}>
-              Apply {plan.moves.length === 1 ? "this move" : `these ${plan.moves.length} moves`}
+              Apply {plan.moves.length === 1 ? "this change" : `these ${plan.moves.length} changes`}
             </button>
             <span className="ao-hint">
-              {live ? `Live: this will move ${plan.moves.length} document${plan.moves.length === 1 ? "" : "s"}. You will be asked to confirm.`
+              {live ? `Live: this will change ${plan.moves.length} document${plan.moves.length === 1 ? "" : "s"}. You will be asked to confirm.`
                 : "Switch to Live to apply. In Dry-run the preview is informational."}
             </span>
           </>
@@ -252,7 +258,7 @@ function MovesPane({ moves, onUndo, onReapply, busy, labelOf }) {
           <span className="when">{fmtTime(m.at)}</span>
           <div className="what">
             <div className="doc">{m.docName}</div>
-            <div className="path">{m.fromName}<span className="arr">→</span>{m.toName}{" "}
+            <div className="path">{m.action ? <>{m.fromName} · {changeText(m)}</> : <>{m.fromName}<span className="arr">→</span>{m.toName}</>}{" "}
               <span className="rule">· rule {m.ruleNumber} {labelOf(m.ruleId, m.ruleName)}
                 {m.kind === "reapply" ? " · re-applied" : ""}
                 {m.undoneAt ? ` · undone ${fmtTime(m.undoneAt)} · hold set` : ""}
@@ -268,7 +274,7 @@ function MovesPane({ moves, onUndo, onReapply, busy, labelOf }) {
           </span>
         </div>
       ))}
-      <div className="ao-grp"><span className="ao-hint">Last 50 moves made by rules. Manual moves from the tablet are not listed. Undo reverses the move and sets a hold so the rule does not re-move it while its trigger inputs are unchanged.</span></div>
+      <div className="ao-grp"><span className="ao-hint">Last 50 moves and tag changes made by rules. Manual changes from the tablet are not listed. Undo reverses a move and sets a hold so the rule does not re-move it while its trigger inputs are unchanged; tag changes have no undo, change the tag on the tablet.</span></div>
     </>
   );
 }
@@ -289,6 +295,7 @@ function RunsPane({ runs }) {
               <td>{r.scanned}</td>
               <td title={r.mode === "DRY" ? "would move (dry-run moves are never counted as moves)" : ""}>
                 {r.mode === "LIVE" ? r.moved : <span className="ao-hint">{r.planned} would</span>}
+                {r.mode === "LIVE" && r.tagged ? <span className="ao-hint"> · {r.tagged} tagged</span> : null}
               </td>
               <td className="hide-m">{r.skipped}</td>
               <td>
@@ -452,19 +459,19 @@ export default function Automation() {
     if (live) {
       const p = await apiService.previewAutomation({});
       if (p.moves.length === 0) {
-        toast.info("Nothing to move right now.");
+        toast.info("Nothing to change right now.");
         setPlan(p);
         setPlanPartial(false);
         setTab("preview");
         return true;
       }
       // eslint-disable-next-line no-alert
-      if (!window.confirm(`This will move ${p.moves.length} document${p.moves.length === 1 ? "" : "s"}. Continue?`)) return false;
+      if (!window.confirm(`This will change ${p.moves.length} document${p.moves.length === 1 ? "" : "s"}. Continue?`)) return false;
     }
     const res = await apiService.runAutomationNow();
     const r = res.run;
-    if (r.mode === "LIVE") toast.success(`Documents checked: ${r.moved} moved, ${r.errors} errors`);
-    else toast.info(`Dry run: ${r.planned} would move`);
+    if (r.mode === "LIVE") toast.success(`Documents checked: ${r.moved} moved, ${r.tagged || 0} tagged, ${r.errors} errors`);
+    else toast.info(`Dry run: ${r.planned} would change`);
     setPlan(res.plan);
     setPlanPartial(false);
     setTab(r.mode === "LIVE" ? "moves" : "preview");

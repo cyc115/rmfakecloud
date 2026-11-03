@@ -5,6 +5,17 @@
 
 export const KIND_LABELS = { notebooks: "only notebooks", pdf_epub: "only PDFs & books" };
 
+// created_time / modified_time: {compare: within | older, amount, unit}
+export const TIME_UNITS = ["hours", "days", "weeks"];
+export const TIME_DEFAULT = { compare: "within", amount: 24, unit: "hours" };
+
+// timePhrase "created in the last 24 hours", "changed more than 1 day ago"
+export function timePhrase(verb, p) {
+  const n = p.amount;
+  const unit = n === 1 ? (p.unit || "").replace(/s$/, "") : p.unit;
+  return p.compare === "older" ? `${verb} more than ${n} ${unit} ago` : `${verb} in the last ${n} ${unit}`;
+}
+
 // type, the subjects it applies to, its label in the add list, its params
 // (the catalogue field names) and whether a rule may carry it more than once
 export const CONDITIONS = [
@@ -16,6 +27,8 @@ export const CONDITIONS = [
   { type: "name_matches", subjects: ["document", "page"], label: "named like …", params: ["pattern"] },
   { type: "pinned_is", subjects: ["document"], label: "pinned / not pinned", params: ["pinned"] },
   { type: "page_tag_is", subjects: ["page"], label: "on pages tagged …", params: ["tag"], repeatable: true },
+  { type: "created_time", subjects: ["document", "page"], label: "created in the last / more than …", params: ["compare", "amount", "unit"], repeatable: true },
+  { type: "modified_time", subjects: ["document", "page"], label: "changed in the last / more than …", params: ["compare", "amount", "unit"], repeatable: true },
 ];
 
 const DEFAULTS = {
@@ -27,6 +40,8 @@ const DEFAULTS = {
   name_matches: { pattern: "" },
   pinned_is: { pinned: true },
   page_tag_is: { tag: "" },
+  created_time: TIME_DEFAULT,
+  modified_time: TIME_DEFAULT,
 };
 
 // the triggers that read the page you stopped on, which only PDFs and books
@@ -88,6 +103,8 @@ export function conditionPhrase(cond) {
     case "name_matches": return `named like ${q(cond.pattern)}`;
     case "pinned_is": return cond.pinned ? "pinned" : "not pinned";
     case "page_tag_is": return `on pages tagged ${q(cond.tag)}`;
+    case "created_time": return timePhrase("created", cond);
+    case "modified_time": return timePhrase("changed", cond);
     default: return cond.type;
   }
 }

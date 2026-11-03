@@ -96,7 +96,7 @@ def test_run_now_in_dry_mode_logs_planned_move(page):
     open_page(page)
     save_rule(page, add_rule(page))
     page.get_by_role("button", name="Run now").click()
-    expect(page.get_by_text("Dry run: 1 would move")).to_be_visible()
+    expect(page.get_by_text("Dry run: 1 would change")).to_be_visible()
     page.get_by_role("tab", name="Runs").click()
     expect(page.locator(".ao-runs .ao-chip.dry").first).to_have_text("DRY")
     expect(page.locator(".ao-runs")).to_contain_text("1 would")

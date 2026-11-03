@@ -36,10 +36,10 @@ def test_card_catalogue_matches_the_mock(page):
     page_cards = drawer.get_by_role("radiogroup", name="Trigger: On a page").get_by_role("radio")
     expect(page_cards).to_have_count(2)
     doc_cards = drawer.get_by_role("radiogroup", name="Trigger: On a document").get_by_role("radio")
-    expect(doc_cards).to_have_count(8)
+    expect(doc_cards).to_have_count(10)
     for title in ("I finish reading", "I've read X%"):
         expect(card(drawer, title)).to_contain_text("PDFs & books")
-    expect(drawer.get_by_role("radiogroup", name="Action").get_by_role("radio")).to_have_count(3)
+    expect(drawer.get_by_role("radiogroup", name="Action").get_by_role("radio")).to_have_count(5)
     fits_viewport(page)
     assert_healthy(page)
 
@@ -79,13 +79,16 @@ def test_invalid_actions_are_disabled_with_the_reason(page):
     drawer = new_rule(page)
     move = card(drawer, "Move it to…")
     expect(move).to_be_disabled()
-    expect(drawer.locator(".ao-callout")).to_contain_text("Move works on whole documents")
+    # one callout for the three document actions
+    expect(drawer.locator(".ao-callout")).to_have_count(1)
+    expect(drawer.locator(".ao-callout")).to_contain_text("Move it to…, Add a tag, Remove a tag are not offered here")
+    expect(drawer.locator(".ao-callout")).to_contain_text("Moving and tagging work on whole documents")
     card(drawer, "It sits unopened").click()
     expect(move).to_have_attribute("aria-checked", "true")
     for title in ("Extract tasks to my inbox", "Just save notes"):
         expect(card(drawer, title)).to_be_disabled()
-    expect(drawer.locator(".ao-callout").first).to_contain_text("Works on pages")
-    expect(drawer.locator(".ao-callout")).to_have_count(2)
+    expect(drawer.locator(".ao-callout")).to_have_count(1)
+    expect(drawer.locator(".ao-callout")).to_contain_text("Extract tasks to my inbox, Just save notes are not offered here. Works on pages")
     expect(drawer.get_by_text("Document rules work on exactly one folder.")).to_be_visible()
     fits_viewport(page)
     assert_healthy(page)
@@ -326,7 +329,7 @@ def test_apply_runs_moves_only_and_undo_from_the_status_line(page, api):
     runs = len(api.get("/ui/api/automation/pipeline").json()["runs"])
     page.get_by_role("button", name="Preview", exact=True).click()
     page.once("dialog", lambda d: d.accept())
-    page.get_by_role("button", name="Apply this move").click()
+    page.get_by_role("button", name="Apply this change").click()
     expect(page.get_by_text("Documents checked: 1 moved")).to_be_visible()
     assert len(api.get("/ui/api/automation/pipeline").json()["runs"]) == runs
     move_rule = page.locator(".ao-rule").nth(1)

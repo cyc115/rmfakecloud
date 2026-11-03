@@ -107,6 +107,22 @@ func TestValidateTable(t *testing.T) {
 			`unknown kind "all"`},
 		{"page-based on notebooks", doc, func(r *Rule) { r.Conditions[0].Kind = KindNotebooks }, nil, "this trigger only applies to PDF & EPUB"},
 		{"page-based without kind", doc, func(r *Rule) { r.Conditions = []Condition{} }, nil, "this trigger only applies to PDF & EPUB"},
+		{"add tag on page", page, func(r *Rule) { r.Actions = []Action{{Type: ActionAddTag, Tag: "new"}} }, nil,
+			"add tag works on whole documents, so a page rule cannot add tag; use a document trigger"},
+		{"remove tag empty", doc, func(r *Rule) { r.Actions = []Action{{Type: ActionRemoveTag, Tag: " - "}} }, nil, "tag cannot be empty"},
+		{"add tag opt-out", doc, func(r *Rule) { r.Actions = []Action{{Type: ActionAddTag, Tag: "No Automation"}} }, nil,
+			"documents tagged “no automation” are always skipped; pick another tag"},
+		{"time compare", doc, func(r *Rule) {
+			r.When.Trigger = Trigger{Type: TriggerCreatedTime, Params: Params{Compare: "before", Amount: 1, Unit: UnitDays}}
+			r.Conditions = []Condition{}
+		}, nil, "compare must be within or older"},
+		{"time amount", page, func(r *Rule) {
+			r.Conditions = append(r.Conditions, cond(CondModifiedTime, Params{Compare: CompareOlder, Amount: 0, Unit: UnitHours}))
+		}, nil, "the amount of time must be at least 1"},
+		{"time unit", doc, func(r *Rule) {
+			r.When.Trigger = Trigger{Type: TriggerModifiedTime, Params: Params{Compare: CompareWithin, Amount: 3, Unit: "minutes"}}
+			r.Conditions = []Condition{}
+		}, nil, "unit must be hours, days or weeks"},
 	}
 	for _, rw := range rows {
 		t.Run(rw.name, func(t *testing.T) {
@@ -154,6 +170,26 @@ func TestValidateAccepts(t *testing.T) {
 	c.Rules[0].When.In[0].ID = RootID
 	if err := c.Validate(); err != nil {
 		t.Errorf("root source, new subfolder: %v", err)
+	}
+	// the "new" tag pair: created in the last 24 hours, then more than 24 hours ago
+	c = validConfig()
+	c.Rules[0].When.Trigger = Trigger{Type: TriggerCreatedTime, Params: Params{Compare: CompareWithin, Amount: 24, Unit: UnitHours}}
+	c.Rules[0].Conditions = []Condition{{Type: CondCreatedTime, Params: Params{Compare: CompareOlder, Amount: 1, Unit: UnitHours}},
+		{Type: CondCreatedTime, Params: Params{Compare: CompareWithin, Amount: 2, Unit: UnitWeeks}}}
+	c.Rules[0].Actions = []Action{{Type: ActionAddTag, Tag: "new"}}
+	if err := c.Validate(); err != nil {
+		t.Errorf("tag rule with time trigger and conditions: %v", err)
+	}
+	// defaults fill an empty time trigger with "in the last 24 hours"
+	c.Rules[0].When.Trigger.Params = Params{}
+	c.Rules[0].Actions[0].Tag = "  new "
+	c.Normalize()
+	if p := c.Rules[0].When.Trigger.Params; p.Compare != CompareWithin || p.Amount != 24 || p.Unit != UnitHours || c.Rules[0].Actions[0].Tag != "new" {
+		t.Errorf("normalized: %+v %q", p, c.Rules[0].Actions[0].Tag)
+	}
+	b, _ := json.Marshal(c.Rules[0].When.Trigger)
+	if string(b) != `{"type":"created_time","compare":"within","amount":24,"unit":"hours"}` {
+		t.Errorf("trigger JSON = %s", b)
 	}
 }
 

@@ -2,10 +2,11 @@
 // validation; these helpers build the rule sentences, the editor's card
 // catalogue and sensible defaults. The stored format is automation.json v2:
 // {id, name, enabled, when: {subject, in, trigger}, conditions, actions}.
-// A document rule has one folder in `in` and one move action; a page rule
-// has places in `in` and one extract_tasks or save_notes action (R-B2).
+// A document rule has one folder in `in` and one move, add_tag or remove_tag
+// action; a page rule has places in `in` and one extract_tasks or save_notes
+// action (R-B2).
 
-import { conditionLock, conditionPhrase, isPdfOnly, makeCondition } from "./conditions.js";
+import { TIME_DEFAULT, conditionLock, conditionPhrase, isPdfOnly, makeCondition, timePhrase } from "./conditions.js";
 
 export { conditionLock, isPdfOnly };
 
@@ -27,6 +28,8 @@ export const TRIGGER_CARDS = [
   { type: "not_opened_for_days", group: "document", icon: "💤", title: "It sits unopened", sub: "for N days" },
   { type: "not_modified_for_days", group: "document", icon: "🕰️", title: "It sits unchanged", sub: "no edits for N days" },
   { type: "age_since_created", group: "document", icon: "📥", title: "It arrives", sub: "N days after it lands" },
+  { type: "created_time", group: "document", icon: "🆕", title: "It was created…", sub: "in the last / more than N hours, days, weeks ago" },
+  { type: "modified_time", group: "document", icon: "✏️", title: "It was changed…", sub: "in the last / more than N hours, days, weeks ago" },
   { type: "tag_is", group: "document", icon: "🔖", title: "I tag a document", sub: "with a tag you choose" },
   { type: "name_matches", group: "document", icon: "🔤", title: "Its name matches", sub: "a pattern like WSJ*" },
   { type: "pinned_is", group: "document", icon: "📌", title: "It's pinned / unpinned", sub: "pinned or not" },
@@ -40,7 +43,14 @@ export const ACTION_CARDS = [
   { key: "extract", type: "extract_tasks", for: "page", icon: "✅", title: "Extract tasks to my inbox", sub: "+ save the page to its note" },
   { key: "notes", type: "save_notes", for: "page", icon: "📝", title: "Just save notes", sub: "transcribe, no tasks" },
   { key: "move", type: "move", for: "document", icon: "📂", title: "Move it to…", sub: "works on documents" },
+  { key: "addtag", type: "add_tag", for: "document", icon: "🏷️", title: "Add a tag", sub: "a document tag you choose" },
+  { key: "rmtag", type: "remove_tag", for: "document", icon: "🧽", title: "Remove a tag", sub: "a document tag you choose" },
 ];
+
+// isTagAction add_tag or remove_tag
+export function isTagAction(type) {
+  return type === "add_tag" || type === "remove_tag";
+}
 
 // the trigger parameters, as the catalogue names them (settleHours only for
 // the reading triggers, P2; min age is a min_age_days condition, P1)
@@ -54,6 +64,8 @@ export const TRIGGER_DEFAULTS = {
   age_since_created: { days: 14 },
   pinned_is: { pinned: true },
   page_tagged: { tag: "" },
+  created_time: TIME_DEFAULT,
+  modified_time: TIME_DEFAULT,
 };
 
 export const INTERVALS = [5, 10, 15, 30, 60];
@@ -104,18 +116,18 @@ export function kindOf(rule) {
 // actionKey the THEN card of a rule
 export function actionKey(rule) {
   const t = actionOf(rule).type;
-  if (t === "save_notes") return "notes";
-  if (t === "extract_tasks") return "extract";
-  return "move";
+  const card = ACTION_CARDS.find((a) => a.type === t);
+  return card ? card.key : "move";
 }
 
 // actionFit whether an action card fits the trigger, and why not
 export function actionFit(key, triggerType) {
   const page = isPageTrigger(triggerType);
-  if (key === "move" && page) {
-    return { ok: false, reason: "Move works on whole documents, so it can't follow a page trigger. Pick a trigger under “On a document” to move things." };
+  const card = ACTION_CARDS.find((a) => a.key === key);
+  if (card.for === "document" && page) {
+    return { ok: false, reason: "Moving and tagging work on whole documents, so they can't follow a page trigger. Pick a trigger under “On a document” to move or tag things." };
   }
-  if (key !== "move" && !page) {
+  if (card.for === "page" && !page) {
     return { ok: false, reason: "Works on pages: pick “I write on a page” or “I tag a page” to extract tasks or save notes." };
   }
   return { ok: true, reason: "" };
@@ -189,11 +201,30 @@ function triggerParts(t) {
     case "not_opened_for_days": return ["a document ", tok(`sits unopened ${t.days} days`)];
     case "not_modified_for_days": return ["a document ", tok(`sits unchanged ${t.days} days`)];
     case "age_since_created": return ["a document ", tok(`arrived at least ${t.days} days ago`)];
+    case "created_time": return ["a document ", tok(`was ${timePhrase("created", t)}`)];
+    case "modified_time": return ["a document ", tok(`was ${timePhrase("changed", t)}`)];
     case "tag_is": return ["I ", tok(`tag a document ${q(t.tag)}`)];
     case "name_matches": return ["a document ", tok(`named like ${q(t.pattern)}`), " is"];
     case "pinned_is": return ["a document ", tok(t.pinned ? "is pinned" : "is unpinned")];
     default: return ["a document ", tok(t.type)];
   }
+}
+
+// tagActionText add tag “new” / remove tag “new”
+export function tagActionText(a) {
+  return `${a.type === "remove_tag" ? "remove" : "add"} tag “${(a.tag || "").trim() || "…"}”`;
+}
+
+// changeText what one planned or logged change does: "→ Read" for a move,
+// "add tag “new”" for a tag change
+export function changeText(m) {
+  return isTagAction(m.action) ? tagActionText(m) : `→ ${m.toName}`;
+}
+
+// changeVerb "moved" / "tagged" / "untagged", or "would have …" for dry runs
+export function changeVerb(m) {
+  const verb = m.action === "add_tag" ? "tagged" : m.action === "remove_tag" ? "untagged" : "moved";
+  return m.mode === "LIVE" ? verb : `would have ${verb}`;
 }
 
 export function destinationName(rule, ctx) {
@@ -227,6 +258,7 @@ export function sentence(rule, ctx) {
   parts.push(" ", { t: "then", s: "THEN" });
   const key = actionKey(rule);
   if (key === "move") parts.push(tok(`move it to ${destinationName(rule, ctx)}`));
+  else if (key === "addtag" || key === "rmtag") parts.push(tok(tagActionText(actionOf(rule))));
   else if (key === "notes") parts.push(tok("just save notes"));
   else parts.push(tok("extract tasks to my inbox"));
   return parts;
@@ -392,11 +424,17 @@ export function chooseTrigger(rule, type, stash, { defaults, folders } = {}) {
 
 // chooseAction the rule after a THEN card is picked; a card that does not
 // fit the trigger leaves the rule unchanged. A page rule keeps its prompt and
-// model when switching between extract and notes.
+// model when switching between extract and notes; a document rule keeps its
+// destination and tag when switching between move and the tag actions.
 export function chooseAction(rule, key) {
-  if (!actionFit(key, rule.when.trigger.type).ok || key === "move") return rule;
+  if (!actionFit(key, rule.when.trigger.type).ok) return rule;
   const card = ACTION_CARDS.find((a) => a.key === key);
-  return { ...rule, actions: [{ ...actionOf(rule), type: card.type }] };
+  const cur = actionOf(rule);
+  if (cur.type === card.type) return rule;
+  const next = { ...cur, type: card.type };
+  if (card.type === "move" && !next.to) next.to = { id: ROOT_ID, name: "" };
+  if (isTagAction(card.type) && next.tag === undefined) next.tag = "";
+  return { ...rule, actions: [next] };
 }
 
 // forSave the rule as sent to the server:
@@ -405,7 +443,8 @@ export function chooseAction(rule, key) {
 //   - page rule: an empty `in` becomes the root folder entry ("anywhere",
 //     both page triggers), any other `in` is sent as it is; the page action's
 //     prompt/model are trimmed (whitespace-only → "" → the server's default)
-//   - exactly one action (R-B2): move carries only `to`
+//   - exactly one action (R-B2): move carries only `to`, a tag action only
+//     its trimmed `tag`
 export function forSave(rule) {
   const r = JSON.parse(JSON.stringify(rule));
   const t = r.when.trigger;
@@ -417,6 +456,8 @@ export function forSave(rule) {
     if (!inOf(r).length) r.when.in = [{ id: ROOT_ID, kind: "folder", name: ROOT_NAME }];
     if (t.type === PAGE_TAGGED) r.when.trigger = { ...t, tag: (t.tag || "").trim() };
     r.actions = [{ type: a.type, prompt: (a.prompt || "").trim(), model: (a.model || "").trim() }];
+  } else if (isTagAction(a.type)) {
+    r.actions = [{ type: a.type, tag: (a.tag || "").trim() }];
   } else {
     r.actions = [{ type: "move", to: JSON.parse(JSON.stringify(a.to || { id: ROOT_ID, name: "" })) }];
   }

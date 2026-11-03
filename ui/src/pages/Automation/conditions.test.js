@@ -15,8 +15,18 @@ const pageRule = (conditions = []) => ({
 });
 
 test("conditionsFor lists each subject's conditions in catalogue order", () => {
-  assert.deepEqual(conditionsFor("page"), ["kind_is", "tag_is", "tag_is_not", "name_matches", "page_tag_is"]);
-  assert.deepEqual(conditionsFor("document"), ["kind_is", "tag_is", "tag_is_not", "not_opened_for_days", "min_age_days", "name_matches", "pinned_is"]);
+  assert.deepEqual(conditionsFor("page"), ["kind_is", "tag_is", "tag_is_not", "name_matches", "page_tag_is", "created_time", "modified_time"]);
+  assert.deepEqual(conditionsFor("document"), ["kind_is", "tag_is", "tag_is_not", "not_opened_for_days", "min_age_days", "name_matches", "pinned_is",
+    "created_time", "modified_time"]);
+});
+
+test("time conditions: phrases, defaults, repeatable", () => {
+  assert.equal(conditionPhrase(makeCondition("created_time")), "created in the last 24 hours");
+  assert.equal(conditionPhrase({ type: "created_time", compare: "older", amount: 1, unit: "days" }), "created more than 1 day ago");
+  assert.equal(conditionPhrase({ type: "modified_time", compare: "within", amount: 2, unit: "weeks" }), "changed in the last 2 weeks");
+  const rule = { when: { subject: "document", trigger: { type: "tag_is" } }, conditions: [makeCondition("created_time")] };
+  // a window takes two: more than 1 day ago AND in the last 7 days
+  assert.equal(conditionFit("created_time", rule).ok, true);
 });
 
 test("every catalogue entry has type, subjects, label and params", () => {
