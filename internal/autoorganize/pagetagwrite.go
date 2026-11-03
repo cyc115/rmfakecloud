@@ -286,11 +286,19 @@ func (s *Service) ApplyPageTags(uid, docID, pageID string, tags []string) ([]str
 	for _, k := range KnownTags(cfg, snap, cache.Get) {
 		known[k] = true
 	}
+	spell := TagSpellings(cfg, snap, cache.Get)
+	written := make([]string, 0, len(tags))
 	for _, tag := range tags {
-		if !known[NormalizeTag(tag)] {
+		k := NormalizeTag(tag)
+		if !known[k] {
 			return nil, fmt.Errorf("%w: %q", ErrUnknownTag, tag)
 		}
+		if s, ok := spell[k]; ok {
+			tag = s // Mike's spelling, not the normalized form rm-pages matched on
+		}
+		written = append(written, tag)
 	}
+	tags = written
 	added, err := tagPage(tree, bs, docID, pageID, tags, s.Now().UnixMilli())
 	if err != nil {
 		return nil, err

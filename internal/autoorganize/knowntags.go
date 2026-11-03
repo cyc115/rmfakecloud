@@ -2,9 +2,51 @@ package autoorganize
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/ddvk/rmfakecloud/internal/automation"
 )
+
+// TagSpellings normalized tag -> the spelling to write: as an enabled rule names it, else as a
+// document carries it (a handwritten "#extract" written as "Extract" on the tablet stays one tag)
+func TagSpellings(cfg *automation.Config, snap *Snapshot, content func(*DocSnap) ContentInfo) map[string]string {
+	out := map[string]string{}
+	put := func(tag string) {
+		tag = strings.TrimSpace(tag)
+		if k := NormalizeTag(tag); k != "" {
+			if _, ok := out[k]; !ok {
+				out[k] = tag
+			}
+		}
+	}
+	if cfg != nil {
+		for _, r := range cfg.Rules {
+			if !r.Enabled {
+				continue
+			}
+			if r.When.Trigger.Type == automation.TriggerPageTagged {
+				put(r.When.Trigger.Tag)
+			}
+			for _, c := range r.Conditions {
+				if c.Type == automation.CondPageTagIs || c.Type == automation.CondTagIs {
+					put(c.Tag)
+				}
+			}
+		}
+	}
+	if snap != nil && content != nil {
+		for _, d := range snap.Docs {
+			if d.IsFolder() || snap.Locate(d.Parent) != LocAtRoot {
+				continue
+			}
+			ci := content(d)
+			for _, t := range ci.Tags {
+				put(t)
+			}
+		}
+	}
+	return out
+}
 
 // KnownTags the tags a handwritten #tag may become (NormalizeTag, sorted,
 // unique): the tags of enabled rules (page_tagged, page_tag_is, tag_is) and

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ddvk/rmfakecloud/internal/automation"
 	"github.com/ddvk/rmfakecloud/internal/testkit/tablet"
 )
 
@@ -161,5 +162,45 @@ func TestEditDocumentTags(t *testing.T) {
 	}
 	if got := fmt.Sprint(ft.ServerContent("nb1")["tags"]); !strings.Contains(got, "Q3") {
 		t.Fatalf("server content tags: %s", got)
+	}
+}
+
+func TestApplyPageTagsKeepsTheRuleSpelling(t *testing.T) {
+	a := newAOAPI(t)
+	cfg := a.config("live", 0)
+	cfg["rules"] = []any{map[string]any{"enabled": true,
+		"when": map[string]any{"subject": "page", "in": []any{map[string]any{"id": "", "kind": "folder", "name": "My files"}},
+			"trigger": map[string]any{"type": "page_tagged", "tag": "Extract"}},
+		"conditions": []any{}, "actions": []any{map[string]any{"type": "extract_tasks"}}}}
+	if code, body := a.do("PUT", "/ui/api/automation", a.token("mike", true), cfg); code != http.StatusOK {
+		t.Fatalf("config: %d %v", code, body)
+	}
+	ft := tablet.New(t, a.storage, "mike")
+	if err := ft.Load(); err != nil {
+		t.Fatal(err)
+	}
+	ft.Notebook("nb1", "Notes", a.inbox)
+	if err := ft.SetPage("nb1", "p1", []byte("rm-p1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	// rm-pages sends the normalized known tag
+	code, body := a.do("POST", "/ui/api/automation/page-tags/apply", "Bearer "+apiToken,
+		map[string]any{"doc_id": "nb1", "page_id": "p1", "tags": []any{"extract"}})
+	if code != http.StatusOK || fmt.Sprint(body["added"]) != "[Extract]" {
+		t.Fatalf("apply: %d %v", code, body)
+	}
+	tags := ft.ServerContent("nb1")["pageTags"].([]any)
+	if tags[0].(map[string]any)["name"] != "Extract" {
+		t.Fatalf("written as %v", tags)
+	}
+}
+
+func TestCatalogueDocTagSentenceIsCurrent(t *testing.T) {
+	d := catalogueDocs["trigger:"+automation.TriggerPageTagged]
+	if strings.Contains(d, "without tasks") || !strings.Contains(d, "every page") {
+		t.Fatalf("page_tagged description: %q", d)
 	}
 }

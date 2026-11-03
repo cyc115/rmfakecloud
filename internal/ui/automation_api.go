@@ -301,7 +301,7 @@ var catalogueDocs = map[string]string{
 	"trigger:" + automation.TriggerCreatedTime:     "Created in the last (compare within) or more than (older) amount unit ago; unit hours, days or weeks. Documents without a created time are skipped.",
 	"trigger:" + automation.TriggerModifiedTime:    "Last changed in the last (within) or more than (older) amount unit ago; unit hours, days or weeks.",
 	"trigger:" + automation.TriggerPageChanged:     "A page got new or changed handwriting (page rules).",
-	"trigger:" + automation.TriggerPageTagged:      "A page carries the tag tag, as a page tag or as a tag of its document (page rules). A document tag sends older writing to the note without tasks.",
+	"trigger:" + automation.TriggerPageTagged:      "A page carries the tag tag, as a page tag or as a tag of its document (page rules). A document tag is the same as tagging every page.",
 	"condition:" + automation.CondKindIs:           "Only notebooks (kind notebooks) or only PDFs and EPUBs (pdf_epub).",
 	"condition:" + automation.CondTagIs:            "The document carries tag.",
 	"condition:" + automation.CondTagIsNot:         "The document does not carry tag.",
