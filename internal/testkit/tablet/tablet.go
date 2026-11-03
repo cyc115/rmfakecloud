@@ -35,6 +35,8 @@ type Doc struct {
 	RawContent []byte
 	// RM the page blobs by page id, written as <doc>/<page>.rm
 	RM map[string][]byte
+	// PDF the <doc>.pdf payload of a PDF/EPUB; nil = a placeholder
+	PDF []byte
 }
 
 // Tablet the fake device
@@ -315,6 +317,34 @@ func (ft *Tablet) TagPage(docID, pageID, tag string, at time.Time) error {
 	return nil
 }
 
+// TagDoc adds a document tag to .content tags, as the device writes it
+func (ft *Tablet) TagDoc(docID, tag string, at time.Time) error {
+	d, err := ft.doc(docID)
+	if err != nil {
+		return ft.fail(err)
+	}
+	tags, _ := d.Content["tags"].([]any)
+	d.Content["tags"] = append(tags, map[string]any{"name": tag, "timestamp": at.UnixMilli()})
+	return nil
+}
+
+// SetRedir sets the PDF page a page shows (cPages redir.value; -1 = inserted)
+func (ft *Tablet) SetRedir(docID, pageID string, n int) error {
+	d, err := ft.doc(docID)
+	if err != nil {
+		return ft.fail(err)
+	}
+	p := d.pages()
+	for _, m := range p {
+		if m["id"] == pageID {
+			m["redir"] = map[string]any{"value": n}
+			d.setPages(p)
+			return nil
+		}
+	}
+	return ft.fail(fmt.Errorf("tablet: no page %q in %q", pageID, docID))
+}
+
 // UntagPage removes every pageTags entry of the page with that exact name
 func (ft *Tablet) UntagPage(docID, pageID, tag string) error {
 	d, err := ft.doc(docID)
@@ -432,6 +462,8 @@ func (ft *Tablet) Load() error {
 				if err := json.Unmarshal(b, &d.Content); err != nil {
 					return ft.fail(err)
 				}
+			case strings.HasSuffix(f.EntryName, ".pdf"):
+				d.PDF = b
 			case strings.HasSuffix(f.EntryName, ".rm"):
 				if d.RM == nil {
 					d.RM = map[string][]byte{}
@@ -476,7 +508,11 @@ func (ft *Tablet) Sync() error {
 			hd.AddFile(models.NewHashEntry(h, id+".content", size))
 		}
 		if d.Meta["type"] == string(common.DocumentType) && d.Content["fileType"] != "notebook" {
-			if h, size, err = ft.write([]byte("%PDF-1.4 " + id)); err != nil {
+			payload := d.PDF
+			if payload == nil {
+				payload = []byte("%PDF-1.4 " + id)
+			}
+			if h, size, err = ft.write(payload); err != nil {
 				return ft.fail(err)
 			}
 			hd.AddFile(models.NewHashEntry(h, id+".pdf", size))

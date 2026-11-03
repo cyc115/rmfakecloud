@@ -228,3 +228,99 @@ def test_page_change_to_vault_note_and_staged_task(desktop, tmp_path):
               or (e.get("payload") or {}).get("doc_id") == DOC]
     print(f"timeline: {len(events)} remarkable events today, {len(leaked)} from e2e")
     assert leaked == []
+
+
+# --- #extract: document tag, inserted PDF page, annotations, #tag written on a page ------------
+# spec homelab docs/superpowers/specs/2026-11-03-extract-annotations-design.md
+
+REPORT = "77777777-7777-4777-8777-777777777777"  # PDF "E2E Report" in Projects
+TAGNB = "88888888-8888-4888-8888-888888888888"   # notebook "E2E Tags" in Inbox
+INBOX_ID = "11111111-1111-4111-8111-111111111111"
+PROJECTS_ID = "33333333-3333-4333-8333-333333333333"
+EXTRACT_RULE = {"name": "", "enabled": True,
+                "when": {"subject": "page", "in": [{"id": "", "kind": "folder", "name": "My files"}],
+                         "trigger": {"type": "page_tagged", "tag": "extract"}},
+                "conditions": [], "actions": [{"type": "extract_tasks", "prompt": "", "model": ""}]}
+
+
+def run_now(api):
+    before = len(api.get("/ui/api/automation/pipeline").json()["runs"])
+    r = api.post("/ui/api/automation/pipeline/run-now")
+    assert r.ok, r.text()
+    wait_for(lambda: len(api.get("/ui/api/automation/pipeline").json()["runs"]) > before, 60, "the run", 1)
+    return api.get("/ui/api/automation/pipeline").json()["lastRun"]
+
+
+def result_for(doc, page_id, kind="edit"):
+    for r in results(watched="true"):
+        ev = r["event"]
+        if ev["kind"] == kind and ev["page_id"] == page_id and ev["doc_id"] == doc:
+            return r
+    return None
+
+
+def stages(trace_id):
+    return {t["stage"] for t in get_json(f"{API}/api/trace/{trace_id}")["trail"]}
+
+
+def test_extract_doc_tag_inserted_page_and_typed_hashtag(desktop, tmp_path):
+    page, api = desktop
+    T = TESTDATA
+    # E2E Report: PDF pages 0 and 1, a note page inserted between them -> a, ins, b
+    rmseed("pdf", REPORT, "E2E Report", PROJECTS_ID, T + "/two_column.pdf")
+    rmseed("page", REPORT, "a", T + "/margin_note.rm")      # highlight + margin note (pen)
+    rmseed("page", REPORT, "ins", T + "/strokes_a.rm")      # handwriting on the inserted page
+    rmseed("page", REPORT, "b", T + "/hl_two_lines.rm")     # highlights only: no LLM call
+    rmseed("redir", REPORT, "a", "0")
+    rmseed("redir", REPORT, "ins", "-1")
+    rmseed("redir", REPORT, "b", "1")
+    rmseed("notebook", TAGNB, "E2E Tags", INBOX_ID)
+    rmseed("page", TAGNB, "t1", T + "/text_note.rm")
+
+    cfg = api.get("/ui/api/automation").json()
+    cfg["settings"].update(enabled=True, mode="live")
+    cfg["rules"] = [EXTRACT_RULE]
+    assert api.put("/ui/api/automation", data=cfg).ok
+    run_now(api)  # the rule's first run: nothing tagged yet
+
+    # 1. a document tag covers every page; tagged after the join start -> edits
+    rmseed("doctag", REPORT, "extract")
+    run_now(api)
+    got = {p: wait_for(lambda p=p: result_for(REPORT, p), 300, f"result {p}") for p in ("a", "ins", "b")}
+    b = got["b"]
+    assert b["event"]["page_index"] == 2 and b["event"]["pdf_page"] == 1, b["event"]
+    hl = [x for x in b["annotations"] if x["kind"] == "highlight"]
+    assert [x["text"] for x in hl] == ["Retained earnings increased to $27.9 billion.", "free cash flow"], hl
+    assert "operating margin" in hl[0]["context"], hl[0]  # read from PDF page 1, not 0
+    assert "llm" not in stages(b["trace_id"])  # highlights only
+    assert "llm" in stages(got["a"]["trace_id"]) and "llm" in stages(got["ins"]["trace_id"])
+    assert got["ins"]["event"]["pdf_page"] == -1 and all(x["context"] == "" for x in got["ins"]["annotations"])
+    assert any(x["kind"] == "note" for x in got["a"]["annotations"]), got["a"]["annotations"]
+
+    # 2. a typed #extract on a page of an untagged notebook: rm-pages tags the page, then the rule fires
+    rmseed("page", TAGNB, "t1", T + "/typed_hashtag.rm")
+    run_now(api)  # the feed edit reaches rm-pages, which writes the page tag back
+    wait_for(lambda: "extract" in api.get(f"/ui/api/documents/{TAGNB}/tags").json()["pages"][0]["tags"],
+             240, "page tag written from the typed #extract")
+    run_now(api)
+    t1 = wait_for(lambda: result_for(TAGNB, "t1"), 300, "t1 result after the tag")
+    assert "Q3" in t1["transcription"], t1
+
+    # 3. the vault writer: entries, crops, viewer links
+    vault, state = tmp_path / "vault", tmp_path / "state.json"
+    vault.mkdir()
+    (vault / "inbox.md").write_text(INBOX)
+    (vault / "project-tags.md").write_text(PROJECT_TAGS)
+    out = subprocess.run(
+        ["python3", WRITER, "--once", "--user", USER, "--vault", str(vault), "--state", str(state)],
+        env={**os.environ, "RM_PAGES_URL": API}, capture_output=True, text=True, timeout=300)
+    assert out.returncode == 0, out.stderr
+    note = (vault / "personal" / "handwritten" / "E2E Report.md").read_text()
+    print("NOTE:\n" + note)
+    page3 = note.split("### Page 3", 1)[1]
+    assert f"[open on reMarkable](http://remarkable.svc/documents/{REPORT}?page=3)" in page3
+    assert "> Retained earnings increased to $27.9 billion." in page3 and "-after.png" not in page3
+    crops = list((vault / "attachments" / "remarkable" / REPORT).glob("b-*-crop-*.png"))
+    assert len(crops) == 2 and all(p.stat().st_size > 100 for p in crops)
+    assert "### Page 2" in note and "### Page 1" in note
+    assert results(watched="true") == []  # every watched result acked

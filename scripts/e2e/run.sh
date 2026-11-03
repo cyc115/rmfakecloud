@@ -41,7 +41,7 @@ DELETE FROM rm_pages.contact WHERE user_id = 'e2e';
 COMMIT;"
 
 cleanup() {
-  ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; [ -f $STUB_PID ] && kill \$(cat $STUB_PID) 2>/dev/null; rm -rf $DATA $REMOTE $STUB_PID" || true
+  ssh "$HOST" "podman rm -f $NAME >/dev/null 2>&1; [ -f $STUB_PID ] && kill \$(cat $STUB_PID) 2>/dev/null; rm -rf $DATA $REMOTE $STUB_PID \$HOME/rmfc-e2e.env" || true
   if [ -n "${RM_PAGES_URL:-}" ] && [ "$E2E_STUB_RMPAGES" != 1 ]; then
     echo ">> delete rm-pages rows of user e2e"
     if ! ssh "$HOST" "podman exec -i personal-db psql -U personal -d personal -X -q -v ON_ERROR_STOP=1" <<<"$RMPAGES_CLEANUP_SQL"; then
@@ -64,8 +64,14 @@ if [ "$E2E_STUB_RMPAGES" = 1 ]; then
   export RM_PAGES_URL=http://host.containers.internal:$STUB_PORT
 fi
 
+# automation API token of the e2e stack: rm-pages (RMPAGES_RMFC e2e entry, homelab
+# ansible/rm-pages.yml) reads it from ~/rmfc-e2e.env to write handwritten #tags back
+E2E_API_TOKEN=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
+export E2E_API_TOKEN
+ssh "$HOST" "umask 077; printf 'AUTOMATION_API_TOKEN=%s\n' $E2E_API_TOKEN > \$HOME/rmfc-e2e.env"
+
 # env passthrough: expanded here (ssh does not forward env), quoted for the remote shell
-ENVS=""
+ENVS="-e AUTOMATION_API_TOKEN=$E2E_API_TOKEN -e AUTOMATION_API_USER=e2e"
 for v in RM_PAGES_URL PAGEWATCH_MIN_AGE; do
   [ -n "${!v:-}" ] && ENVS="$ENVS -e $(printf '%q' "$v=${!v}")"
 done
@@ -105,4 +111,4 @@ done
 
 echo ">> pytest"
 cd "$ROOT"
-E2E_BASE_URL=$BASE RM_PAGES_URL=${RM_PAGES_URL:-} E2E_HOST=$HOST E2E_REMOTE=$REMOTE E2E_DATA=$DATA uv run --with pytest --with playwright python -m pytest scripts/e2e "$@"
+E2E_BASE_URL=$BASE E2E_API_TOKEN=$E2E_API_TOKEN RM_PAGES_URL=${RM_PAGES_URL:-} E2E_HOST=$HOST E2E_REMOTE=$REMOTE E2E_DATA=$DATA uv run --with pytest --with playwright python -m pytest scripts/e2e "$@"

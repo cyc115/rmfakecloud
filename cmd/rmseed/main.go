@@ -33,7 +33,7 @@ func run(argv []string) error {
 	data := fl.String("data", "", "rmfakecloud data dir")
 	uid := fl.String("user", "", "user id")
 	fl.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: rmseed --data DIR --user UID <init|notebook ID NAME PARENT|folder ID NAME PARENT|page DOCID PAGEID FILE.rm|delete-page DOCID PAGEID|open DOCID PAGE>")
+		fmt.Fprintln(os.Stderr, "usage: rmseed --data DIR --user UID <init|notebook ID NAME PARENT|folder ID NAME PARENT|pdf ID NAME PARENT FILE.pdf|page DOCID PAGEID FILE.rm|delete-page DOCID PAGEID|move-page DOCID PAGEID BEFOREID|redir DOCID PAGEID N|doctag DOCID TAG|open DOCID PAGE>")
 		fl.PrintDefaults()
 	}
 	if err := fl.Parse(argv); err != nil {
@@ -77,6 +77,40 @@ func run(argv []string) error {
 			return err
 		}
 		ft.Folder(args[1], args[2], args[3])
+	case "pdf":
+		if err := need(4); err != nil {
+			return err
+		}
+		pdf, err := os.ReadFile(args[4])
+		if err != nil {
+			return err
+		}
+		ft.PDF(args[1], args[2], args[3], 0, 0, time.Time{}).PDF = pdf
+	case "move-page":
+		if err := need(3); err != nil {
+			return err
+		}
+		if err := ft.MovePageBefore(args[1], args[2], args[3]); err != nil {
+			return err
+		}
+	case "redir":
+		if err := need(3); err != nil {
+			return err
+		}
+		n, err := strconv.Atoi(args[3])
+		if err != nil {
+			return fmt.Errorf("redir: %w", err)
+		}
+		if err := ft.SetRedir(args[1], args[2], n); err != nil {
+			return err
+		}
+	case "doctag":
+		if err := need(2); err != nil {
+			return err
+		}
+		if err := ft.TagDoc(args[1], args[2], time.Now()); err != nil {
+			return err
+		}
 	case "page":
 		if err := need(3); err != nil {
 			return err
