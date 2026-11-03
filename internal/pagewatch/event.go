@@ -38,6 +38,10 @@ type Event struct {
 	PageID    string   `json:"page_id,omitempty"`
 	// PageIndex position in page order, from 0; -1 on page_deleted (the page is gone)
 	PageIndex int `json:"page_index"`
+	// PDFPage the PDF page the page shows (cPages redir), -1 for a page
+	// inserted in a PDF/EPUB; absent for notebooks or when the doc has no
+	// redir, where PageIndex is the PDF page
+	PDFPage *int `json:"pdf_page,omitempty"`
 	// BeforeHash the baseline; empty for a new page and on transcribe_only
 	BeforeHash string `json:"before_hash,omitempty"`
 	AfterHash  string `json:"after_hash,omitempty"`

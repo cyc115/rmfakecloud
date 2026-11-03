@@ -114,6 +114,18 @@ type docView struct {
 	order []string
 }
 
+// pdfPage the PDF page pageID shows, nil for notebooks or without a redir
+func (v *docView) pdfPage(pageID string) *int {
+	if v.docType == DocNotebook || pageID == "" {
+		return nil
+	}
+	r, ok := v.ci.Redir[pageID]
+	if !ok {
+		return nil
+	}
+	return &r
+}
+
 type mtime struct {
 	at  time.Time
 	err error
@@ -319,6 +331,7 @@ func (d *detector) event(kind string, v *docView, pageID string, changedAt time.
 		DocPath:   v.path,
 		DocType:   v.docType,
 		PageID:    pageID,
+		PDFPage:   v.pdfPage(pageID),
 		PDFHash:   v.snap.PDFHash,
 		ChangedAt: changedAt,
 	}
