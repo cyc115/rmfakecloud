@@ -180,3 +180,19 @@ func TestPageTagSpellingsMatch(t *testing.T) {
 		t.Error("page and document tags normalise differently")
 	}
 }
+
+func TestParseContentDocTagTimes(t *testing.T) {
+	ci := ParseContent([]byte(`{"fileType":"notebook","pageCount":0,"tags":[{"name":"Extract","timestamp":1700000000000},"Work"]}`))
+	if at, ok := ci.DocTag("extract"); !ok || !at.Equal(time.UnixMilli(1700000000000)) {
+		t.Fatalf("extract: %v %v", at, ok)
+	}
+	if at, ok := ci.DocTag("work"); !ok || !at.IsZero() {
+		t.Fatalf("work: %v %v", at, ok)
+	}
+	if _, ok := ci.DocTag("x"); ok {
+		t.Fatal("x should be absent")
+	}
+	if !reflect.DeepEqual(ci.Tags, []string{"Extract", "Work"}) {
+		t.Fatalf("tags: %v", ci.Tags)
+	}
+}

@@ -353,11 +353,14 @@ type ContentInfo struct {
 	// PageTags page id → its tags (NormalizePageTag) → when the tag was
 	// applied, unix ms from the tablet's clock (0 = not given), from pageTags
 	PageTags map[string]map[string]int64 `json:"pageTags,omitempty"`
+	// DocTags document tag (NormalizeTag) → when it was applied, unix ms from
+	// the tablet's clock (0 = not given, or a plain-string tag)
+	DocTags map[string]int64 `json:"docTags,omitempty"`
 }
 
 // contentParseVersion bump when ParseContent starts reading more fields
-// (11: pageTags)
-const contentParseVersion = 11
+// (11: pageTags, 12: tags[].timestamp)
+const contentParseVersion = 12
 
 // Readable the blob was decoded
 func (c *ContentInfo) Readable() bool {
@@ -383,6 +386,33 @@ func (c *ContentInfo) HasTag(tag string) bool {
 		}
 	}
 	return false
+}
+
+// addDocTag records a document tag's time; the latest time wins
+func (c *ContentInfo) addDocTag(name string, ms int64) {
+	k := NormalizeTag(name)
+	if k == "" {
+		return
+	}
+	if c.DocTags == nil {
+		c.DocTags = map[string]int64{}
+	}
+	if old, ok := c.DocTags[k]; !ok || ms > old {
+		c.DocTags[k] = ms
+	}
+}
+
+// DocTag when the document carries tag (NormalizeTag on both sides); ok
+// false when it does not. A zero time: the tag has no timestamp.
+func (c *ContentInfo) DocTag(tag string) (at time.Time, ok bool) {
+	ms, ok := c.DocTags[NormalizeTag(tag)]
+	if !ok {
+		return time.Time{}, false
+	}
+	if ms > 0 {
+		at = time.UnixMilli(ms)
+	}
+	return at, true
 }
 
 // PageTag when the page carries tag (NormalizePageTag on both sides); ok
@@ -463,9 +493,11 @@ func ParseContent(b []byte) ContentInfo {
 			switch v := t.(type) {
 			case string:
 				info.Tags = append(info.Tags, v)
+				info.addDocTag(v, 0)
 			case map[string]any:
 				if name, ok := v["name"].(string); ok {
 					info.Tags = append(info.Tags, name)
+					info.addDocTag(name, int64Of(v["timestamp"]))
 				}
 			}
 		}
