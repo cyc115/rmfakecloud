@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useHistory, useLocation } from "react-router-dom";
 import { parsePageParam, clampPage, withPageParam, parsePageInput } from "./pageParam";
 import { pageTagsAt, taggedPages } from "./docTags";
-import { Badge, Button, ButtonGroup, Dropdown } from "react-bootstrap";
+import { Button, ButtonGroup, Dropdown } from "react-bootstrap";
+import { toast } from "react-toastify";
+import TagRow from "./TagRow";
 import Navbar from 'react-bootstrap/Navbar';
 import { FaChevronRight, FaChevronLeft, } from "react-icons/fa6";
 import { AiOutlineDownload } from "react-icons/ai";
@@ -83,7 +85,21 @@ export default function FileViewer({ file, onSelect }) {
       .catch(() => {});
     return () => { live = false; };
   }, [file.id]);
+  // suggestions for the "+ tag" fields: every tag in use (page tags, document tags)
+  const [suggest, setSuggest] = useState([]);
+  useEffect(() => {
+    apiservice.getPageTags().then((r) => setSuggest((r.tags || []).map((t) => t.name))).catch(() => {});
+  }, []);
+  const [busy, setBusy] = useState(false);
+  const editTags = (change) => {
+    setBusy(true);
+    apiservice.editDocumentTags(file.id, change)
+      .then((t) => setDocTags(t))
+      .catch((e) => toast.error(`Could not change tags: ${e.message || e}`))
+      .finally(() => setBusy(false));
+  };
   const pageTags = loaded ? pageTagsAt(docTags, page, pages) : null;
+  const pageId = pageTags && docTags.pages[page - 1].id;
   const tagged = loaded ? taggedPages(docTags, pages) : [];
   const docTagList = (docTags && docTags.tags) || [];
 
@@ -167,12 +183,13 @@ export default function FileViewer({ file, onSelect }) {
 
       </Navbar>
 
-      {(docTagList.length > 0 || tagged.length > 0) && (
-        <div className="doc-tags" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-          {docTagList.length > 0 && <span className="text-secondary">Document:</span>}
-          {docTagList.map((t) => <Badge key={"d" + t} bg="secondary">{t}</Badge>)}
-          {pageTags && pageTags.length > 0 && <span className="text-secondary" style={{ marginLeft: '8px' }}>Page {page}:</span>}
-          {pageTags && pageTags.map((t) => <Badge key={"p" + t} bg="info" text="dark">{t}</Badge>)}
+      {docTags && (
+        <div className="doc-tags" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+          <datalist id="doc-tag-suggestions">{suggest.map((t) => <option key={t} value={t} />)}</datalist>
+          <TagRow label="Document" tags={docTagList} busy={busy} listId="doc-tag-suggestions"
+            onAdd={(t) => editTags({ add: [t] })} onRemove={(t) => editTags({ remove: [t] })} />
+          {pageTags && <TagRow label={`Page ${page}`} tags={pageTags} busy={busy} listId="doc-tag-suggestions" bg="info" text="dark"
+            onAdd={(t) => editTags({ pageId, add: [t] })} onRemove={(t) => editTags({ pageId, remove: [t] })} />}
           {tagged.length > 0 && (
             <Dropdown style={{ marginLeft: 'auto' }}>
               <Dropdown.Toggle size="sm" variant="outline-secondary">

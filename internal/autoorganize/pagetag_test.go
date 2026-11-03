@@ -226,3 +226,20 @@ func TestPatchContentPageTags(t *testing.T) {
 		t.Fatalf("p2: %v", added3)
 	}
 }
+
+func TestPatchContentPageTagsRemove(t *testing.T) {
+	raw := []byte(`{"pageTags":[{"name":"To-Do","pageId":"p1","timestamp":1},{"name":"todo","pageId":"p2","timestamp":1},{"name":"x","pageId":"p1","timestamp":1}],"k":1}`)
+	out, removed, err := PatchContentPageTagsRemove(raw, "p1", []string{"to do", "nope"})
+	if err != nil || !reflect.DeepEqual(removed, []string{"to do"}) {
+		t.Fatalf("removed %v err %v", removed, err)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(out, &m)
+	tags := m["pageTags"].([]any)
+	if len(tags) != 2 || tags[0].(map[string]any)["pageId"] != "p2" || tags[1].(map[string]any)["name"] != "x" || m["k"] != float64(1) {
+		t.Fatalf("left: %s", out)
+	}
+	if out2, removed2, _ := PatchContentPageTagsRemove(out, "p1", []string{"to do"}); out2 != nil || len(removed2) != 0 {
+		t.Fatalf("second: %s %v", out2, removed2)
+	}
+}

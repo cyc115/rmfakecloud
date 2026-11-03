@@ -167,6 +167,20 @@ class ApiServices {
     });
   }
 
+  // add and remove tags by hand: the document's (no pageId) or one page's; answers like documentTags
+  editDocumentTags(id, { pageId, add = [], remove = [] }) {
+    return fetch(`${constants.ROOT_URL}/documents/${encodeURIComponent(id)}/tags`, {
+      method: "POST",
+      headers: this.header(),
+      body: JSON.stringify({ page_id: pageId || "", add, remove }),
+    }).then((r) => {
+      if (!r.ok) {
+        return r.json().catch(() => ({})).then((d) => { throw new Error(d.error || r.statusText); });
+      }
+      return r.json();
+    });
+  }
+
   createFolder(data) {
     return fetch(`${constants.ROOT_URL}/folders`, {
       method: "POST",

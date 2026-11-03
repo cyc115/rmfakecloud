@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/ddvk/rmfakecloud/internal/autoorganize"
 	"github.com/ddvk/rmfakecloud/internal/common"
@@ -135,6 +136,52 @@ func docTags(src renderSource, uid, docID string) (*DocTags, error) {
 
 func (app *ReactAppWrapper) registerDocTagsRoute(auth *gin.RouterGroup) {
 	auth.GET("documents/:docid/tags", app.getDocumentTags)
+	auth.POST("documents/:docid/tags", app.editDocumentTags)
+}
+
+type editTagsReq struct {
+	// PageID the page whose tags change; empty: the document's tags
+	PageID string   `json:"page_id"`
+	Add    []string `json:"add"`
+	Remove []string `json:"remove"`
+}
+
+// editDocumentTags POST documents/:docid/tags: add and remove document or
+// page tags by hand; answers with the document's tags as GET does
+func (app *ReactAppWrapper) editDocumentTags(c *gin.Context) {
+	var req editTagsReq
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Add)+len(req.Remove) == 0 {
+		badReq(c, "body must be {page_id?, add: [..], remove: [..]}")
+		return
+	}
+	clean := func(tags []string) ([]string, bool) {
+		out := make([]string, 0, len(tags))
+		for _, t := range tags {
+			t = strings.TrimSpace(t)
+			if autoorganize.NormalizeTag(t) == "" {
+				return nil, false
+			}
+			out = append(out, t)
+		}
+		return out, true
+	}
+	add, ok1 := clean(req.Add)
+	remove, ok2 := clean(req.Remove)
+	if !ok1 || !ok2 {
+		badReq(c, "a tag cannot be blank")
+		return
+	}
+	docID, uid := common.ParamS(docIDParam, c), userID(c)
+	err := app.organizer.EditTags(uid, docID, req.PageID, add, remove)
+	switch {
+	case errors.Is(err, autoorganize.ErrVanished), errors.Is(err, autoorganize.ErrNoPage):
+		c.AbortWithStatusJSON(http.StatusNotFound, viewmodel.NewErrorResponse(err.Error()))
+		return
+	case err != nil:
+		app.autoOrganizeError(c, err)
+		return
+	}
+	app.getDocumentTags(c)
 }
 
 // getDocumentTags GET documents/:docid/tags: the viewer's document and page tags
