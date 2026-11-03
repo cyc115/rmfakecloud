@@ -64,7 +64,7 @@ def test_two_condition_document_rule(page, api):
     assert [a["type"] for a in r["actions"]] == ["move"], r
     # the saved rule's preview lists the seeded PDF
     page.get_by_role("button", name="Preview", exact=True).click()
-    expect(page.get_by_text("would move")).to_be_visible()
+    expect(page.locator(".ao-hint", has_text="would move")).to_be_visible()  # the summary line says it too
     expect(page.locator(".ao-row .doc", has_text="Paper")).to_be_visible()
     # run now (dry mode): succeeds and plans the moves
     page.get_by_role("button", name="Run now").click()
@@ -127,7 +127,7 @@ def test_show_preview_from_unsaved_rule(page):
     expect(matches).to_contain_text("1 document")
     drawer.get_by_role("button", name="▸ show").click()
     expect(page.get_by_label("Edit rule")).not_to_be_visible()
-    expect(page.get_by_text("would move")).to_be_visible()
+    expect(page.locator(".ao-hint", has_text="would move")).to_be_visible()  # the summary line says it too
     expect(page.locator(".ao-row .doc", has_text="Paper")).to_be_visible()
     # nothing was saved
     assert page.locator(".ao-rule").count() == 0
