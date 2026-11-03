@@ -326,17 +326,24 @@ func (e *env) undocTag(doc string) {
 	e.ft.Docs[doc].Content["tags"] = []any{}
 }
 
-func TestDocTagOldWritingIsTranscribeOnly(t *testing.T) {
+// a document tag is a tag on every page (Mike, 2026-11-03): tagged after the
+// rule's join start, older writing is an edit with no before (tasks)
+func TestDocTagIsTagOnEveryPage(t *testing.T) {
 	e := newEnv(t)
 	e.tagRule("r1", "extract")
 	e.ft.Notebook("nb", "Notes", "")
 	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
 	wantEvents(t, "untagged", e.sweep().Pipeline)
 
-	// written an hour ago, tagged now: into the note, no tasks
 	e.docTag("nb", "Extract", e.now)
 	p := e.detect()
-	wantEvents(t, "pipeline", p.Pipeline, "transcribe_only nb/p1 r1")
+	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1", "edit nb/p2 r1")
+	for _, ev := range p.Pipeline {
+		if ev.BeforeHash != "" {
+			t.Fatalf("before = %q", ev.BeforeHash)
+		}
+	}
 	e.state = p.Advance(all(p))
 	wantEvents(t, "next", e.detect().Pipeline)
 }
@@ -375,7 +382,7 @@ func TestDocTagCoversWatchedDoc(t *testing.T) {
 	wantEvents(t, "page tag", e.sweep().Pipeline, "edit nb/p1 r1")
 
 	e.docTag("nb", "extract", e.now)
-	wantEvents(t, "doc tag", e.sweep().Pipeline, "transcribe_only nb/p2 r1")
+	wantEvents(t, "doc tag", e.sweep().Pipeline, "edit nb/p2 r1")
 }
 
 func TestDocTagRemovedStopsEvents(t *testing.T) {
@@ -405,5 +412,16 @@ func TestDocTagIsNotPageTag(t *testing.T) {
 	e.sweep()
 	e.docTag("nb", "extract", e.now)
 	e.tag("nb", "p1", "q3", e.now)
-	wantEvents(t, "pipeline", e.sweep().Pipeline, "transcribe_only nb/p1 r1")
+	wantEvents(t, "pipeline", e.sweep().Pipeline, "edit nb/p1 r1")
+}
+
+// as with page tags: a document tagged before the rule first ran goes into
+// the note without tasks
+func TestDocTagBeforeFirstRunIsTranscribeOnly(t *testing.T) {
+	e := newEnv(t)
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.docTag("nb", "extract", e.now.Add(-24*time.Hour))
+	e.tagRule("r1", "extract")
+	wantEvents(t, "pipeline", e.detect().Pipeline, "transcribe_only nb/p1 r1")
 }

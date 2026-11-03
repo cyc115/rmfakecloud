@@ -59,7 +59,7 @@ func PreviewRule(snap *autoorganize.Snapshot, content func(*autoorganize.DocSnap
 		if tagged {
 			n = 0
 			for _, p := range v.snap.Pages {
-				if _, ok, _ := pageTagged(&v.ci, p.ID, tags); ok {
+				if _, ok := pageTagged(&v.ci, p.ID, tags); ok {
 					n++
 				}
 			}

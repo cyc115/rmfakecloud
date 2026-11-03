@@ -41,28 +41,16 @@ func (d *detector) taggedDoc(r *automation.Rule, tags []string, base *RuleState,
 		key := pageKey(docID, p.ID)
 		prev := base.Baselines[key]
 		pin, pinned := base.TagJoinAt[key]
-		tagAt, tagged, viaDoc := pageTagged(&v.ci, p.ID, tags)
+		tagAt, tagged := pageTagged(&v.ci, p.ID, tags)
 		if !tagged {
 			if prev != "" || pinned {
 				drop = append(drop, key)
 			}
 			continue
 		}
-		if prev == "" && !pinned && (viaDoc || !watched) {
-			// a page covered by a document tag joins at the tag's time, even in a
-			// watched doc: older writing goes into the note without tasks
+		if prev == "" && !pinned && !watched {
 			pin, pinned = joinAt, true
-			if viaDoc {
-				pin = tagAt
-				if pin.IsZero() {
-					pin = d.in.Now
-				}
-				if !watched && joinAt.After(pin) {
-					pin = joinAt
-				}
-			}
-			at := pin
-			d.always(func(s *State) { s.rule(ruleID).TagJoinAt[key] = at })
+			d.always(func(s *State) { s.rule(ruleID).TagJoinAt[key] = joinAt })
 		}
 		if p.Hash == "" || p.Hash == prev {
 			continue
@@ -95,23 +83,22 @@ func (d *detector) taggedDoc(r *automation.Rule, tags []string, base *RuleState,
 }
 
 // pageTagged the page carries every tag, on the page itself or on its
-// document; at is the latest tag time. viaDoc: at least one tag is only on
-// the document. No tags is never tagged.
-func pageTagged(ci *autoorganize.ContentInfo, pageID string, tags []string) (at time.Time, ok bool, viaDoc bool) {
+// document (a document tag is a tag on every page); at is the latest tag
+// time. No tags is never tagged.
+func pageTagged(ci *autoorganize.ContentInfo, pageID string, tags []string) (at time.Time, ok bool) {
 	if len(tags) == 0 {
-		return time.Time{}, false, false
+		return time.Time{}, false
 	}
 	for _, tag := range tags {
 		t, ok := ci.PageTag(pageID, tag)
 		if !ok {
 			if t, ok = ci.DocTag(tag); !ok {
-				return time.Time{}, false, false
+				return time.Time{}, false
 			}
-			viaDoc = true
 		}
 		if t.After(at) {
 			at = t
 		}
 	}
-	return at, true, viaDoc
+	return at, true
 }
