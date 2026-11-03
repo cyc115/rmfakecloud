@@ -57,3 +57,59 @@ func TestDocTagsListsDocAndPageTagsInPageOrder(t *testing.T) {
 		t.Fatalf("anonymous: %d", code)
 	}
 }
+
+func TestApplyPageTags(t *testing.T) {
+	a := newAOAPI(t)
+	tok := "Bearer " + apiToken
+	ft := tablet.New(t, a.storage, "mike")
+	if err := ft.Load(); err != nil {
+		t.Fatal(err)
+	}
+	ft.Notebook("nb1", "Notes", a.inbox)
+	if err := ft.SetPage("nb1", "p1", []byte("rm-p1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.TagPage("nb1", "p1", "Work", time.Now()); err != nil {
+		t.Fatal(err) // "work" is a known tag: it is on a page
+	}
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	apply := func(token string, body map[string]any) (int, map[string]any) {
+		return a.do("POST", "/ui/api/automation/page-tags/apply", token, body)
+	}
+	if code, _ := apply("", map[string]any{"doc_id": "nb1", "page_id": "p1", "tags": []any{"work"}}); code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d", code)
+	}
+	if code, body := apply(tok, map[string]any{"doc_id": "nb1", "page_id": "p1", "tags": []any{"nope"}}); code != http.StatusBadRequest {
+		t.Fatalf("unknown tag: %d %v", code, body)
+	}
+	for _, b := range []map[string]any{{"doc_id": "missing", "page_id": "p1", "tags": []any{"work"}}, {"doc_id": "nb1", "page_id": "p9", "tags": []any{"work"}}} {
+		if code, body := apply(tok, b); code != http.StatusNotFound {
+			t.Fatalf("%v: %d %v", b, code, body)
+		}
+	}
+	// a second page gets the known tag
+	if err := ft.SetPage("nb1", "p2", []byte("rm-p2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	code, body := apply(tok, map[string]any{"doc_id": "nb1", "page_id": "p2", "tags": []any{"work"}})
+	if code != http.StatusOK || fmt.Sprint(body["added"]) != "[work]" {
+		t.Fatalf("apply: %d %v", code, body)
+	}
+	if code, body := apply(tok, map[string]any{"doc_id": "nb1", "page_id": "p2", "tags": []any{"Work"}}); code != http.StatusOK || fmt.Sprint(body["added"]) != "[]" {
+		t.Fatalf("again: %d %v", code, body)
+	}
+	tags, _ := ft.ServerContent("nb1")["pageTags"].([]any)
+	found := false
+	for _, x := range tags {
+		m := x.(map[string]any)
+		found = found || (m["pageId"] == "p2" && m["name"] == "work")
+	}
+	if !found {
+		t.Fatalf("server .content lacks the tag: %v", tags)
+	}
+}

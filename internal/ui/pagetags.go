@@ -158,3 +158,30 @@ func (app *ReactAppWrapper) automationPageTags(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"tags": tags})
 }
+
+type applyPageTagsReq struct {
+	DocID  string   `json:"doc_id" binding:"required"`
+	PageID string   `json:"page_id" binding:"required"`
+	Tags   []string `json:"tags" binding:"required"`
+}
+
+// applyPageTags POST page-tags/apply: rm-pages found a handwritten #tag
+// matching a known tag; the page gets that page tag (idempotent)
+func (app *ReactAppWrapper) applyPageTags(c *gin.Context) {
+	var req applyPageTagsReq
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.Tags) == 0 {
+		badReq(c, "body must be {doc_id, page_id, tags: [..]}")
+		return
+	}
+	added, err := app.organizer.ApplyPageTags(userID(c), req.DocID, req.PageID, req.Tags)
+	switch {
+	case errors.Is(err, autoorganize.ErrUnknownTag):
+		badReq(c, err.Error())
+	case errors.Is(err, autoorganize.ErrVanished), errors.Is(err, autoorganize.ErrNoPage):
+		c.AbortWithStatusJSON(http.StatusNotFound, viewmodel.NewErrorResponse(err.Error()))
+	case err != nil:
+		app.autoOrganizeError(c, err)
+	default:
+		c.JSON(http.StatusOK, gin.H{"added": added})
+	}
+}

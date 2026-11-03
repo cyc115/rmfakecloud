@@ -1351,6 +1351,75 @@
           }
         ]
       }
+    },
+    "/ui/api/automation/page-tags/apply": {
+      "post": {
+        "operationId": "applyPageTags",
+        "summary": "Add known tags to a page",
+        "description": "Adds page tags to one live page of a document, as the tablet writes them ({name, pageId, timestamp}), then asks the tablet to sync. Every tag must be a known tag: a tag an enabled rule names or a tag already on a page or document. Idempotent: a tag the page already carries is not added again. Used by rm-pages when Mike writes #tag on a page. Writes the document's .content.",
+        "tags": [
+          "write"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "doc_id",
+                  "page_id",
+                  "tags"
+                ],
+                "properties": {
+                  "doc_id": {
+                    "type": "string"
+                  },
+                  "page_id": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tags added (empty when the page had them all)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "added": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {

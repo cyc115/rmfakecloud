@@ -196,3 +196,33 @@ func TestParseContentDocTagTimes(t *testing.T) {
 		t.Fatalf("tags: %v", ci.Tags)
 	}
 }
+
+func TestPatchContentPageTags(t *testing.T) {
+	raw := []byte(`{"fileType":"notebook","zoom":{"x":1.5},"pageTags":[{"name":"To-Do","pageId":"p1","timestamp":1}]}`)
+	out, added, err := PatchContentPageTags(raw, "p1", []string{"to do", "extract"}, 1700000000000)
+	if err != nil || !reflect.DeepEqual(added, []string{"extract"}) {
+		t.Fatalf("added %v err %v", added, err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["zoom"].(map[string]any)["x"] != 1.5 || m["fileType"] != "notebook" {
+		t.Fatalf("other keys changed: %s", out)
+	}
+	tags := m["pageTags"].([]any)
+	if len(tags) != 2 || tags[0].(map[string]any)["name"] != "To-Do" {
+		t.Fatalf("pageTags: %v", tags)
+	}
+	if n := tags[1].(map[string]any); n["name"] != "extract" || n["pageId"] != "p1" || n["timestamp"] != float64(1700000000000) {
+		t.Fatalf("new tag: %v", n)
+	}
+	// again: nothing to add
+	if out2, added2, err := PatchContentPageTags(out, "p1", []string{"Extract"}, 2); err != nil || len(added2) != 0 || out2 != nil {
+		t.Fatalf("second: %s %v %v", out2, added2, err)
+	}
+	// another page: added
+	if _, added3, _ := PatchContentPageTags(out, "p2", []string{"extract"}, 2); !reflect.DeepEqual(added3, []string{"extract"}) {
+		t.Fatalf("p2: %v", added3)
+	}
+}
