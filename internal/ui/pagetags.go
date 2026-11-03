@@ -58,8 +58,9 @@ type PageTag struct {
 	Docs  []PageTagDoc `json:"docs"`
 }
 
-// listPageTags every distinct page tag on the live pages of the user's
-// documents outside the Trash (documents tagged "no automation" are skipped,
+// listPageTags every distinct tag that covers live pages of the user's
+// documents outside the Trash: a page tag covers its page, a document tag
+// every live page with a .rm blob (a page with both counts once) (documents tagged "no automation" are skipped,
 // as every rule skips them), sorted by name. Read-only: the .content reads
 // use a throwaway cache. A tag on a page no longer in the page list is ignored.
 func listPageTags(src renderSource, uid string) ([]PageTag, error) {
@@ -73,20 +74,39 @@ func listPageTags(src renderSource, uid string) ([]PageTag, error) {
 			continue
 		}
 		ci := content(d)
-		if len(ci.PageTags) == 0 || ci.HasNoAutomationTag() {
+		if (len(ci.PageTags) == 0 && len(ci.DocTags) == 0) || ci.HasNoAutomationTag() {
 			continue
 		}
 		live := map[string]bool{}
 		for _, p := range d.Pages {
 			live[p.ID] = true
 		}
-		counts := map[string]int{}
+		covered := map[string]map[string]bool{} // tag -> page ids
+		cover := func(name, pageID string) {
+			if covered[name] == nil {
+				covered[name] = map[string]bool{}
+			}
+			covered[name][pageID] = true
+		}
 		for pageID, tags := range ci.PageTags {
 			if d.PagesErr == "" && d.Pages != nil && !live[pageID] {
 				continue
 			}
 			for name := range tags {
-				counts[name]++
+				cover(name, pageID)
+			}
+		}
+		for name := range ci.DocTags {
+			for _, p := range d.Pages {
+				if p.Hash != "" {
+					cover(name, p.ID)
+				}
+			}
+		}
+		counts := map[string]int{}
+		for name, pages := range covered {
+			if len(pages) > 0 {
+				counts[name] = len(pages)
 			}
 		}
 		for name, n := range counts {

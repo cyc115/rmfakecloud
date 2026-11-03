@@ -95,3 +95,39 @@ func TestPageTagsWithoutBlobStorageIs503(t *testing.T) {
 		t.Fatalf("nil blobs: %d %v", code, body)
 	}
 }
+
+func TestPageTagsCountDocTagCoverage(t *testing.T) {
+	a := newAOAPI(t)
+	tok := a.token("mike", true)
+	ft := tablet.New(t, a.storage, "mike")
+	if err := ft.Load(); err != nil {
+		t.Fatal(err)
+	}
+	nb := ft.Notebook("nb1", "Notes", a.inbox)
+	nb.Content["tags"] = []any{map[string]any{"name": "Extract", "timestamp": time.Now().UnixMilli()}}
+	for _, p := range []string{"p1", "p2", "p3"} {
+		if err := ft.SetPage("nb1", p, []byte("rm-"+p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	delete(nb.RM, "p3") // a page without a .rm blob
+	if err := ft.TagPage("nb1", "p1", "extract", time.Now()); err != nil {
+		t.Fatal(err) // also page-tagged: counted once
+	}
+	if err := ft.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	code, body := a.do("GET", "/ui/api/automation/page-tags", tok, nil)
+	if code != http.StatusOK {
+		t.Fatalf("page-tags: %d %v", code, body)
+	}
+	tags := body["tags"].([]any)
+	if len(tags) != 1 {
+		t.Fatalf("tags: %v", tags)
+	}
+	ex := tags[0].(map[string]any)
+	docs := ex["docs"].([]any)
+	if ex["name"] != "extract" || ex["pages"].(float64) != 2 || len(docs) != 1 || docs[0].(map[string]any)["pages"].(float64) != 2 {
+		t.Fatalf("extract: %v", ex)
+	}
+}

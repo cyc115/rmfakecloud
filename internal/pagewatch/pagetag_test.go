@@ -313,3 +313,97 @@ func TestTasksFalseOnPipelineEventsOnly(t *testing.T) {
 		}
 	}
 }
+
+// docTag adds a document tag to .content tags, as the device writes it
+func (e *env) docTag(doc, tag string, at time.Time) {
+	e.t.Helper()
+	d := e.ft.Docs[doc]
+	tags, _ := d.Content["tags"].([]any)
+	d.Content["tags"] = append(tags, map[string]any{"name": tag, "timestamp": at.UnixMilli()})
+}
+
+func (e *env) undocTag(doc string) {
+	e.ft.Docs[doc].Content["tags"] = []any{}
+}
+
+func TestDocTagOldWritingIsTranscribeOnly(t *testing.T) {
+	e := newEnv(t)
+	e.tagRule("r1", "extract")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	wantEvents(t, "untagged", e.sweep().Pipeline)
+
+	// written an hour ago, tagged now: into the note, no tasks
+	e.docTag("nb", "Extract", e.now)
+	p := e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "transcribe_only nb/p1 r1")
+	e.state = p.Advance(all(p))
+	wantEvents(t, "next", e.detect().Pipeline)
+}
+
+func TestDocTagNewWritingIsEdit(t *testing.T) {
+	e := newEnv(t)
+	e.tagRule("r1", "extract")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.sweep()
+	tagAt := e.now
+	e.docTag("nb", "extract", tagAt)
+	e.sweep()
+	first := e.pageHash("nb", "p1")
+
+	e.now = e.now.Add(time.Hour) // past the minimum page age
+	e.page("nb", "p1", "strokes_ab.rm")
+	e.at[e.pageHash("nb", "p1")] = tagAt.Add(time.Minute)
+	e.page("nb", "p2", "text_todo.rm")
+	e.at[e.pageHash("nb", "p2")] = tagAt.Add(time.Minute)
+	p := e.detect()
+	wantEvents(t, "pipeline", p.Pipeline, "edit nb/p1 r1", "edit nb/p2 r1")
+	if p.Pipeline[0].BeforeHash != first || p.Pipeline[1].BeforeHash != "" {
+		t.Fatalf("befores: %q %q", p.Pipeline[0].BeforeHash, p.Pipeline[1].BeforeHash)
+	}
+}
+
+func TestDocTagCoversWatchedDoc(t *testing.T) {
+	e := newEnv(t)
+	e.tagRule("r1", "extract")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	e.sweep()
+	e.tag("nb", "p1", "extract", e.now)
+	wantEvents(t, "page tag", e.sweep().Pipeline, "edit nb/p1 r1")
+
+	e.docTag("nb", "extract", e.now)
+	wantEvents(t, "doc tag", e.sweep().Pipeline, "transcribe_only nb/p2 r1")
+}
+
+func TestDocTagRemovedStopsEvents(t *testing.T) {
+	e := newEnv(t)
+	e.tagRule("r1", "extract")
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.sweep()
+	e.docTag("nb", "extract", e.now)
+	e.sweep()
+
+	e.undocTag("nb")
+	e.page("nb", "p1", "strokes_ab.rm")
+	wantEvents(t, "untagged", e.sweep().Pipeline)
+	if rs := ruleState(e.state, "r1"); len(rs.Baselines) != 0 {
+		t.Fatalf("baselines kept: %v", rs.Baselines)
+	}
+}
+
+func TestDocTagIsNotPageTag(t *testing.T) {
+	e := newEnv(t)
+	r := e.tagRule("r1", "extract")
+	r.Conditions = append(r.Conditions, automation.Condition{Type: automation.CondPageTagIs, Params: automation.Params{Tag: "q3"}})
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.page("nb", "p2", "text_todo.rm")
+	e.sweep()
+	e.docTag("nb", "extract", e.now)
+	e.tag("nb", "p1", "q3", e.now)
+	wantEvents(t, "pipeline", e.sweep().Pipeline, "transcribe_only nb/p1 r1")
+}
