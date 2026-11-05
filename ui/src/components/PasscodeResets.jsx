@@ -14,7 +14,7 @@ export default function PasscodeResets() {
   const load = () => {
     apiservice
       .listPasscodeResets()
-      .then((list) => setResets(list || []))
+      .then((list) => setResets(Array.isArray(list) ? list : []))
       .catch((e) => setError(e.toString()));
   };
 
