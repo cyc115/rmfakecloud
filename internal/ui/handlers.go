@@ -134,7 +134,7 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 	if user.Sync15 {
 		scopes = isSync15Key
 	}
-	expiresAfter := 24 * time.Hour
+	expiresAfter := 7 * 24 * time.Hour
 	expires := time.Now().Add(expiresAfter)
 	claims := &WebUserClaims{
 		UserID:    user.ID,
