@@ -28,6 +28,10 @@ const cachedTreeName = ".tree"
 
 // serves as root modification log and generation number source
 const historyFile = ".root.history"
+
+// treeLockRetries mirrors internal/ui.treeRetries: how often a root-blob
+// read retries while the non-blocking history lock is held.
+const treeLockRetries = 10
 const rootBlob = "root"
 
 // GetCachedTree returns the cached blob tree for the user
@@ -44,7 +48,18 @@ func (fs *FileSystemStorage) GetCachedTree(uid string) (t *models.HashTree, err 
 		return nil, err
 	}
 	tree.SchemaVersion = fs.Cfg.HashSchemaVersion
-	changed, err := tree.Mirror(blobStorage)
+	// A concurrent root-blob read holds a non-blocking file lock
+	// (fs.LoadBlob), and so does a tablet sync writing the root blob;
+	// retry briefly instead of failing the read, same as the UI's
+	// cachedTree helper (internal/ui/pagetags.go).
+	var changed bool
+	for i := 0; ; i++ {
+		changed, err = tree.Mirror(blobStorage)
+		if err == nil || !errors.Is(err, fslock.ErrLockHeld) || i >= treeLockRetries {
+			break
+		}
+		time.Sleep(time.Duration(20*(i+1)) * time.Millisecond)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -692,7 +707,7 @@ func (fs *FileSystemStorage) LoadBlob(uid, blobid string) (reader io.ReadCloser,
 		historyPath := path.Join(fs.getUserBlobPath(uid), historyFile)
 		lock, err := fslock.Lock(historyPath)
 		if err != nil {
-			log.Error("cannot obtain lock")
+			log.Errorf("cannot obtain lock for root blob (uid=%s): %v", uid, err)
 			return nil, 0, 0, "", err
 		}
 		defer lock.Unlock()
@@ -738,7 +753,7 @@ func (fs *FileSystemStorage) StoreBlob(uid, id string, stream io.Reader, lastGen
 		var lock fslock.Handle
 		lock, err = fslock.Lock(historyPath)
 		if err != nil {
-			log.Error("cannot obtain lock")
+			log.Errorf("cannot obtain lock for root blob write (uid=%s): %v", uid, err)
 			return 0, err
 		}
 		defer lock.Unlock()
