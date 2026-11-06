@@ -54,7 +54,37 @@ func (r *Rule) Validate() error {
 	if subject != SubjectDocument && subject != SubjectPage {
 		return errors.New("subject must be document or page")
 	}
-	t := &r.When.Trigger
+	if subject == SubjectPage && len(r.When.OrTriggers) > 0 {
+		return errors.New("a page rule has one trigger; only document rules take “or” triggers")
+	}
+	for _, t := range r.When.AllTriggers() {
+		if err := validateTrigger(&t, subject); err != nil {
+			return err
+		}
+	}
+	if err := r.validatePlaces(); err != nil {
+		return err
+	}
+	if err := r.validateConditions(); err != nil {
+		return err
+	}
+	if r.When.AllPageBased() && r.Kind() != KindPdfEpub {
+		if len(r.When.OrTriggers) == 0 {
+			return errors.New("this trigger only applies to PDF & EPUB")
+		}
+		return errors.New("these triggers only apply to PDF & EPUB")
+	}
+	if r.Kind() == KindNotebooks {
+		for _, t := range r.When.AllTriggers() {
+			if Triggers[t.Type].PageBased {
+				return fmt.Errorf("trigger %q only applies to PDF & EPUB, and this rule is for notebooks", t.Type)
+			}
+		}
+	}
+	return r.validateActions()
+}
+
+func validateTrigger(t *Trigger, subject string) error {
 	spec, ok := Triggers[t.Type]
 	if !ok {
 		return fmt.Errorf("unknown trigger %q", t.Type)
@@ -71,16 +101,7 @@ func (r *Rule) Validate() error {
 			return err
 		}
 	}
-	if err := r.validatePlaces(); err != nil {
-		return err
-	}
-	if err := r.validateConditions(); err != nil {
-		return err
-	}
-	if spec.PageBased && r.Kind() != KindPdfEpub {
-		return errors.New("this trigger only applies to PDF & EPUB")
-	}
-	return r.validateActions()
+	return nil
 }
 
 func (r *Rule) validatePlaces() error {

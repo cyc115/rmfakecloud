@@ -57,6 +57,14 @@ export function isPdfOnly(triggerType) {
   return Object.prototype.hasOwnProperty.call(PDF_ONLY, triggerType);
 }
 
+// rulePdfOnly every trigger of the rule (trigger + orTriggers) is PDF-only, so
+// its kind_is is fixed. A PDF-only trigger next to another kind of trigger
+// leaves the kind free: on a notebook it just never matches.
+export function rulePdfOnly(rule) {
+  const w = (rule && rule.when) || {};
+  return [w.trigger || {}, ...(w.orTriggers || [])].every((t) => isPdfOnly(t.type));
+}
+
 // conditionLock the reason kind_is is fixed, or "" when it is free
 export function conditionLock(triggerType) {
   if (!isPdfOnly(triggerType)) return "";
@@ -77,7 +85,7 @@ export function conditionFit(type, rule) {
     return { ok: false, reason: subject === "page" ? "Works on documents, not pages." : "Works on pages, not documents." };
   }
   const trigger = (rule.when.trigger || {}).type;
-  if (type === "kind_is" && isPdfOnly(trigger)) return { ok: false, reason: conditionLock(trigger) };
+  if (type === "kind_is" && rulePdfOnly(rule)) return { ok: false, reason: conditionLock(trigger) };
   // a kind_is with no kind (all) is no condition: forSave drops it
   const has = (c) => c.type === type && !(type === "kind_is" && !KIND_LABELS[c.kind]);
   if (!spec.repeatable && (rule.conditions || []).some(has)) {

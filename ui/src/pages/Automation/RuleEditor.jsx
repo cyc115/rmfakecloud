@@ -5,8 +5,9 @@ import PlacesPicker from "./PlacesPicker";
 import Sentence from "./Sentence";
 import { KIND_LABELS, TIME_UNITS, conditionFit, conditionPhrase, conditionSpec, conditionsFor, makeCondition } from "./conditions";
 import {
-  ACTION_CARDS, NO_AUTOMATION_TAG, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
-  actionFit, actionKey, actionOf, chooseAction, chooseTrigger, conditionLock, destinationName, editableIn, forSave, isPageRule, isTagAction, tagActionText,
+  ACTION_CARDS, NO_AUTOMATION_TAG, OR_TRIGGER_CARDS, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
+  actionFit, actionKey, actionOf, addOrTrigger, chooseAction, chooseTrigger, conditionLock, destinationName, editableIn, forSave, isPageRule, isTagAction, tagActionText,
+  orTriggersOf, removeOrTrigger, rulePdfOnly, setOrTrigger,
   moveTo, normalizePageTag, pageTagsOf, patternError, placesOf, plural, ruleLabel, sentenceText, sourceOf, tagSuggestions, taggedNow,
 } from "./rules";
 
@@ -59,6 +60,21 @@ function conditionError(c) {
   }
 }
 
+// triggerErrors the inline errors of one document trigger (the IF trigger or an "or" one)
+function triggerErrors(t) {
+  const out = [];
+  if (t.type === "name_matches") out.push(patternError(t.pattern));
+  if (t.type === "tag_is" && !(t.tag || "").trim()) out.push("Enter a tag.");
+  if (t.type === "tag_is" && isNoAutomation(t.tag)) out.push("“no automation” documents are always skipped; pick another tag.");
+  if (t.type === "finished_reading" && t.minPages < 1) out.push("Minimum pages must be at least 1.");
+  if (t.type === "read_progress" && (t.percent < 1 || t.percent > 100)) out.push("Percent must be between 1 and 100.");
+  if (["not_opened_for_days", "not_modified_for_days", "age_since_created"].includes(t.type) && t.days < 1) {
+    out.push("Days must be at least 1.");
+  }
+  if (isTimeType(t.type) && t.amount < 1) out.push("The amount of time must be at least 1.");
+  return out.filter(Boolean);
+}
+
 // Client side checks shown inline; the server validates again on save.
 function validate(rule, otherRules, folders) {
   const errors = [];
@@ -88,15 +104,7 @@ function validate(rule, otherRules, folders) {
   } else if (to.id === src.id) {
     add("Destination is the same as the source. Pick a different folder.");
   }
-  if (t.type === "name_matches") add(patternError(t.pattern));
-  if (t.type === "tag_is" && !t.tag.trim()) add("Enter a tag.");
-  if (t.type === "tag_is" && isNoAutomation(t.tag)) add("“no automation” documents are always skipped; pick another tag.");
-  if (t.type === "finished_reading" && t.minPages < 1) add("Minimum pages must be at least 1.");
-  if (t.type === "read_progress" && (t.percent < 1 || t.percent > 100)) add("Percent must be between 1 and 100.");
-  if (["not_opened_for_days", "not_modified_for_days", "age_since_created"].includes(t.type) && t.days < 1) {
-    add("Days must be at least 1.");
-  }
-  if (isTimeType(t.type) && t.amount < 1) add("The amount of time must be at least 1.");
+  [t, ...orTriggersOf(rule)].forEach((x) => triggerErrors(x).forEach(add));
   (rule.conditions || []).forEach((c) => add(conditionError(c)));
   if (!cm && !tagging) {
     const loops = otherRules.filter((o) => o.enabled && sourceOf(o).id === to.id &&
@@ -280,7 +288,8 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
   const to = moveTo(rule);
   const cm = to.createIfMissing;
   const key = actionKey(rule);
-  const lock = conditionLock(t.type);
+  const lock = rulePdfOnly(rule) ? conditionLock(t.type) : "";
+  const ors = orTriggersOf(rule);
   const autoText = sentenceText(rule, ctx);
 
   const pickTrigger = (type) => {
@@ -312,9 +321,10 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
     }
   };
 
-  const numInput = (field, min, max) => (
-    <input type="number" min={min} max={max} value={t[field]} aria-label={field}
-      onChange={(e) => updateTrigger({ [field]: num(e.target.value) })} />
+  // numInput a number input for trigger tr's field; edits go through upd
+  const numInput = (tr, upd, label, field, min, max) => (
+    <input type="number" min={min} max={max} value={tr[field]} aria-label={`${label}${field}`}
+      onChange={(e) => upd({ [field]: num(e.target.value) })} />
   );
   const tagNames = tagSuggestions(pageTags);
   const src = sourceOf(rule);
@@ -329,30 +339,33 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
       : tagNames.length ? `your tags: ${tagNames.slice(0, 4).join(", ")}${tagNames.length > 4 ? ", …" : ""}` : "no page tags on your pages yet"}</span>
   ));
 
-  const params = (
+  // paramsFor trigger tr's inputs; upd patches it. label prefixes the aria labels
+  // ("" for the IF trigger, "or 1 " for the first "or" one); main: the IF trigger
+  // (the page tag list and the min-age shortcut belong to it only).
+  const paramsFor = (tr, upd, label, main) => (
     <>
-      {needTags && <datalist id="ao-page-tags">{tagNames.map((n) => <option key={n} value={n} />)}</datalist>}
-      {t.type === PAGE_TAGGED && (
+      {main && needTags && <datalist id="ao-page-tags">{tagNames.map((n) => <option key={n} value={n} />)}</datalist>}
+      {tr.type === PAGE_TAGGED && (
         <div className="ao-frow">
           <span className="ao-lbl">Tag is</span>
-          <input type="text" list="ao-page-tags" value={t.tag} placeholder="page tag" aria-label="page tag"
-            onChange={(e) => updateTrigger({ tag: e.target.value })} />
+          <input type="text" list="ao-page-tags" value={tr.tag} placeholder="page tag" aria-label={`${label}page tag`}
+            onChange={(e) => upd({ tag: e.target.value })} />
           {tagsStatus}
         </div>
       )}
-      {t.type === "finished_reading" && (
+      {tr.type === "finished_reading" && (
         <div className="ao-frow">
-          at least {numInput("minPages", 1)} pages, not opened for {numInput("settleHours", 0)} hours
-          <span className="ao-hint">Inclusive: a {t.minPages}-page document counts.</span>
+          at least {numInput(tr, upd, label, "minPages", 1)} pages, not opened for {numInput(tr, upd, label, "settleHours", 0)} hours
+          <span className="ao-hint">Inclusive: a {tr.minPages}-page document counts.</span>
         </div>
       )}
-      {t.type === "read_progress" && (
-        <div className="ao-frow">at least {numInput("percent", 1, 100)} % of the way, not opened for {numInput("settleHours", 0)} hours</div>
+      {tr.type === "read_progress" && (
+        <div className="ao-frow">at least {numInput(tr, upd, label, "percent", 1, 100)} % of the way, not opened for {numInput(tr, upd, label, "settleHours", 0)} hours</div>
       )}
-      {t.type === "not_opened_for_days" && (
+      {tr.type === "not_opened_for_days" && (
         <div className="ao-frow">
-          for {numInput("days", 1)} days
-          {minAgeFit && (
+          for {numInput(tr, upd, label, "days", 1)} days
+          {main && minAgeFit && (
             <>
               <button type="button" className="ao-link" onClick={() => addCondition(makeCondition("min_age_days"))}>+ and at least 7 days old</button>
               <span className="ao-hint">Recommended: upload-only documents have never been opened and would match immediately.</span>
@@ -360,47 +373,72 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
           )}
         </div>
       )}
-      {t.type === "not_modified_for_days" && (
-        <div className="ao-frow">for {numInput("days", 1)} days <span className="ao-hint">Annotations count as edits. Moves by a rule do not.</span></div>
+      {tr.type === "not_modified_for_days" && (
+        <div className="ao-frow">for {numInput(tr, upd, label, "days", 1)} days <span className="ao-hint">Annotations count as edits. Moves by a rule do not.</span></div>
       )}
-      {t.type === "name_matches" && (
+      {tr.type === "name_matches" && (
         <div className="ao-frow">
           <span className="ao-lbl">Name matches</span>
-          <input type="text" value={t.pattern} placeholder="glob or /regex/" aria-label="pattern"
-            onChange={(e) => updateTrigger({ pattern: e.target.value })} />
+          <input type="text" value={tr.pattern} placeholder="glob or /regex/" aria-label={`${label}pattern`}
+            onChange={(e) => upd({ pattern: e.target.value })} />
           <span className="ao-hint">case-insensitive · glob (* and ?) or /RE2 regex/</span>
         </div>
       )}
-      {t.type === "tag_is" && (
+      {tr.type === "tag_is" && (
         <div className="ao-frow">
           <span className="ao-lbl">Tag is</span>
-          <input type="text" value={t.tag} placeholder="tag name" aria-label="tag"
-            onChange={(e) => updateTrigger({ tag: e.target.value })} />
+          <input type="text" value={tr.tag} placeholder="tag name" aria-label={`${label}tag`}
+            onChange={(e) => upd({ tag: e.target.value })} />
           <span className="ao-hint">document tags from the tablet</span>
         </div>
       )}
-      {t.type === "age_since_created" && (
-        <div className="ao-frow">at least {numInput("days", 1)} days ago <span className="ao-hint">created time, else last modified, else first seen</span></div>
+      {tr.type === "age_since_created" && (
+        <div className="ao-frow">at least {numInput(tr, upd, label, "days", 1)} days ago <span className="ao-hint">created time, else last modified, else first seen</span></div>
       )}
-      {isTimeType(t.type) && (
+      {isTimeType(tr.type) && (
         <div className="ao-frow">
-          {t.type === "created_time" ? "created" : "changed"}{" "}
-          <TimeInputs value={t} label="trigger" onChange={updateTrigger} />
+          {tr.type === "created_time" ? "created" : "changed"}{" "}
+          <TimeInputs value={tr} label={`${label}trigger`} onChange={upd} />
           <span className="ao-hint">
-            {t.type === "created_time"
+            {tr.type === "created_time"
               ? "the tablet's created time; documents without one are skipped"
               : "last edit on the tablet (writing counts); tags added by a rule do not"}
           </span>
         </div>
       )}
-      {t.type === "pinned_is" && (
+      {tr.type === "pinned_is" && (
         <div className="ao-frow">
-          <label className="chk"><input type="radio" name="ao-pin" checked={t.pinned} onChange={() => updateTrigger({ pinned: true })} /> is pinned</label>
-          <label className="chk"><input type="radio" name="ao-pin" checked={!t.pinned} onChange={() => updateTrigger({ pinned: false })} /> is not pinned</label>
+          <label className="chk"><input type="radio" name={`ao-pin${label}`} checked={tr.pinned} onChange={() => upd({ pinned: true })} /> is pinned</label>
+          <label className="chk"><input type="radio" name={`ao-pin${label}`} checked={!tr.pinned} onChange={() => upd({ pinned: false })} /> is not pinned</label>
           <span className="ao-hint">This rule ignores the default “skip pinned” guard.</span>
         </div>
       )}
     </>
+  );
+  const params = paramsFor(t, updateTrigger, "", true);
+
+  // "or" triggers (document rules): the rule fires when any one of them matches
+  const orRows = !page && (
+    <div className="ao-ors">
+      {ors.map((o, i) => (
+        <div className="ao-or" key={i}>
+          <div className="ao-frow">
+            <span className="ao-lbl">Or</span>
+            <select className="ao-inline-sel" value={o.type} aria-label={`or ${i + 1} trigger`}
+              onChange={(e) => setRule((r) => setOrTrigger(r, i, e.target.value))}>
+              {OR_TRIGGER_CARDS.map((c) => <option key={c.type} value={c.type}>{c.title}</option>)}
+            </select>
+            <button type="button" className="ao-link" aria-label={`remove or ${i + 1}`}
+              onClick={() => setRule((r) => removeOrTrigger(r, i))}>remove</button>
+          </div>
+          {paramsFor(o, (patch) => setRule((r) => setOrTrigger(r, i, patch)), `or ${i + 1} `, false)}
+        </div>
+      ))}
+      <div className="ao-frow">
+        <button type="button" className="ao-link" onClick={() => setRule((r) => addOrTrigger(r))}>+ or another trigger</button>
+        <span className="ao-hint">{ors.length ? "Runs when any one of these happens; the conditions below still all apply." : "e.g. finish reading OR tag it “read”"}</span>
+      </div>
+    </div>
   );
 
   const places = page ? (
@@ -569,6 +607,7 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
               ))}
               <div className="ao-fill">
                 {params}
+                {orRows}
                 {places}
                 {conditions}
                 <div className="ao-fixed">

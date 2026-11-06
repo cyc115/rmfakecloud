@@ -196,11 +196,31 @@ func (a *Action) IsTag() bool {
 	return a.Type == ActionAddTag || a.Type == ActionRemoveTag
 }
 
-// When the rule's subject, where it looks and what starts it
+// When the rule's subject, where it looks and what starts it. A document rule
+// may carry more triggers in OrTriggers: it fires when any one of its triggers
+// matches (the conditions still all apply). Page rules have one trigger.
 type When struct {
-	Subject string  `json:"subject"`
-	In      []Place `json:"in"`
-	Trigger Trigger `json:"trigger"`
+	Subject    string    `json:"subject"`
+	In         []Place   `json:"in"`
+	Trigger    Trigger   `json:"trigger"`
+	OrTriggers []Trigger `json:"orTriggers,omitempty"`
+}
+
+// AllTriggers the trigger, then the OrTriggers
+func (w *When) AllTriggers() []Trigger {
+	return append([]Trigger{w.Trigger}, w.OrTriggers...)
+}
+
+// AllPageBased every trigger needs a pageCount, so the rule is locked to PDF & EPUB.
+// A rule with a page-based trigger beside another kind of trigger is not: the
+// page-based one just never matches a notebook.
+func (w *When) AllPageBased() bool {
+	for _, t := range w.AllTriggers() {
+		if s, ok := Triggers[t.Type]; !ok || !s.PageBased {
+			return false
+		}
+	}
+	return true
 }
 
 // Rule a single automation rule
@@ -327,8 +347,10 @@ func (r *Rule) SkipsPinned() bool {
 	if r.TagAction() != nil {
 		return false
 	}
-	if r.When.Trigger.Type == TriggerPinnedIs {
-		return false
+	for _, t := range r.When.AllTriggers() {
+		if t.Type == TriggerPinnedIs {
+			return false
+		}
 	}
 	for _, c := range r.Conditions {
 		if c.Type == CondPinnedIs {
@@ -393,6 +415,15 @@ func (r *Rule) normalize() {
 	if s, ok := Triggers[t.Type]; ok && s.Defaults != nil {
 		s.Defaults(&t.Params)
 	}
+	if len(r.When.OrTriggers) == 0 {
+		r.When.OrTriggers = nil // stored without the key
+	}
+	for i := range r.When.OrTriggers {
+		ot := &r.When.OrTriggers[i]
+		if s, ok := Triggers[ot.Type]; ok && s.Defaults != nil {
+			s.Defaults(&ot.Params)
+		}
+	}
 	conds := make([]Condition, 0, len(r.Conditions))
 	hasKind := false
 	for _, c := range r.Conditions {
@@ -407,7 +438,7 @@ func (r *Rule) normalize() {
 		}
 		conds = append(conds, c)
 	}
-	if s, ok := Triggers[t.Type]; ok && s.PageBased && !hasKind {
+	if r.When.AllPageBased() && !hasKind {
 		conds = append([]Condition{{Type: CondKindIs, Params: Params{Kind: KindPdfEpub}}}, conds...)
 	}
 	r.Conditions = conds

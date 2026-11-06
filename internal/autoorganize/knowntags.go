@@ -24,8 +24,10 @@ func TagSpellings(cfg *automation.Config, snap *Snapshot, content func(*DocSnap)
 			if !r.Enabled {
 				continue
 			}
-			if r.When.Trigger.Type == automation.TriggerPageTagged {
-				put(r.When.Trigger.Tag)
+			for _, t := range r.When.AllTriggers() {
+				if t.Type == automation.TriggerPageTagged || t.Type == automation.TriggerTagIs {
+					put(t.Tag)
+				}
 			}
 			for _, c := range r.Conditions {
 				if c.Type == automation.CondPageTagIs || c.Type == automation.CondTagIs {
@@ -49,7 +51,7 @@ func TagSpellings(cfg *automation.Config, snap *Snapshot, content func(*DocSnap)
 }
 
 // KnownTags the tags a handwritten #tag may become (NormalizeTag, sorted,
-// unique): the tags of enabled rules (page_tagged, page_tag_is, tag_is) and
+// unique): the tags of enabled rules (page_tagged and tag_is triggers, page_tag_is and tag_is conditions) and
 // every page and document tag on the documents outside the Trash
 func KnownTags(cfg *automation.Config, snap *Snapshot, content func(*DocSnap) ContentInfo) []string {
 	set := map[string]bool{}
@@ -63,8 +65,10 @@ func KnownTags(cfg *automation.Config, snap *Snapshot, content func(*DocSnap) Co
 			if !r.Enabled {
 				continue
 			}
-			if r.When.Trigger.Type == automation.TriggerPageTagged {
-				add(r.When.Trigger.Tag)
+			for _, t := range r.When.AllTriggers() {
+				if t.Type == automation.TriggerPageTagged || t.Type == automation.TriggerTagIs {
+					add(t.Tag)
+				}
 			}
 			for _, c := range r.Conditions {
 				switch c.Type {

@@ -425,3 +425,13 @@
   .ao-cgrid { grid-template-columns: 1fr; }
   .ao-db { padding: 6px 12px 14px; }
 }
+
+// "or" triggers under the IF trigger's inputs
+.ao-ors {
+  margin: 6px 0 10px;
+  .ao-or {
+    border-left: 3px solid #d0d7de;
+    padding-left: 10px;
+    margin: 6px 0;
+  }
+}

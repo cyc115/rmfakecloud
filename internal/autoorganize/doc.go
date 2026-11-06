@@ -45,7 +45,9 @@
 // A document rule has one folder (When.In[0], Rule.Source) and covers the
 // documents directly inside it. checkDoc runs the guards (trash, unreadable,
 // no automation, pinned unless the trigger or a condition is pinned_is,
-// already in the destination, kind_is), then evalRule: the trigger, then the
+// already in the destination, kind_is), then evalRule: the trigger (with
+// When.OrTriggers, evalTriggers: every trigger evaluated, any one match
+// matches, else the first skip), then the
 // document conditions in stored order (Rule.DocConditions). Every one is
 // evaluated, and the hold inputs are the union of all (ruling a′), so a hold
 // set while the trigger does not match keeps the condition inputs. The

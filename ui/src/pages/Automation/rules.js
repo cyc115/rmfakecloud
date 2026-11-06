@@ -1,14 +1,16 @@
 // Rule vocabulary for the Automation page. The server is the authority on
 // validation; these helpers build the rule sentences, the editor's card
 // catalogue and sensible defaults. The stored format is automation.json v2:
-// {id, name, enabled, when: {subject, in, trigger}, conditions, actions}.
+// {id, name, enabled, when: {subject, in, trigger, orTriggers?}, conditions, actions}.
+// A document rule may list more triggers in when.orTriggers: it fires when any
+// one of them matches.
 // A document rule has one folder in `in` and one move, add_tag or remove_tag
 // action; a page rule has places in `in` and one extract_tasks or save_notes
 // action (R-B2).
 
-import { TIME_DEFAULT, conditionLock, conditionPhrase, isPdfOnly, makeCondition, timePhrase } from "./conditions.js";
+import { TIME_DEFAULT, conditionLock, conditionPhrase, isPdfOnly, makeCondition, rulePdfOnly, timePhrase } from "./conditions.js";
 
-export { conditionLock, isPdfOnly };
+export { conditionLock, isPdfOnly, rulePdfOnly };
 
 export const ROOT_ID = "";
 export const ROOT_NAME = "My files";
@@ -80,6 +82,45 @@ export function isPageTrigger(type) {
 
 export function makeTrigger(type) {
   return { type, ...(TRIGGER_DEFAULTS[type] || {}) };
+}
+
+// orTriggersOf a document rule's extra triggers ([] for none and for page rules)
+export function orTriggersOf(rule) {
+  return (!isPageRule(rule) && rule && rule.when && rule.when.orTriggers) || [];
+}
+
+// the document trigger cards an "or" row offers
+export const OR_TRIGGER_CARDS = TRIGGER_CARDS.filter((c) => c.group === "document");
+
+// keepKind after, with "only PDFs & books" kept as a plain condition when the
+// rule's kind was fixed by PDF-only triggers and no longer is: adding or
+// changing an "or" trigger never widens a rule to notebooks by itself
+function keepKind(before, after) {
+  if (!rulePdfOnly(before) || rulePdfOnly(after) || conditionsOf(after).some((c) => c.type === "kind_is")) return after;
+  return { ...after, conditions: [{ type: "kind_is", kind: "pdf_epub" }, ...conditionsOf(after)] };
+}
+
+// addOrTrigger the rule with one more "or" trigger: "I tag a document" unless
+// the rule has it already, else the first document trigger it doesn't have
+export function addOrTrigger(rule) {
+  const have = [rule.when.trigger, ...orTriggersOf(rule)].map((t) => t.type);
+  const pick = !have.includes("tag_is") ? "tag_is" : (OR_TRIGGER_CARDS.find((c) => !have.includes(c.type)) || OR_TRIGGER_CARDS[0]).type;
+  return keepKind(rule, { ...rule, when: { ...rule.when, orTriggers: [...orTriggersOf(rule), makeTrigger(pick)] } });
+}
+
+// setOrTrigger the rule with "or" trigger i replaced: a new type starts from
+// its defaults, a patch edits the parameters
+export function setOrTrigger(rule, i, typeOrPatch) {
+  const list = orTriggersOf(rule).map((t, j) => {
+    if (j !== i) return t;
+    return typeof typeOrPatch === "string" ? (t.type === typeOrPatch ? t : makeTrigger(typeOrPatch)) : { ...t, ...typeOrPatch };
+  });
+  return keepKind(rule, { ...rule, when: { ...rule.when, orTriggers: list } });
+}
+
+// removeOrTrigger the rule without "or" trigger i
+export function removeOrTrigger(rule, i) {
+  return keepKind(rule, { ...rule, when: { ...rule.when, orTriggers: orTriggersOf(rule).filter((_, j) => j !== i) } });
 }
 
 export function isPageRule(rule) {
@@ -241,6 +282,7 @@ export function destinationName(rule, ctx) {
 export function sentence(rule, ctx) {
   const t = (rule.when && rule.when.trigger) || {};
   const parts = [{ t: "if", s: "IF" }, ...triggerParts(t)];
+  for (const o of orTriggersOf(rule)) parts.push(" OR ", ...triggerParts(o));
   if (isPageRule(rule)) {
     const names = placesOf(rule).map((w) => placeName(ctx, w));
     if (names.length) parts.push(" in ", ...orList(names));
@@ -255,7 +297,7 @@ export function sentence(rule, ctx) {
   }
   const kind = conditionsOf(rule).find((c) => c.type === "kind_is");
   const kindText = kind ? conditionPhrase(kind) : "";
-  if (kindText && !isPdfOnly(t.type)) parts.push(` (${kindText})`);
+  if (kindText && !rulePdfOnly(rule)) parts.push(` (${kindText})`);
   for (const c of conditionsOf(rule)) {
     if (c.type !== "kind_is") parts.push(" AND ", tok(conditionPhrase(c)));
   }
@@ -405,7 +447,9 @@ export function chooseTrigger(rule, type, stash, { defaults, folders } = {}) {
     const from = r.when.trigger;
     if (!next.triggers[from.type]) next.triggers[from.type] = from;
     let conditions = conditionsOf(r);
-    if (isPdfOnly(type) || isPdfOnly(from.type)) conditions = withoutKind(conditions);
+    // the kind is fixed while every trigger is PDF-only: entering or leaving that drops kind_is
+    const after = { ...r, when: { ...r.when, trigger: { type } } };
+    if (rulePdfOnly(r) || rulePdfOnly(after)) conditions = withoutKind(conditions);
     if (from.type === NOT_OPENED && next.minAge && typeof next.minAge === "object") {
       const auto = next.minAge;
       if (!conditions.includes(auto)) next.minAge = "removed";
@@ -420,7 +464,7 @@ export function chooseTrigger(rule, type, stash, { defaults, folders } = {}) {
       conditions = [...conditions, next.minAge];
     }
     r = { ...r, when: { ...r.when, trigger: next.triggers[type] || makeTrigger(type) }, conditions };
-  } else if (isPdfOnly(type)) {
+  } else if (rulePdfOnly(r)) {
     r = { ...r, conditions: withoutKind(conditionsOf(r)) };
   }
   return { rule: r, stash: next };
@@ -442,8 +486,9 @@ export function chooseAction(rule, key) {
 }
 
 // forSave the rule as sent to the server:
-//   - conditions: kind_is all/blank is dropped; a PDF-only trigger gets
-//     kind_is pdf_epub first (once); page tags are trimmed
+//   - conditions: kind_is all/blank is dropped; a rule whose triggers are all
+//     PDF-only gets kind_is pdf_epub first (once); page tags are trimmed
+//   - orTriggers: document rules only, tags trimmed, the key dropped when empty
 //   - page rule: an empty `in` becomes the root folder entry ("anywhere",
 //     both page triggers), any other `in` is sent as it is; the page action's
 //     prompt/model are trimmed (whitespace-only → "" → the server's default)
@@ -453,7 +498,10 @@ export function forSave(rule) {
   const r = JSON.parse(JSON.stringify(rule));
   const t = r.when.trigger;
   let conds = conditionsOf(r).filter((c) => !(c.type === "kind_is" && (!c.kind || c.kind === "all")));
-  if (isPdfOnly(t.type)) conds = [{ type: "kind_is", kind: "pdf_epub" }, ...withoutKind(conds)];
+  if (rulePdfOnly(r)) conds = [{ type: "kind_is", kind: "pdf_epub" }, ...withoutKind(conds)];
+  const ors = orTriggersOf(r).map((o) => (o.type === "tag_is" ? { ...o, tag: (o.tag || "").trim() } : o));
+  if (ors.length) r.when.orTriggers = ors;
+  else delete r.when.orTriggers;
   r.conditions = conds.map((c) => (c.type === "page_tag_is" ? { ...c, tag: (c.tag || "").trim() } : c));
   const a = actionOf(rule);
   if (isPageRule(r)) {

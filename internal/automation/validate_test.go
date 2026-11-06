@@ -202,3 +202,84 @@ func TestValidationErrorJSON(t *testing.T) {
 		t.Errorf("%s", e.Error())
 	}
 }
+
+func TestOrTriggers(t *testing.T) {
+	orRule := func(conds []Condition, or ...Trigger) Rule {
+		r := validConfig().Rules[0]
+		r.When.OrTriggers = or
+		r.Conditions = conds
+		return r
+	}
+	tagRead := Trigger{Type: TriggerTagIs, Params: Params{Tag: "read"}}
+	pdf := []Condition{{Type: CondKindIs, Params: Params{Kind: KindPdfEpub}}}
+
+	if err := (&Rule{}).Validate(); err == nil {
+		t.Fatal("sanity: an empty rule must fail")
+	}
+	r := orRule(pdf, tagRead)
+	if err := r.Validate(); err != nil {
+		t.Errorf("finished reading OR tagged read, PDFs: %v", err)
+	}
+	// mixed triggers need no kind: the page-based one just never matches a notebook
+	r = orRule([]Condition{}, tagRead)
+	if err := r.Validate(); err != nil {
+		t.Errorf("mixed triggers, any kind: %v", err)
+	}
+	r = orRule([]Condition{{Type: CondKindIs, Params: Params{Kind: KindNotebooks}}}, tagRead)
+	if err := r.Validate(); err == nil {
+		t.Error("a page-based trigger on a notebooks-only rule must fail")
+	}
+	r = orRule([]Condition{}, Trigger{Type: TriggerReadProgress, Params: Params{Percent: 90}})
+	if err := r.Validate(); err == nil {
+		t.Error("all page-based triggers still need PDF & EPUB")
+	}
+	for name, bad := range map[string]Trigger{
+		"unknown":      {Type: "nope"},
+		"page trigger": {Type: TriggerPageChanged},
+		"bad params":   {Type: TriggerTagIs, Params: Params{Tag: " "}},
+	} {
+		r = orRule(pdf, bad)
+		if err := r.Validate(); err == nil {
+			t.Errorf("%s or-trigger must fail", name)
+		}
+	}
+	p := validConfig().Rules[1]
+	p.When.OrTriggers = []Trigger{{Type: TriggerPageTagged, Params: Params{Tag: "x"}}}
+	if err := p.Validate(); err == nil {
+		t.Error("a page rule with or-triggers must fail")
+	}
+}
+
+func TestOrTriggersNormalizeAndJSON(t *testing.T) {
+	cfg := validConfig()
+	cfg.Rules[0].Conditions = nil
+	cfg.Rules[0].When.OrTriggers = []Trigger{{Type: TriggerNotOpened}}
+	cfg.Normalize()
+	r := cfg.Rules[0]
+	if r.When.OrTriggers[0].Days != 30 {
+		t.Errorf("or-trigger defaults not filled: %+v", r.When.OrTriggers[0])
+	}
+	if r.Kind() != KindAll {
+		t.Errorf("mixed triggers must not be locked to PDF & EPUB: %+v", r.Conditions)
+	}
+	b, _ := json.Marshal(r.When)
+	if want := `{"subject":"document","in":[{"id":"f1","kind":"folder"}],"trigger":{"type":"finished_reading","minPages":3,"settleHours":6},"orTriggers":[{"type":"not_opened_for_days","days":30}]}`; string(b) != want {
+		t.Errorf("json\n got %s\nwant %s", b, want)
+	}
+	// a single-trigger rule is stored exactly as before: no orTriggers key, kind_is added
+	one := validConfig()
+	one.Rules[0].Conditions = nil
+	one.Rules[0].When.OrTriggers = []Trigger{}
+	one.Normalize()
+	b, _ = json.Marshal(one.Rules[0].When)
+	if string(b) != `{"subject":"document","in":[{"id":"f1","kind":"folder"}],"trigger":{"type":"finished_reading","minPages":3,"settleHours":6}}` {
+		t.Errorf("single trigger json changed: %s", b)
+	}
+	if one.Rules[0].Kind() != KindPdfEpub {
+		t.Error("a lone page-based trigger still adds kind_is pdf_epub")
+	}
+	var w When
+	if err := json.Unmarshal(b, &w); err != nil || w.OrTriggers != nil {
+		t.Errorf("round trip: %v %+v", err, w)
+	}
+}

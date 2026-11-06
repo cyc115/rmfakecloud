@@ -124,18 +124,12 @@ func mergeEval(evs ...evaluation) evaluation {
 	return out
 }
 
-// evalRule evaluates r's trigger, then every document condition in stored
-// order (Rule.DocConditions; kind_is is checkDoc's guard), and merges them
-// (mergeEval): the inputs of all, the outcome of the first skip or
-// non-match. It does not apply the common guards (checkDoc does).
+// evalRule evaluates r's triggers (evalTriggers), then every document
+// condition in stored order (Rule.DocConditions; kind_is is checkDoc's
+// guard), and merges them (mergeEval): the inputs of all, the outcome of the
+// first skip or non-match. It does not apply the common guards (checkDoc does).
 func evalRule(r *automation.Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
-	t := &r.When.Trigger
-	eval, ok := evaluators[t.Type]
-	if !ok {
-		return evaluation{skip: SkipInvalidRule, skipDetail: "unknown trigger " + t.Type}
-	}
-	tp := t.Params
-	evs := []evaluation{eval(&tp, d, ci, fs, now)}
+	evs := []evaluation{evalTriggers(r, d, ci, fs, now)}
 	for _, c := range r.DocConditions() {
 		ceval, ok := conditionEvaluators[c.Type]
 		if !ok {
@@ -146,6 +140,57 @@ func evalRule(r *automation.Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, no
 		evs = append(evs, ceval(&p, d, ci, fs, now))
 	}
 	return mergeEval(evs...)
+}
+
+// evalTriggers the rule's trigger, or with OrTriggers any one of them. Every
+// trigger is evaluated, so the inputs (which key holds) are the same whichever
+// one matched. One matching trigger matches; otherwise the first skip (left
+// alone, never guessed), otherwise no match. A page-based trigger beside other
+// kinds of trigger doesn't apply to a document that isn't a PDF or EPUB: no
+// match rather than a page-count skip.
+func evalTriggers(r *automation.Rule, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	ts := r.When.AllTriggers()
+	evalOne := func(t *automation.Trigger) evaluation {
+		eval, ok := evaluators[t.Type]
+		if !ok {
+			return evaluation{skip: SkipInvalidRule, skipDetail: "unknown trigger " + t.Type}
+		}
+		if len(ts) > 1 && automation.Triggers[t.Type].PageBased && ci.Kind() != automation.KindPdfEpub {
+			return evaluation{}
+		}
+		tp := t.Params
+		return eval(&tp, d, ci, fs, now)
+	}
+	if len(ts) == 1 {
+		return evalOne(&ts[0])
+	}
+	out := evaluation{}
+	var details []string
+	var skipped *evaluation
+	for i := range ts {
+		ev := evalOne(&ts[i])
+		for k, v := range ev.inputs {
+			if out.inputs == nil {
+				out.inputs = map[string]string{}
+			}
+			out.inputs[k] = v
+		}
+		if ev.detail != "" {
+			details = append(details, ev.detail)
+		}
+		switch {
+		case ev.skip == "" && ev.match:
+			out.match = true
+		case ev.skip != "" && skipped == nil:
+			e := ev
+			skipped = &e
+		}
+	}
+	out.detail = strings.Join(details, " · ")
+	if !out.match && skipped != nil {
+		out.skip, out.skipDetail = skipped.skip, skipped.skipDetail
+	}
+	return out
 }
 
 // DocConditionsMatch the document conditions of a page rule, for the page

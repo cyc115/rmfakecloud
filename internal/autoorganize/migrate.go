@@ -218,6 +218,9 @@ func ruleToV1(r *automation.Rule) (V1Rule, string) {
 	if len(r.Actions) != 1 {
 		return out, fmt.Sprintf("it has %d actions; a v1 rule has exactly one", len(r.Actions))
 	}
+	if len(r.When.OrTriggers) > 0 {
+		return out, fmt.Sprintf("it has %d triggers; a v1 rule has exactly one", 1+len(r.When.OrTriggers))
+	}
 	tr := &r.When.Trigger
 	kinds := 0
 	var minAge *automation.Condition
