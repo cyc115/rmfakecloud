@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/ddvk/rmfakecloud/internal/storage"
@@ -65,7 +66,15 @@ func ArchiveFromHashDoc(doc *HashDoc, rs RemoteStorage) (*exporter.MyArchive, er
 		}
 	}
 
-	for _, p := range a.Content.Pages {
+	// Firmware 3.x (formatVersion 2) notebooks carry no flat "pages" list;
+	// their pages live in cPages.pages[].id, ordered by idx.value.
+	pageIDs := a.Content.Pages
+	redir := map[string]int{}
+	if len(pageIDs) == 0 {
+		pageIDs, redir = cpagePageOrder(a.Content.CPages)
+	}
+
+	for _, p := range pageIDs {
 		if hash, ok := pageMap[p]; ok {
 			log.Debug("page ", hash)
 			reader, err := rs.GetReader(hash)
@@ -86,9 +95,46 @@ func ArchiveFromHashDoc(doc *HashDoc, rs RemoteStorage) (*exporter.MyArchive, er
 				Data:     rmpage,
 				Pagedata: "Blank",
 			}
+			if docPage, ok := redir[p]; ok {
+				page.DocPage = docPage
+			}
 			a.Pages = append(a.Pages, page)
 		}
 	}
 
 	return &a, nil
+}
+
+// cpagePageOrder the live cPages page ids in idx order, with the PDF page
+// each shows (redir.value, -1 when the page has no redir, i.e. an inserted
+// page). Deleted pages, entries with no id, and duplicate ids are skipped.
+// Mirrors autoorganize.pageOrder/redirMap for the export path.
+func cpagePageOrder(cp archive.CPages) ([]string, map[string]int) {
+	type pg struct {
+		id    string
+		idx   string
+		redir int
+	}
+	var pages []pg
+	for _, p := range cp.Pages {
+		if p.ID == "" || bool(p.Deleted) {
+			continue
+		}
+		r := -1
+		if p.Redir != nil {
+			r = p.Redir.Value
+		}
+		pages = append(pages, pg{p.ID, p.Idx.Value, r})
+	}
+	sort.SliceStable(pages, func(i, j int) bool { return pages[i].idx < pages[j].idx })
+	order := make([]string, 0, len(pages))
+	redir := make(map[string]int, len(pages))
+	for _, p := range pages {
+		if _, dup := redir[p.id]; dup {
+			continue
+		}
+		redir[p.id] = p.redir
+		order = append(order, p.id)
+	}
+	return order, redir
 }
