@@ -126,12 +126,10 @@ func (app *App) Start() {
 
 // Stop the app
 func (app *App) Stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	// app.hub.Stop()
 	if app.stopOrganizer != nil {
 		app.stopOrganizer()
-		// let an in-flight sweep record its state, within the shutdown budget
+		// let an in-flight sweep record its state, on its own short timeout
 		done := make(chan struct{})
 		go func() {
 			app.organizer.Wait()
@@ -161,8 +159,14 @@ func (app *App) Stop() {
 			log.Errorf("Error stopping MQTT broker: %v", err)
 		}
 	}
+	// Fresh shutdown budget, created just before Shutdown so the waits
+	// above cannot eat it; 15s to drain an in-flight export. A drain
+	// failure on a planned stop is not fatal: log it and return so the
+	// process exits 0 instead of log.Fatal's exit 1.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	if err := app.srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server Shutdown:", err)
+		log.Error("Server Shutdown:", err)
 	}
 }
 

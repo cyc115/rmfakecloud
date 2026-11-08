@@ -1,11 +1,14 @@
 package fs
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/danjacques/gofslock/fslock"
 	"github.com/ddvk/rmfakecloud/internal/config"
 )
 
@@ -96,5 +99,66 @@ func TestUpdateBlobDocumentRefusesBadParents(t *testing.T) {
 		if err := fs.UpdateBlobDocument(uid, inner.ID, "", p); err != nil {
 			t.Errorf("to %q: %v", p, err)
 		}
+	}
+}
+
+// GetCachedTree must ride out a briefly-held root lock (tablet sync writing
+// the root blob, or a concurrent root read checksumming) instead of failing
+// the read with ErrLockHeld.
+func TestGetCachedTreeRetriesWhileRootLocked(t *testing.T) {
+	uid := "tester"
+	fs := newTestBlobStorage(t, uid)
+
+	if _, err := fs.CreateBlobDocument(uid, "report.pdf", "", strings.NewReader("%PDF-1.4")); err != nil {
+		t.Fatal(err)
+	}
+
+	historyPath := filepath.Join(fs.getUserBlobPath(uid), historyFile)
+	lock, err := fslock.Lock(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := fs.GetCachedTree(uid)
+		done <- err
+	}()
+
+	// Hold the lock past the first retry sleeps, then release: the retry
+	// must pick the tree up instead of failing with ErrLockHeld.
+	time.Sleep(100 * time.Millisecond)
+	lock.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("GetCachedTree = %v, want nil after lock released", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("GetCachedTree did not return after lock released")
+	}
+}
+
+// ... but a lock held past the whole retry budget must still surface
+// ErrLockHeld instead of hanging or masking the error.
+func TestGetCachedTreeStillFailsWhenRootLocked(t *testing.T) {
+	uid := "tester"
+	fs := newTestBlobStorage(t, uid)
+
+	if _, err := fs.CreateBlobDocument(uid, "report.pdf", "", strings.NewReader("%PDF-1.4")); err != nil {
+		t.Fatal(err)
+	}
+
+	historyPath := filepath.Join(fs.getUserBlobPath(uid), historyFile)
+	lock, err := fslock.Lock(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Unlock()
+
+	_, err = fs.GetCachedTree(uid)
+	if !errors.Is(err, fslock.ErrLockHeld) {
+		t.Fatalf("GetCachedTree err = %v, want ErrLockHeld", err)
 	}
 }
