@@ -160,21 +160,21 @@ export default function DocumentList() {
 
 	useEffect(() => {
 		const loadDocs = async () => {
-			const { Trash, Entries } = await apiservice.listDocument()
+			const { Trash, Entries } = (await apiservice.listDocument()) ?? {}
 
 			const root = {
 				id: "root",
 				name: "My Files",
 				isFolder: true,
 				icon: "device",
-				children: Entries,
+				children: Entries ?? [],
 			}
 			const trash = {
 				id: "trash",
 				name: "Trash",
 				isFolder: true,
 				icon: "trash",
-				children: Trash,
+				children: Trash ?? [],
 			}
 			setEntries([root, trash]);
 		}

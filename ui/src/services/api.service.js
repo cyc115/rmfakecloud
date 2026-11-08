@@ -114,7 +114,10 @@ class ApiServices {
       method: "GET",
       headers: this.header(),
     }).then((r) => {
-      handleError(r);
+      if (!r.ok) {
+        handleError(r);
+        return Promise.reject(r.status);
+      }
       return r.json();
     });
   }
@@ -123,7 +126,10 @@ class ApiServices {
       method: "GET",
       headers: this.header(),
     }).then((r) => {
-      handleError(r);
+      if (!r.ok) {
+        handleError(r);
+        return Promise.reject(r.status);
+      }
       return r.json();
     });
   }
@@ -190,7 +196,10 @@ class ApiServices {
       headers: this.header(),
       body: JSON.stringify(data),
     }).then((r) => {
-      handleError(r);
+      if (!r.ok) {
+        handleError(r);
+        return Promise.reject(r.status);
+      }
       return r.json();
     });
   }
@@ -220,7 +229,10 @@ class ApiServices {
       method: "GET",
       headers: this.header(),
     }).then((r) => {
-      handleError(r);
+      if (!r.ok) {
+        handleError(r);
+        return Promise.reject(r.status);
+      }
       return r.json();
     });
   }
