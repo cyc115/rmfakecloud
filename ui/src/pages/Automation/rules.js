@@ -47,11 +47,18 @@ export const ACTION_CARDS = [
   { key: "move", type: "move", for: "document", icon: "📂", title: "Move it to…", sub: "works on documents" },
   { key: "addtag", type: "add_tag", for: "document", icon: "🏷️", title: "Add a tag", sub: "a document tag you choose" },
   { key: "rmtag", type: "remove_tag", for: "document", icon: "🧽", title: "Remove a tag", sub: "a document tag you choose" },
+  { key: "trash", type: "trash", for: "document", icon: "🗑️", title: "Move it to the Trash", sub: "from this folder or any inside it; the tablet can restore it" },
 ];
 
 // isTagAction add_tag or remove_tag
 export function isTagAction(type) {
   return type === "add_tag" || type === "remove_tag";
+}
+
+// coversSubfolders a tag or trash rule covers its folder and every folder
+// inside it; a move rule only the documents directly in its folder
+export function coversSubfolders(type) {
+  return isTagAction(type) || type === "trash";
 }
 
 // the trigger parameters, as the catalogue names them (settleHours only for
@@ -269,6 +276,7 @@ export function changeVerb(m) {
 }
 
 export function destinationName(rule, ctx) {
+  if (actionOf(rule).type === "trash") return "Trash";
   const to = moveTo(rule);
   if (to.createIfMissing) return to.createIfMissing.name || "…";
   return folderName(ctx, to.id, to.name);
@@ -289,8 +297,8 @@ export function sentence(rule, ctx) {
     else parts.push(" anywhere");
   } else {
     const src = sourceOf(rule);
-    // a tag rule covers its folder and every folder inside it
-    if (isTagAction(actionOf(rule).type)) {
+    // a tag or trash rule covers its folder and every folder inside it
+    if (coversSubfolders(actionOf(rule).type)) {
       if (src.id === ROOT_ID) parts.push(" anywhere");
       else parts.push(" in ", tok(folderName(ctx, src.id, src.name)), " or its subfolders");
     } else parts.push(" in ", tok(folderName(ctx, src.id, src.name)));
@@ -305,6 +313,7 @@ export function sentence(rule, ctx) {
   const key = actionKey(rule);
   if (key === "move") parts.push(tok(`move it to ${destinationName(rule, ctx)}`));
   else if (key === "addtag" || key === "rmtag") parts.push(tok(tagActionText(actionOf(rule))));
+  else if (key === "trash") parts.push(tok("move it to the Trash"));
   else if (key === "notes") parts.push(tok("save notes & annotations"));
   else parts.push(tok("extract tasks & annotations"));
   return parts;
@@ -493,7 +502,7 @@ export function chooseAction(rule, key) {
 //     both page triggers), any other `in` is sent as it is; the page action's
 //     prompt/model are trimmed (whitespace-only → "" → the server's default)
 //   - exactly one action (R-B2): move carries only `to`, a tag action only
-//     its trimmed `tag`
+//     its trimmed `tag`, trash nothing
 export function forSave(rule) {
   const r = JSON.parse(JSON.stringify(rule));
   const t = r.when.trigger;
@@ -510,6 +519,8 @@ export function forSave(rule) {
     r.actions = [{ type: a.type, prompt: (a.prompt || "").trim(), model: (a.model || "").trim() }];
   } else if (isTagAction(a.type)) {
     r.actions = [{ type: a.type, tag: (a.tag || "").trim() }];
+  } else if (a.type === "trash") {
+    r.actions = [{ type: "trash" }];
   } else {
     r.actions = [{ type: "move", to: JSON.parse(JSON.stringify(a.to || { id: ROOT_ID, name: "" })) }];
   }

@@ -378,7 +378,7 @@ func (s *Service) recheckFor(uid string, r *automation.Rule, dest string, st *St
 		if !ok {
 			return ErrVanished
 		}
-		if dest != "" || r.TagAction() == nil {
+		if dest != trashID && (dest != "" || r.TagAction() == nil) {
 			if err := destinationUsable(cur, dest); err != nil {
 				return err
 			}
@@ -814,6 +814,10 @@ func (s *Service) Reapply(uid, holdID string) (*MoveEntry, error) {
 	cache := s.contentCache(uid, st)
 	var inputs map[string]string
 	src := rule.Source().ID
+	if rule.Trash() != nil {
+		// a trash rule trashes from any folder inside its own: where it is now
+		src = d.Parent
+	}
 	err = moveDoc(tree, s.storage.BlobStorage(uid), d.ID, src, to, s.recheckFor(uid, rule, to, st, cache, &inputs))
 	if err != nil {
 		return nil, err

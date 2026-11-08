@@ -26,7 +26,13 @@ const (
 	ActionAddTag = "add_tag"
 	// ActionRemoveTag removes a document tag from a matching document (document rules)
 	ActionRemoveTag = "remove_tag"
+	// ActionTrash moves a matching document to the Trash, from any folder
+	// inside the rule's folder (document rules). The tablet can restore it.
+	ActionTrash = "trash"
 )
+
+// TrashID the literal parent of trashed items
+const TrashID = trashID
 
 // Place kinds
 const (
@@ -299,6 +305,11 @@ func (r *Rule) Move() *Action {
 // TagAction the rule's add_tag or remove_tag action, nil when it has none
 func (r *Rule) TagAction() *Action {
 	return r.firstAction(ActionAddTag, ActionRemoveTag)
+}
+
+// Trash the rule's trash action, nil when it has none
+func (r *Rule) Trash() *Action {
+	return r.firstAction(ActionTrash)
 }
 
 // PageAction the rule's extract_tasks or save_notes action, nil when it has none

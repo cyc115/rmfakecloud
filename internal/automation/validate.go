@@ -161,7 +161,7 @@ func (r *Rule) validateConditions() error {
 
 // actionLabels the page actions as the UI names them
 var actionLabels = map[string]string{ActionExtractTasks: "extract tasks", ActionSaveNotes: "save notes",
-	ActionAddTag: "add tag", ActionRemoveTag: "remove tag"}
+	ActionAddTag: "add tag", ActionRemoveTag: "remove tag", ActionTrash: "trash"}
 
 func (r *Rule) validateActions() error {
 	if len(r.Actions) != 1 {
@@ -184,6 +184,14 @@ func (r *Rule) validateActions() error {
 			return fmt.Errorf("%s works on whole documents, so a page rule cannot %s; use a document trigger", actionLabels[a.Type], actionLabels[a.Type])
 		}
 		return validDocTag(&Params{Tag: a.Tag})
+	case ActionTrash:
+		if r.IsPage() {
+			return errors.New("trash works on whole documents, so a page rule cannot trash; use a document trigger")
+		}
+		if a.To != nil || a.Tag != "" {
+			return errors.New("trash takes no destination and no tag")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown action %q", a.Type)
 	}

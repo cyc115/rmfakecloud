@@ -107,6 +107,9 @@ func moveTo(r *automation.Rule) *automation.Destination {
 // ResolveDestination resolves a rule's destination by UUID, or for
 // createIfMissing via the state's created folder, then by name under the parent
 func ResolveDestination(r *automation.Rule, snap *Snapshot, st *State) resolvedDest {
+	if r.Trash() != nil {
+		return resolvedDest{id: trashID, name: snap.PathName(trashID)}
+	}
 	to := moveTo(r)
 	if to == nil {
 		// never the root by default: a rule without a destination moves nothing
@@ -238,10 +241,11 @@ func BuildPlan(in PlanInput) *Plan {
 			continue
 		}
 
-		// a move covers the documents directly in its folder; a tag rule the
-		// folder and every folder inside it ("My files" = everywhere but Trash)
+		// a move covers the documents directly in its folder; a tag or trash
+		// rule the folder and every folder inside it ("My files" = everywhere but Trash)
+		trash := r.Trash() != nil
 		docs := in.Snap.Children(src.ID)
-		if tagAct != nil {
+		if tagAct != nil || trash {
 			docs = in.Snap.Descendants(src.ID)
 		}
 		for _, d := range docs {
@@ -292,7 +296,13 @@ func BuildPlan(in PlanInput) *Plan {
 				continue
 			}
 			hold := in.State.FindHold(r.ID, d.ID)
-			holdApplies := hold != nil && hold.Source == src.ID && sameInputs(hold.Inputs, chk.ev.inputs)
+			holdSrc := src.ID
+			if trash {
+				// a trash rule moves from any folder inside its own: the hold
+				// remembers the folder the document was trashed from
+				holdSrc = d.Parent
+			}
+			holdApplies := hold != nil && hold.Source == holdSrc && sameInputs(hold.Inputs, chk.ev.inputs)
 			if hold != nil && !holdApplies {
 				p.ClearHolds = append(p.ClearHolds, HoldRef{RuleID: r.ID, DocID: d.ID})
 			}
@@ -322,7 +332,7 @@ func BuildPlan(in PlanInput) *Plan {
 			p.Moves = append(p.Moves, PlannedMove{
 				RuleID: r.ID, RuleNumber: num, RuleName: label,
 				DocID: d.ID, DocName: d.Name,
-				From: d.Parent, FromName: rr.SourceName,
+				From: d.Parent, FromName: folder,
 				To: dest.id, ToName: rr.DestName, CreateFolder: dest.create,
 				Detail: chk.ev.detail, Inputs: chk.ev.inputs, Fingerprint: d.Fingerprint,
 			})

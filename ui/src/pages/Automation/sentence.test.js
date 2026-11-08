@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ACTION_CARDS, TRIGGER_CARDS, actionFit, actionKey, chooseAction, chooseTrigger, conditionLock, makeTrigger, triggerCard,
-  editableIn, newPageRule, newRule, normalizePageTag, ruleLabel, sentence, sentenceText, tagSuggestions, taggedCount,
+  coversSubfolders, editableIn, forSave, newPageRule, newRule, normalizePageTag, ruleLabel, sentence, sentenceText, tagSuggestions, taggedCount,
 } from "./rules.js";
 
 // synthetic fixtures only (R-B1)
@@ -269,4 +269,19 @@ test("switching triggers and back keeps each trigger's parameters", () => {
 test("ruleLabel: its own name, else its sentence", () => {
   assert.equal(ruleLabel(GOLDEN_PAGE, CTX), "journal pages");
   assert.equal(ruleLabel(GOLDEN_MOVE, CTX), "IF I finish reading a document in Reading List THEN move it to Done");
+});
+
+test("trash rule: sentence, scope and save shape", () => {
+  const rule = {
+    id: "del", enabled: true,
+    when: { subject: "document", in: [{ id: "", kind: "folder", name: "My files" }], trigger: { type: "tag_is", tag: "delete" } },
+    conditions: [], actions: [{ type: "trash", to: { id: "x", name: "X" }, tag: "t" }],
+  };
+  const text = sentence(rule, {}).map((p) => (typeof p === "string" ? p : p.s)).join("");
+  assert.match(text, / anywhere /);
+  assert.match(text, /move it to the Trash/);
+  assert.deepEqual(forSave(rule).actions, [{ type: "trash" }]);
+  assert.equal(coversSubfolders("trash"), true);
+  assert.equal(coversSubfolders("move"), false);
+  assert.equal(actionFit("trash", "page_changed").ok, false);
 });

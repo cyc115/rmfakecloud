@@ -6,7 +6,7 @@ import Sentence from "./Sentence";
 import { KIND_LABELS, TIME_UNITS, conditionFit, conditionPhrase, conditionSpec, conditionsFor, makeCondition } from "./conditions";
 import {
   ACTION_CARDS, NO_AUTOMATION_TAG, OR_TRIGGER_CARDS, PAGE_TAGGED, PDF_ONLY_BADGE, ROOT_NAME, TRIGGER_CARDS,
-  actionFit, actionKey, actionOf, addOrTrigger, chooseAction, chooseTrigger, conditionLock, destinationName, editableIn, forSave, isPageRule, isTagAction, tagActionText,
+  actionFit, actionKey, actionOf, addOrTrigger, chooseAction, chooseTrigger, conditionLock, coversSubfolders, destinationName, editableIn, forSave, isPageRule, isTagAction, tagActionText,
   orTriggersOf, removeOrTrigger, rulePdfOnly, setOrTrigger,
   moveTo, normalizePageTag, pageTagsOf, patternError, placesOf, plural, ruleLabel, sentenceText, sourceOf, tagSuggestions, taggedNow,
 } from "./rules";
@@ -97,6 +97,8 @@ function validate(rule, otherRules, folders) {
   if (tagging) {
     if (!(act.tag || "").trim()) add(`Enter the tag to ${act.type === "add_tag" ? "add" : "remove"}.`);
     else if (isNoAutomation(act.tag)) add("“no automation” documents are always skipped; pick another tag.");
+  } else if (act.type === "trash") {
+    // no destination: the Trash
   } else if (cm) {
     if (!cm.name.trim()) add("Name the new subfolder.");
   } else if (!exists(to.id)) {
@@ -106,7 +108,7 @@ function validate(rule, otherRules, folders) {
   }
   [t, ...orTriggersOf(rule)].forEach((x) => triggerErrors(x).forEach(add));
   (rule.conditions || []).forEach((c) => add(conditionError(c)));
-  if (!cm && !tagging) {
+  if (!cm && !tagging && act.type !== "trash") {
     const loops = otherRules.filter((o) => o.enabled && sourceOf(o).id === to.id &&
       !moveTo(o).createIfMissing && moveTo(o).id === src.id);
     if (loops.length) {
@@ -457,8 +459,8 @@ export default function RuleEditor({ open, initial, isNew, folders, watchables, 
           <span aria-hidden="true">📁</span><span className="n">{srcName}</span>
         </button>
         <button type="button" className="ao-link" aria-expanded={srcOpen} onClick={() => setSrcOpen(!srcOpen)}>{srcOpen ? "done" : "change"}</button>
-        <span className="ao-hint">{isTagAction(actionOf(rule).type)
-          ? "Tag rules cover this folder and every folder inside it; My files = everywhere."
+        <span className="ao-hint">{coversSubfolders(actionOf(rule).type)
+          ? "Tag and Trash rules cover this folder and every folder inside it; My files = everywhere."
           : "Move rules work on the documents directly in one folder."}</span>
       </div>
       {srcOpen && (

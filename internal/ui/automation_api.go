@@ -315,6 +315,7 @@ var catalogueDocs = map[string]string{
 	"action:" + automation.ActionMove:              "Move the document to the folder in to: {id} of an existing folder (\"\" = My files), or {createIfMissing: {name, parent: \"source\" or a folder id}}.",
 	"action:" + automation.ActionAddTag:            "Add the document tag tag (written to the document; the tablet gets it on its next sync).",
 	"action:" + automation.ActionRemoveTag:         "Remove the document tag tag.",
+	"action:" + automation.ActionTrash:             "Move the document to the Trash, from the rule's folder or any folder inside it (the tablet can restore it; undo puts it back). Nothing is deleted for good.",
 	"action:" + automation.ActionExtractTasks:      "Send the changed page to rm-pages: save it and its annotations (highlights with context, margin notes, crops) to its vault note and add new to-dos to the inbox (paid LLM call per page with handwriting). prompt is optional; model is ignored (rm-pages uses its flash profile).",
 	"action:" + automation.ActionSaveNotes:         "Send the changed page to rm-pages: save it and its annotations (highlights with context, margin notes, crops) to its vault note, no tasks (paid LLM call per page with handwriting).",
 }
@@ -328,6 +329,7 @@ var catalogueActions = []struct {
 	{automation.ActionMove, automation.SubjectDocument, []string{"to"}},
 	{automation.ActionAddTag, automation.SubjectDocument, []string{"tag"}},
 	{automation.ActionRemoveTag, automation.SubjectDocument, []string{"tag"}},
+	{automation.ActionTrash, automation.SubjectDocument, []string{}},
 	{automation.ActionExtractTasks, automation.SubjectPage, []string{"prompt", "model"}},
 	{automation.ActionSaveNotes, automation.SubjectPage, []string{"prompt", "model"}},
 }
