@@ -73,6 +73,7 @@ func newAOAPI(t *testing.T) *aoAPI {
 	app := &ReactAppWrapper{cfg: cfg, organizer: autoorganize.NewService(storage, hub.NewHub(), 0), blobs: storage, userStorer: storage}
 	router := gin.New()
 	router.GET("/openapi.json", serveAutomationOpenAPI)
+	router.GET("/tag-help", app.tagHelp)
 	api := router.Group("/ui/api")
 	auth := api.Group("")
 	auth.Use(app.authMiddleware())
@@ -566,5 +567,18 @@ func TestPageTagsUnderAutomation(t *testing.T) {
 	}
 	if code, _ := a.do("GET", "/ui/api/auto-organize/page-tags", tok, nil); code != http.StatusGone {
 		t.Fatalf("old page-tags: %d", code)
+	}
+}
+
+// GET /tag-help answers without a login: the API user's rule tags as HTML
+func TestTagHelpRoute(t *testing.T) {
+	a := newAOAPI(t)
+	w := httptest.NewRecorder()
+	a.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/tag-help", nil))
+	if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("GET /tag-help: %d %q", w.Code, w.Header().Get("Content-Type"))
+	}
+	if body := w.Body.String(); !strings.Contains(body, "no automation") || !strings.Contains(body, "<table") {
+		t.Errorf("body: %s", body)
 	}
 }

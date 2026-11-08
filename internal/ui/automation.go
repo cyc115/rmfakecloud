@@ -50,6 +50,23 @@ func (app *ReactAppWrapper) registerAutomationRoutes(api, auth *gin.RouterGroup)
 	ao.POST("reapply/:holdId", app.autoOrganizeReapply)
 }
 
+// tagHelp GET /tag-help: the tag table of AUTOMATION_API_USER's enabled rules
+// as an HTML fragment for Qt rich text (autoorganize.TagHelpHTML)
+func (app *ReactAppWrapper) tagHelp(c *gin.Context) {
+	if app.organizer == nil || app.cfg.AutomationAPIUser == "" {
+		c.String(http.StatusServiceUnavailable, "tag help is not available")
+		return
+	}
+	cfg, err := app.organizer.Store().LoadConfig(common.SanitizeUid(app.cfg.AutomationAPIUser))
+	if err != nil {
+		log.Warn(autoOrganizeLogger, "tag help: ", err)
+		c.String(http.StatusInternalServerError, "cannot load the rules")
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(autoorganize.TagHelpHTML(cfg)))
+}
+
 // movedToAutomation the old /ui/api/auto-organize* API: 410 and where it went.
 // It reads no body and touches no file, so an old tab's PUT changes nothing.
 func movedToAutomation(c *gin.Context) {

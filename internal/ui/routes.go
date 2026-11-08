@@ -20,6 +20,9 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	})
 	// the automation API's OpenAPI description; no auth (it holds no data)
 	router.GET("/openapi.json", serveAutomationOpenAPI)
+	// the tablet's "#" pane: what each rule tag does, for AUTOMATION_API_USER;
+	// no auth (tailnet only; it holds tag and folder names, no documents)
+	router.GET("/tag-help", app.tagHelp)
 
 	//hack for index.html
 	router.NoRoute(func(c *gin.Context) {
