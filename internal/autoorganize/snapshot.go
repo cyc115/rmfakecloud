@@ -388,6 +388,22 @@ func (c *ContentInfo) HasTag(tag string) bool {
 	return false
 }
 
+// PagesTagged the ids of the pages carrying tag (NormalizePageTag), sorted
+func (c *ContentInfo) PagesTagged(tag string) []string {
+	want := NormalizePageTag(tag)
+	if want == "" {
+		return nil
+	}
+	var out []string
+	for id, tags := range c.PageTags {
+		if _, ok := tags[want]; ok {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // addDocTag records a document tag's time; the latest time wins
 func (c *ContentInfo) addDocTag(name string, ms int64) {
 	k := NormalizeTag(name)

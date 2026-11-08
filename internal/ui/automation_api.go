@@ -295,7 +295,7 @@ var catalogueDocs = map[string]string{
 	"trigger:" + automation.TriggerNotOpened:       "Never opened, or last opened at least days ago.",
 	"trigger:" + automation.TriggerNotModified:     "Last modified at least days ago (annotations count as edits).",
 	"trigger:" + automation.TriggerNameMatches:     "Name matches pattern: a case-insensitive glob (* and ?) or /RE2 regex/.",
-	"trigger:" + automation.TriggerTagIs:           "Carries the document tag tag (case, spaces, - and _ ignored).",
+	"trigger:" + automation.TriggerTagIs:           "The document or any of its pages carries tag (case, spaces, - and _ ignored); a page tag lets a written #tag fire a document rule.",
 	"trigger:" + automation.TriggerAgeSinceCreated: "Created at least days ago (created time, else last modified, else first seen by the server).",
 	"trigger:" + automation.TriggerPinnedIs:        "Pinned (pinned true) or not pinned (false).",
 	"trigger:" + automation.TriggerCreatedTime:     "Created in the last (compare within) or more than (older) amount unit ago; unit hours, days or weeks. Documents without a created time are skipped.",

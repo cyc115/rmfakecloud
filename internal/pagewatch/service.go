@@ -63,8 +63,8 @@ type Service struct {
 
 	// Now the clock, replaceable in tests
 	Now func() time.Time
-	// MinAge a page blob younger than this is skipped (DefaultMinAge unless
-	// set); 0 = no skip window
+	// MinAge a page blob younger than this is skipped by timer runs
+	// (DefaultMinAge unless set; 0 = no skip window). Run now skips no page.
 	MinAge time.Duration
 	// UserRescan how often the user list is re-read to start new loops
 	UserRescan time.Duration
@@ -325,9 +325,15 @@ func (s *Service) runLocked(ctx context.Context, ul *userLoop, trigger string) (
 	snap := autoorganize.NewSnapshot(tree)
 	cc := autoorganize.NewContentCache(ul.cache, blobs.GetReader)
 	snap.AttachPages(cc.Get)
+	// Run now is Mike pressing the button right after writing: no settle
+	// window, every changed page goes now. The timer keeps MinAge.
+	minAge := s.MinAge
+	if trigger == TriggerRunNow {
+		minAge = 0
+	}
 	plan := Detect(Input{
 		Snap: snap, Config: cfg, State: st, Content: cc.Get, ModTime: blobs.ModTime,
-		Now: start, MinAge: s.MinAge, User: uid,
+		Now: start, MinAge: minAge, User: uid,
 	})
 	for h := range ul.cache {
 		if !cc.Used()[h] {

@@ -128,6 +128,19 @@ func (e *svcEnv) page(doc, page, fix string) {
 	}
 }
 
+// timerRun one run as the loop's timer makes it (MinAge applies)
+func (e *svcEnv) timerRun() *RunEntry {
+	e.t.Helper()
+	ul := e.svc.loop(uid)
+	ul.runMu.Lock()
+	defer ul.runMu.Unlock()
+	r, err := e.svc.runLocked(context.Background(), ul, TriggerTimer)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return r
+}
+
 func (e *svcEnv) run() *RunEntry {
 	e.t.Helper()
 	r, err := e.svc.RunNow(uid)
@@ -356,16 +369,33 @@ func TestMinAgeOverride(t *testing.T) {
 	e.svc.MinAge = time.Hour // blobs just written are younger
 	e.ft.Notebook("nb", "Notes", "")
 	e.page("nb", "p1", "strokes_a.rm")
-	e.run()
+	e.timerRun()
 	e.page("nb", "p1", "strokes_ab.rm")
-	r := e.run()
+	r := e.timerRun()
 	if r.Feed != 0 || r.Skipped == 0 {
 		t.Fatalf("recent page not skipped: %+v", r)
 	}
 	e.svc.MinAge = time.Nanosecond
-	r = e.run()
+	r = e.timerRun()
 	if r.Feed != 1 {
 		t.Fatalf("not sent once old enough: %+v", r)
+	}
+}
+
+// Run now is pressed right after writing: it ignores MinAge, the timer does not
+func TestRunNowIgnoresMinAge(t *testing.T) {
+	e := newSvcEnv(t)
+	e.svc.MinAge = time.Hour
+	e.ft.Notebook("nb", "Notes", "")
+	e.page("nb", "p1", "strokes_a.rm")
+	e.timerRun() // baseline
+	e.page("nb", "p1", "strokes_ab.rm")
+	if r := e.timerRun(); r.Feed != 0 || r.Skipped == 0 {
+		t.Fatalf("timer run sent a page younger than MinAge: %+v", r)
+	}
+	r := e.run()
+	if r.Feed != 1 || r.Trigger != TriggerRunNow {
+		t.Fatalf("run now did not send the fresh page: %+v", r)
 	}
 }
 
@@ -654,7 +684,7 @@ func TestRecentSkipNeverAlerts(t *testing.T) {
 	e.ft.Notebook("nb", "Notes", "")
 	e.page("nb", "p1", "strokes_a.rm")
 	for i := 0; i < 5; i++ {
-		e.run()
+		e.timerRun() // the timer keeps MinAge; Run now does not
 	}
 	if n := len(skipErrors(hook)); n != 0 {
 		t.Fatalf("%d skip errors for recent pages", n)

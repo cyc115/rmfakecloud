@@ -19,7 +19,7 @@ var evaluators = map[string]evalFunc{
 	TriggerNotOpened:       evalNotOpened,
 	TriggerNotModified:     evalNotModified,
 	TriggerNameMatches:     evalNameMatches,
-	TriggerTagIs:           evalTagIs,
+	TriggerTagIs:           evalTagIsTrigger,
 	TriggerAgeSinceCreated: evalAgeSinceCreated,
 	TriggerPinnedIs:        evalPinnedIs,
 	TriggerCreatedTime:     evalCreatedTime,

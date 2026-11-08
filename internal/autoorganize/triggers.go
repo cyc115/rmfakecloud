@@ -332,6 +332,25 @@ func evalTagIs(p *automation.Params, _ *DocSnap, ci *ContentInfo, _ *FirstSeen, 
 	return ev
 }
 
+// evalTagIsTrigger the tag_is trigger: the document carries Tag, or any of its
+// pages does. A page tag counts so that writing #tag on one page (rm-pages
+// turns it into a page tag) fires a document rule such as a move. The tag_is
+// condition stays document-level (evalTagIs).
+func evalTagIsTrigger(p *automation.Params, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
+	ev := evalTagIs(p, d, ci, fs, now)
+	pages := ci.PagesTagged(p.Tag)
+	if len(pages) == 0 {
+		// inputs as before page tags counted, so existing holds still apply
+		return ev
+	}
+	ev.inputs["page_tags"] = strings.Join(pages, ",")
+	if !ev.match {
+		ev.match = true
+		ev.detail = fmt.Sprintf("a page tagged “%s”", NormalizeTag(p.Tag))
+	}
+	return ev
+}
+
 // evalTagIsNot tag_is_not: the negation of tag_is, on the same inputs
 func evalTagIsNot(p *automation.Params, d *DocSnap, ci *ContentInfo, fs *FirstSeen, now time.Time) evaluation {
 	ev := evalTagIs(p, d, ci, fs, now)

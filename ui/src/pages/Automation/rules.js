@@ -32,7 +32,7 @@ export const TRIGGER_CARDS = [
   { type: "age_since_created", group: "document", icon: "📥", title: "It arrives", sub: "N days after it lands" },
   { type: "created_time", group: "document", icon: "🆕", title: "It was created…", sub: "in the last / more than N hours, days, weeks ago" },
   { type: "modified_time", group: "document", icon: "✏️", title: "It was changed…", sub: "in the last / more than N hours, days, weeks ago" },
-  { type: "tag_is", group: "document", icon: "🔖", title: "I tag a document", sub: "with a tag you choose" },
+  { type: "tag_is", group: "document", icon: "🔖", title: "I tag a document", sub: "or one of its pages (a written #tag counts)" },
   { type: "name_matches", group: "document", icon: "🔤", title: "Its name matches", sub: "a pattern like WSJ*" },
   { type: "pinned_is", group: "document", icon: "📌", title: "It's pinned / unpinned", sub: "pinned or not" },
 ];
@@ -244,7 +244,7 @@ function triggerParts(t) {
     case "age_since_created": return ["a document ", tok(`arrived at least ${t.days} days ago`)];
     case "created_time": return ["a document ", tok(`was ${timePhrase("created", t)}`)];
     case "modified_time": return ["a document ", tok(`was ${timePhrase("changed", t)}`)];
-    case "tag_is": return ["I ", tok(`tag a document ${q(t.tag)}`)];
+    case "tag_is": return ["I ", tok(`tag a document or page ${q(t.tag)}`)];
     case "name_matches": return ["a document ", tok(`named like ${q(t.pattern)}`), " is"];
     case "pinned_is": return ["a document ", tok(t.pinned ? "is pinned" : "is unpinned")];
     default: return ["a document ", tok(t.type)];

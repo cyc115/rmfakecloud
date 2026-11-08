@@ -30,7 +30,7 @@ test("addOrTrigger offers “I tag a document” first, then a trigger the rule 
 test("the sentence reads both triggers and keeps the kind", () => {
   const r = setOrTrigger(addOrTrigger(READ), 0, { tag: "read" });
   assert.equal(sentenceText(r, CTX),
-    "IF I finish reading a document OR I tag a document “read” in Research Reports (only PDFs & books) THEN move it to Read");
+    "IF I finish reading a document OR I tag a document or page “read” in Research Reports (only PDFs & books) THEN move it to Read");
   assert.equal(sentenceText(READ, CTX), "IF I finish reading a document in Research Reports THEN move it to Read");
 });
 

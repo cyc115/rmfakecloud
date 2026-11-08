@@ -102,7 +102,7 @@ test("every document trigger with Move renders", () => {
     [{ ...makeTrigger("not_opened_for_days"), days: 30 }, "IF a document sits unopened 30 days in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("not_modified_for_days"), days: 90 }, "IF a document sits unchanged 90 days in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("age_since_created"), days: 14 }, "IF a document arrived at least 14 days ago in Inbox THEN move it to Archive"],
-    [{ ...makeTrigger("tag_is"), tag: "receipts" }, "IF I tag a document “receipts” in Inbox THEN move it to Archive"],
+    [{ ...makeTrigger("tag_is"), tag: "receipts" }, "IF I tag a document or page “receipts” in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("name_matches"), pattern: "WSJ*" }, "IF a document named like “WSJ*” is in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("pinned_is"), pinned: true }, "IF a document is pinned in Inbox THEN move it to Archive"],
     [{ ...makeTrigger("pinned_is"), pinned: false }, "IF a document is unpinned in Inbox THEN move it to Archive"],

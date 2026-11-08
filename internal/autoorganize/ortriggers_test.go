@@ -1,6 +1,7 @@
 package autoorganize
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
@@ -120,5 +121,85 @@ func TestOrTriggerTagIsKnown(t *testing.T) {
 	cfg := &automation.Config{Rules: []automation.Rule{readOrTagRule()}}
 	if got := KnownTags(cfg, nil, nil); !reflect.DeepEqual(got, []string{NormalizeTag("read")}) {
 		t.Errorf("KnownTags = %v", got)
+	}
+}
+
+// a page tag fires the tag_is trigger (a handwritten #read on one page moves the
+// document); the tag_is condition stays document-level
+func TestTagIsTriggerMatchesPageTag(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	r := readOrTagRule()
+	d := &DocSnap{ID: "d", LastOpened: ms(now.Add(-24 * time.Hour)), LastOpenedPage: 1}
+	pageTagged := &ContentInfo{FileType: "pdf", PageCount: 10, LastOpenedPage: 1,
+		PageTags: map[string]map[string]int64{"p2": {"read": 5}, "p1": {"other": 1}}}
+	ev := evalRule(&r, d, pageTagged, nil, now)
+	if !ev.match || ev.skip != "" {
+		t.Fatalf("page tag read must fire the rule: %+v", ev)
+	}
+	if ev.inputs["page_tags"] != "p2" {
+		t.Errorf("page_tags input = %q, want p2", ev.inputs["page_tags"])
+	}
+	// no page carries the tag: inputs keep their old keys (holds stay valid)
+	plain := &ContentInfo{FileType: "pdf", PageCount: 10, LastOpenedPage: 1, Tags: []string{"read"}}
+	ev = evalRule(&r, d, plain, nil, now)
+	if _, ok := ev.inputs["page_tags"]; ok || !ev.match {
+		t.Errorf("doc tag only: match=%v inputs=%v", ev.match, ev.inputs)
+	}
+	// the condition does not look at pages
+	p := automation.Params{Tag: "read"}
+	if conditionEvaluators[automation.CondTagIs](&p, d, pageTagged, nil, now).match {
+		t.Error("tag_is condition must stay document-level")
+	}
+	if !conditionEvaluators[automation.CondTagIsNot](&p, d, pageTagged, nil, now).match {
+		t.Error("tag_is_not condition must stay document-level")
+	}
+}
+
+// end to end: rm-pages writes the page tag "read" on a half-read PDF; the write
+// kicks a sweep (no waiting for the timer) and the read-or-tag rule moves it
+func TestApplyPageTagKicksSweepThatMoves(t *testing.T) {
+	ft, storage := newHarness(t, uid, true)
+	now := time.Now()
+	ft.Folder("rr", "Research Reports", "")
+	ft.Folder("read", "Read", "rr")
+	ft.PDF("d", "GlitchTip Errors", "rr", 14, 1, now.Add(-time.Hour))
+	if err := ft.SetPage("d", "p1", []byte("rm-p1")); err != nil {
+		t.Fatal(err)
+	}
+	ft.Sync()
+	svc, _, _ := newService(t, storage)
+	svc.Debounce = 10 * time.Millisecond
+	svc.IntervalUnit = time.Hour // only the kick can sweep during the test
+	saveConfig(t, svc, uid, ModeLive, readOrTagRule())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); svc.Wait() }()
+	svc.Start(ctx)
+	deadline := time.Now().Add(3 * time.Second)
+	time.Sleep(30 * time.Millisecond) // the loop is up and waiting on its (hour-long) timer
+	if p := ft.ServerMetaRaw("d")["parent"]; p != "rr" {
+		t.Fatalf("moved before the tag: parent %v", p)
+	}
+	added, err := svc.ApplyPageTags(uid, "d", "p1", []string{"read"})
+	if err != nil || len(added) != 1 {
+		t.Fatalf("apply: %v %v", added, err)
+	}
+	// the run entry is saved when the sweep ends; reading the tablet while the
+	// sweep holds its lock would fail, so wait for the entry first
+	var st *State
+	for {
+		if cur, err := svc.Store().LoadState(uid); err == nil && len(cur.Runs) > 0 {
+			st = cur
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no sweep after the page tag")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if p := ft.ServerMetaRaw("d")["parent"]; p != "read" {
+		t.Fatalf("not moved after the page tag: parent %v, runs %+v", p, st.Runs)
+	}
+	if last := st.Runs[len(st.Runs)-1]; last.Trigger != TriggerTabletSync {
+		t.Errorf("moving run trigger %q, want %q", last.Trigger, TriggerTabletSync)
 	}
 }

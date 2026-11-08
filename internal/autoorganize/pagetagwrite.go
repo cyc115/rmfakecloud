@@ -305,6 +305,9 @@ func (s *Service) ApplyPageTags(uid, docID, pageID string, tags []string) ([]str
 	}
 	if len(added) > 0 {
 		s.notifier.NotifySync(uid, SourceID)
+		// a new page tag can fire a document rule (tag_is): sweep soon rather
+		// than at the next timer, so #read moves the document within a minute
+		s.Trigger(uid)
 	}
 	return added, nil
 }
