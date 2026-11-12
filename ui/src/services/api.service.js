@@ -267,7 +267,12 @@ class ApiServices {
       if (r.status === 401) {
         removeUser();
         window.location.reload(true);
-        return;
+        // reject, never resolve undefined: the Automation page's 30 s poller
+        // did getAutomationLog().then(setLog), so an expired session set log
+        // to undefined and the render crashed on log.moves (GlitchTip #185)
+        const err = new Error("Session expired");
+        err.status = 401;
+        throw err;
       }
       let data = null;
       try {
